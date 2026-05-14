@@ -28,7 +28,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.api.v1.deps import AuthContext, get_current_auth
@@ -87,6 +87,26 @@ class BulkForgetIn(BaseModel):
 
 class BulkForgetOut(BaseModel):
     deleted: int
+
+
+class MemoryHealthOut(BaseModel):
+    """Snapshot powering the Console "Memory health" tile.
+
+    Fields are scoped to the calling user — workspace admins can't
+    use this to peek at someone else's add-failure rate.
+    """
+
+    facts_count: int
+    adds_24h: int
+    add_failures_24h: int
+    searches_24h: int
+    search_failures_24h: int
+    # Fraction of refetches in the last 24h that returned 0 hits.
+    # When the user hasn't built up much memory yet, this is high
+    # (most searches find nothing); after a healthy backfill it
+    # should trend toward 10-30%. A sudden spike from 20% → 80% is
+    # the backfill-gap signal the ELS-131 ticket called out.
+    zero_hit_rate_24h: float
 
 
 # ---------------------------------------------------------------------------
@@ -238,6 +258,99 @@ async def bulk_forget_navigator_memories(
     )
     await session.flush()
     return BulkForgetOut(deleted=deleted)
+
+
+@router.get(
+    "/navigator-memories/health",
+    response_model=MemoryHealthOut,
+)
+async def get_navigator_memory_health(
+    workspace_id: uuid.UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> MemoryHealthOut:
+    """Per-user memory health snapshot for the last 24h.
+
+    All counters scoped to ``actor_user_id == auth.user.id`` so a
+    workspace admin can't peek at another user's memory hygiene.
+    Reads from ``audit_log`` directly — no separate metrics store.
+    """
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+
+    # Facts the user currently owns. ``COUNT(*)`` is the cheap
+    # signal — for a paginated drill-down the operator uses the
+    # ``GET /navigator-memories`` endpoint.
+    facts_count = int(
+        (
+            await session.execute(
+                select(func.count(NavigatorMemory.id)).where(
+                    NavigatorMemory.workspace_id == workspace_id,
+                    NavigatorMemory.owner_user_id == auth.user.id,
+                )
+            )
+        ).scalar_one()
+    )
+
+    # 24h activity counters. Group everything in a single audit_log
+    # roundtrip so the endpoint doesn't fan out to 4 separate
+    # SELECTs on every render.
+    rows = (
+        await session.execute(
+            select(AuditLog.action, AuditLog.payload).where(
+                AuditLog.workspace_id == workspace_id,
+                AuditLog.actor_user_id == auth.user.id,
+                AuditLog.created_at >= cutoff,
+                AuditLog.action.in_(
+                    (
+                        "navigator.memory.add_failed",
+                        "navigator.memory.search",
+                        "navigator.memory.search_failed",
+                    )
+                ),
+            )
+        )
+    ).all()
+
+    add_failures = 0
+    searches = 0
+    search_failures = 0
+    zero_hits = 0
+    for action, payload in rows:
+        if action == "navigator.memory.add_failed":
+            add_failures += 1
+        elif action == "navigator.memory.search":
+            searches += 1
+            if int((payload or {}).get("hit_count", 0)) == 0:
+                zero_hits += 1
+        elif action == "navigator.memory.search_failed":
+            search_failures += 1
+
+    # adds_24h: every new ``navigator_memories.id`` whose
+    # ``created_at`` falls in the window. mem0's own ADD events
+    # mirror to the table, so a row count is the cheapest signal.
+    adds_24h = int(
+        (
+            await session.execute(
+                select(func.count(NavigatorMemory.id)).where(
+                    NavigatorMemory.workspace_id == workspace_id,
+                    NavigatorMemory.owner_user_id == auth.user.id,
+                    NavigatorMemory.created_at >= cutoff,
+                )
+            )
+        ).scalar_one()
+    )
+
+    zero_hit_rate = (zero_hits / searches) if searches else 0.0
+
+    return MemoryHealthOut(
+        facts_count=facts_count,
+        adds_24h=adds_24h,
+        add_failures_24h=add_failures,
+        searches_24h=searches,
+        search_failures_24h=search_failures,
+        zero_hit_rate_24h=round(zero_hit_rate, 3),
+    )
 
 
 # ---------------------------------------------------------------------------

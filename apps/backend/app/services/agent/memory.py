@@ -287,12 +287,15 @@ async def search(
     can't surface another user's fact. mem0's score is preserved
     for caller-side re-ranking.
     """
+    import time
+
     settings = settings or get_settings()
     if not (query or "").strip():
         return []
 
     client = _get_memory_client(settings)
     namespace = _namespace(workspace_id, owner_user_id)
+    started_at = time.monotonic()
     try:
         result = await asyncio.to_thread(
             client.search,
@@ -306,15 +309,25 @@ async def search(
             owner_user_id,
             workspace_id,
         )
+        # Audit the failure so the health endpoint can surface
+        # search-error rates separately from "no hits".
+        session.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                actor_user_id=owner_user_id,
+                action="navigator.memory.search_failed",
+                target_kind="user",
+                target_id=str(owner_user_id),
+                payload={
+                    "query_chars": len(query),
+                    "latency_ms": int((time.monotonic() - started_at) * 1000),
+                },
+            )
+        )
         return []
 
     raw_hits = (result or {}).get("results") or []
-    if not raw_hits:
-        return []
     mem0_ids = [str(h.get("id")) for h in raw_hits if h.get("id")]
-    if not mem0_ids:
-        return []
-
     rows = (
         (
             await session.execute(
@@ -327,7 +340,7 @@ async def search(
         )
         .scalars()
         .all()
-    )
+    ) if mem0_ids else []
     rows_by_mem0 = {r.mem0_id: r for r in rows}
 
     out: list[MemorySearchHit] = []
@@ -348,7 +361,32 @@ async def search(
                 continue
         score = float(hit.get("score") or 0.0)
         out.append(MemorySearchHit(row=row, score=score))
-    return out[:limit]
+    out = out[:limit]
+
+    # Audit row drives the health endpoint: hit_count + top_similarity
+    # let the dashboard surface "0-hit refetches" as a backfill-gap
+    # signal; latency_ms makes mem0 latency visible without scraping
+    # logs. We deliberately do NOT log the raw query text — facts
+    # already leave audit fingerprints, the query is the operator's
+    # in-flight thought and shouldn't get a second persistence venue.
+    top_similarity = round(out[0].score, 4) if out else 0.0
+    session.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=owner_user_id,
+            action="navigator.memory.search",
+            target_kind="user",
+            target_id=str(owner_user_id),
+            payload={
+                "query_chars": len(query),
+                "hit_count": len(out),
+                "top_similarity": top_similarity,
+                "latency_ms": int((time.monotonic() - started_at) * 1000),
+                "project_native_id": project_native_id,
+            },
+        )
+    )
+    return out
 
 
 async def delete(
@@ -540,6 +578,42 @@ _ACK_TOKENS: frozenset[str] = frozenset(
         "да", "нет", "ага", "ок", "норм", "спасибо", "понятно",
     }
 )
+
+
+def should_refetch_memory(
+    *,
+    memory_enabled: bool,
+    prior_message_count: int,
+    last_user_activity_at: "datetime | None",
+    now: "datetime | None" = None,
+    gap_seconds: int = 30 * 60,
+) -> bool:
+    """Pure decision function for the smart-trigger retrieval.
+
+    Refetch fires on two events:
+
+    1. **First turn** of a session — ``prior_message_count == 0``.
+    2. **Resume after idle** — current time is more than ``gap_seconds``
+       past ``last_user_activity_at``. Default window is 30 minutes;
+       past that the prefetched ``{{MEMORY_CONTEXT}}`` may have aged
+       out of the prompt or lost mindshare with the model.
+
+    ``memory_enabled=False`` short-circuits both — anonymous threads
+    stay anonymous on the retrieval side too.
+
+    Pure so the chat-route can lean on it AND tests can exercise the
+    logic without spinning up an SSE stream.
+    """
+    from datetime import datetime as _dt, timezone as _tz
+
+    if not memory_enabled:
+        return False
+    if prior_message_count <= 0:
+        return True
+    if last_user_activity_at is None:
+        return True
+    current = now or _dt.now(_tz.utc)
+    return (current - last_user_activity_at).total_seconds() > gap_seconds
 
 
 def should_extract_memory(memory_enabled: bool, message_body: str) -> bool:

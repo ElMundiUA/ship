@@ -900,18 +900,12 @@ async def _run_agent_turn(
     from backend.app.services.agent import memory as navigator_memory
 
     retrieved_facts: list = []
-    last_activity = thread.last_user_activity_at
-    secs_since = (
-        (datetime.now(timezone.utc) - last_activity).total_seconds()
-        if last_activity is not None
-        else None
+    needs_refetch = navigator_memory.should_refetch_memory(
+        memory_enabled=thread.memory_enabled,
+        prior_message_count=len(prior_messages),
+        last_user_activity_at=thread.last_user_activity_at,
     )
-    needs_refetch = (
-        not prior_messages
-        or secs_since is None
-        or secs_since > 30 * 60
-    )
-    if needs_refetch and thread.memory_enabled:
+    if needs_refetch:
         try:
             hits = await navigator_memory.search(
                 session,

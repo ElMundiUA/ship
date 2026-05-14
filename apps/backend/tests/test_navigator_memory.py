@@ -830,3 +830,224 @@ async def test_endpoint_bulk_forget_validates_days_range(
         json={"days": 365},
     )
     assert response.status_code == 422, response.text
+
+
+# ---------------------------------------------------------------------------
+# ELS-131 — smart-trigger helper + observability
+# ---------------------------------------------------------------------------
+
+
+def test_should_refetch_first_turn_fires() -> None:
+    """First message of a new session — no prior messages — refetch."""
+    assert memory_module.should_refetch_memory(
+        memory_enabled=True,
+        prior_message_count=0,
+        last_user_activity_at=None,
+    ) is True
+
+
+def test_should_refetch_within_gap_skips() -> None:
+    """Continuing chat within 30 min of last activity — no refetch."""
+    from datetime import datetime, timedelta, timezone
+
+    last = datetime.now(timezone.utc) - timedelta(minutes=5)
+    assert memory_module.should_refetch_memory(
+        memory_enabled=True,
+        prior_message_count=10,
+        last_user_activity_at=last,
+    ) is False
+
+
+def test_should_refetch_after_gap_fires() -> None:
+    """31 min after last user activity — refetch."""
+    from datetime import datetime, timedelta, timezone
+
+    last = datetime.now(timezone.utc) - timedelta(minutes=31)
+    assert memory_module.should_refetch_memory(
+        memory_enabled=True,
+        prior_message_count=10,
+        last_user_activity_at=last,
+    ) is True
+
+
+def test_should_refetch_respects_memory_disabled() -> None:
+    """``memory_enabled=False`` short-circuits regardless of timing."""
+    from datetime import datetime, timezone
+
+    assert memory_module.should_refetch_memory(
+        memory_enabled=False,
+        prior_message_count=0,
+        last_user_activity_at=datetime.now(timezone.utc),
+    ) is False
+
+
+def test_should_refetch_missing_activity_fires() -> None:
+    """``last_user_activity_at=None`` with prior messages is a bizarre
+    state (sessions normally update the timestamp), but defensively
+    we fire refetch rather than silently skipping context."""
+    assert memory_module.should_refetch_memory(
+        memory_enabled=True,
+        prior_message_count=5,
+        last_user_activity_at=None,
+    ) is True
+
+
+@pytest.mark.asyncio
+async def test_search_writes_audit_row_with_metrics(
+    db_session, _fake_mem0
+) -> None:
+    """Every ``memory.search`` call writes a
+    ``navigator.memory.search`` audit row carrying hit_count +
+    top_similarity + latency. Powers the Console health tile.
+    """
+    user_id, ws_id = await _make_user_and_workspace(db_session)
+    await memory_module.add(
+        db_session,
+        workspace_id=ws_id,
+        owner_user_id=user_id,
+        message="Monday releases are mandatory for this workspace.",
+    )
+
+    await memory_module.search(
+        db_session,
+        workspace_id=ws_id,
+        owner_user_id=user_id,
+        query="Monday",
+    )
+
+    rows = (
+        (
+            await db_session.execute(
+                select(AuditLog).where(
+                    AuditLog.workspace_id == ws_id,
+                    AuditLog.actor_user_id == user_id,
+                    AuditLog.action == "navigator.memory.search",
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 1
+    payload = rows[0].payload
+    assert payload["hit_count"] == 1
+    assert "top_similarity" in payload
+    assert "latency_ms" in payload
+    assert payload["latency_ms"] >= 0
+
+
+@pytest.mark.asyncio
+async def test_search_zero_hit_audit_signals_backfill_gap(
+    db_session, _fake_mem0
+) -> None:
+    """When no facts match, the audit row STILL fires with
+    ``hit_count=0`` — that's exactly the signal the Console health
+    tile uses to flag backfill gaps."""
+    user_id, ws_id = await _make_user_and_workspace(db_session)
+    # No facts seeded.
+    await memory_module.search(
+        db_session,
+        workspace_id=ws_id,
+        owner_user_id=user_id,
+        query="anything",
+    )
+    rows = (
+        (
+            await db_session.execute(
+                select(AuditLog).where(
+                    AuditLog.workspace_id == ws_id,
+                    AuditLog.action == "navigator.memory.search",
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 1
+    assert rows[0].payload["hit_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_returns_owner_scoped_stats(
+    v1_client, db_session, seed_workspace, _fake_mem0
+) -> None:
+    """``GET /navigator-memories/health`` returns counters scoped to
+    the calling user — another user's adds / searches / failures in
+    the same workspace must not bleed into the response."""
+    user, raw_token, workspace = seed_workspace
+    # User A: 2 facts + 1 search.
+    await memory_module.add(
+        db_session,
+        workspace_id=workspace.id,
+        owner_user_id=user.id,
+        message="Fact A1 — Monday releases.",
+    )
+    await memory_module.add(
+        db_session,
+        workspace_id=workspace.id,
+        owner_user_id=user.id,
+        message="Fact A2 — Friday is no-deploy.",
+    )
+    await memory_module.search(
+        db_session,
+        workspace_id=workspace.id,
+        owner_user_id=user.id,
+        query="Monday",
+    )
+    # User B: 1 fact + 1 search. Must NOT show in A's stats.
+    other_user, _ = await _make_user_and_workspace(db_session)
+    await memory_module.add(
+        db_session,
+        workspace_id=workspace.id,
+        owner_user_id=other_user,
+        message="Fact B1 — different user's preference.",
+    )
+    await memory_module.search(
+        db_session,
+        workspace_id=workspace.id,
+        owner_user_id=other_user,
+        query="preference",
+    )
+    await db_session.commit()
+
+    response = await v1_client.get(
+        f"/v1/workspaces/{workspace.id}/navigator-memories/health",
+        headers={"Authorization": f"Bearer {raw_token}"},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["facts_count"] == 2  # only A's facts
+    assert body["adds_24h"] == 2
+    assert body["searches_24h"] == 1
+    assert body["zero_hit_rate_24h"] == 0.0  # the Monday search hit
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_zero_hit_rate_calculated(
+    v1_client, db_session, seed_workspace, _fake_mem0
+) -> None:
+    """Search that returns no results contributes to
+    ``zero_hit_rate_24h`` — the backfill-gap signal."""
+    user, raw_token, workspace = seed_workspace
+    # No facts, but two searches → both zero-hit.
+    await memory_module.search(
+        db_session,
+        workspace_id=workspace.id,
+        owner_user_id=user.id,
+        query="nothing",
+    )
+    await memory_module.search(
+        db_session,
+        workspace_id=workspace.id,
+        owner_user_id=user.id,
+        query="also nothing",
+    )
+    await db_session.commit()
+
+    response = await v1_client.get(
+        f"/v1/workspaces/{workspace.id}/navigator-memories/health",
+        headers={"Authorization": f"Bearer {raw_token}"},
+    )
+    body = response.json()
+    assert body["searches_24h"] == 2
+    assert body["zero_hit_rate_24h"] == 1.0
