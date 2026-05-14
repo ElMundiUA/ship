@@ -212,7 +212,7 @@ from backend.app.services.tracker_fsm import (
 #         Still drains 4× more per tick than the pre-v0.32 single-
 #         action mode; just leaves headroom for the occasional 7-min
 #         agent without GHA hard-killing mid-stage.
-BUNDLE_VERSION: str = "0.34"
+BUNDLE_VERSION: str = "0.35"
 
 # Default knowledge starters for PR 1. Empty by design: generated knowledge is
 # analyzed post-merge and proposed in a second PR. Historical callers can still
@@ -425,7 +425,12 @@ def compose_seed_files(
     # the seed bundle installs — knowledge ingestion (formerly the
     # ``ship-bootstrap.yml`` push-event workflow) runs server-side or as a
     # scheduled routine on the same cron, not as a separate event trigger.
-    trigger_entry = starter_workflows.get("ship-trigger-schedule")
+    # E16/ELS-124 — ``ship-agent-run.yml`` replaces the legacy
+    # ``ship-trigger-schedule.yml``. Server-side dispatcher (driven
+    # by tracker_poller) fires this workflow with explicit
+    # ``(routine_id, ticket_ref)`` inputs whenever a Linear ticket
+    # transitions into an actionable stage; no more cron-on-the-fleet.
+    trigger_entry = starter_workflows.get("ship-agent-run")
     if trigger_entry is not None:
         trigger_body = trigger_entry.read_yaml()
         if trigger_body:

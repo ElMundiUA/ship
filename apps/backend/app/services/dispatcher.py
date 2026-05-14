@@ -45,13 +45,42 @@ from backend.app.integrations.github.workflows import (
 )
 
 
+# Stage label (Linear's ``stage:<id>``) → routine id. The dispatcher
+# resolves this server-side before firing ``workflow_dispatch`` so
+# ``shipctl run`` receives both ``routine_id`` (which prompt to load)
+# and ``ticket_ref`` (which ticket to pin to). Bundle stages map to
+# their bundle routine; legacy pre-E16 stages map to the bundle they
+# were absorbed into, so an in-flight ticket carrying e.g.
+# ``stage:task_intake`` still routes to the new ``planning`` bundle.
+_STAGE_TO_ROUTINE: dict[str, str] = {
+    # E16 bundles.
+    "planning": "planning",
+    "dev_implementation": "developer",
+    "validation": "validation",
+    "code_review": "reviewer",
+    "decomposition": "decomposition",
+    # Pre-E16 legacy stages absorbed into bundles.
+    "task_intake": "planning",
+    "ba_requirements": "planning",
+    "tech_arch_plan": "planning",
+    "qa_arch_plan": "planning",
+    "qa_manual": "validation",
+    "qa_automation": "validation",
+    "pr_review": "reviewer",
+    "wbs": "decomposition",
+    "architecture": "decomposition",
+    "test_architecture": "decomposition",
+    "tasks": "decomposition",
+}
+
+
 log = logging.getLogger(__name__)
 
 
 # Workflow file name on the customer side. Hard-coded for now because
 # every Ship-seeded repo carries the same file; once ELS-124 cuts to
 # ``ship-agent-run.yml`` the constant updates here.
-WORKFLOW_FILE: Final[str] = "ship-trigger-schedule.yml"
+WORKFLOW_FILE: Final[str] = "ship-agent-run.yml"
 
 # Cascade-depth budget — how many dispatches we'll fire for the same
 # ticket within :data:`CASCADE_WINDOW_S` seconds before refusing.
@@ -100,6 +129,7 @@ class _Reason:
     CAP_EXCEEDED = "cap_exceeded"  # workspace's parallel dispatch limit hit
     CASCADE_BLOCKED = "cascade_blocked"  # too many dispatches for this ticket recently
     NO_REPO = "no_repo"  # workspace has no activated repo to dispatch to
+    NO_ROUTINE = "no_routine"  # ticket carries no stage label or unknown stage
     DISPATCH_FAILED = "dispatch_failed"  # GH API rejected the call
 
 
@@ -330,6 +360,7 @@ async def maybe_dispatch(
     workspace_id: uuid.UUID,
     ticket_ref: str,
     trigger_kind: str,
+    fsm_stage: str | None = None,
     settings: Settings | None = None,
     client: httpx.AsyncClient | None = None,
 ) -> DispatchResult:
@@ -361,7 +392,14 @@ async def maybe_dispatch(
     settings = settings or get_settings()
     lock_key = f"ticket:{ticket_ref}"
 
-    # 1. Shadow mode — recorded, never fires.
+    # Resolve routine before lock acquire — if the ticket has no
+    # stage label we'd rather refuse fast than hold a lock for a
+    # ticket nobody can work on.
+    routine_id = _STAGE_TO_ROUTINE.get(fsm_stage or "") if fsm_stage else None
+
+    # 1. Shadow mode — recorded, never fires. Includes the resolved
+    # routine so shadow audit rows let us validate the routing logic
+    # before flipping the fire toggle.
     if not settings.tracker_poll_fire:
         session.add(
             AuditLog(
@@ -369,11 +407,33 @@ async def maybe_dispatch(
                 action="agent_run.dispatch_shadow",
                 target_kind="ticket",
                 target_id=ticket_ref,
-                payload={"trigger_kind": trigger_kind, "reason": _Reason.SHADOW},
+                payload={
+                    "trigger_kind": trigger_kind,
+                    "reason": _Reason.SHADOW,
+                    "fsm_stage": fsm_stage,
+                    "routine_id": routine_id,
+                },
             )
         )
         return DispatchResult(
             fired=False, reason=_Reason.SHADOW, lock_key=lock_key
+        )
+
+    if routine_id is None:
+        session.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                action="dispatch.no_routine",
+                target_kind="ticket",
+                target_id=ticket_ref,
+                payload={
+                    "trigger_kind": trigger_kind,
+                    "fsm_stage": fsm_stage,
+                },
+            )
+        )
+        return DispatchResult(
+            fired=False, reason=_Reason.NO_ROUTINE, lock_key=lock_key
         )
 
     # 2. Cascade-depth guard.
@@ -464,7 +524,10 @@ async def maybe_dispatch(
             repo,
             install,
             WORKFLOW_FILE,
-            inputs={"ticket_ref": ticket_ref},
+            inputs={
+                "routine_id": routine_id,
+                "ticket_ref": ticket_ref,
+            },
             settings=settings,
             client=client,
         )
@@ -504,6 +567,8 @@ async def maybe_dispatch(
                 "trigger_kind": trigger_kind,
                 "repo": repo.full_name,
                 "workflow_file": WORKFLOW_FILE,
+                "routine_id": routine_id,
+                "fsm_stage": fsm_stage,
             },
         )
     )

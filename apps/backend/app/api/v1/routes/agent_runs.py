@@ -445,6 +445,19 @@ def _ticket_ref_from(vendor_kind: str, raw: str) -> TicketRef:
 async def get_next_task(
     workspace_id: uuid.UUID,
     state: str = Query(..., min_length=1, max_length=64, alias="state"),
+    ticket_ref: str | None = Query(
+        default=None,
+        min_length=1,
+        max_length=128,
+        alias="ticket_ref",
+        description=(
+            "Pin the picker to one ticket (E16/ELS-124). When set, the "
+            "candidate list is filtered to rows whose identifier equals "
+            "this ref before the orphan/overlay/priority gates run. "
+            "Used by the dispatcher-driven flow where the backend has "
+            "already chosen which ticket the agent should work on."
+        ),
+    ),
     auth: AuthContext = Depends(get_current_auth),
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
@@ -515,6 +528,15 @@ async def get_next_task(
     # cron noops cleanly.
     try:
         rows = await resolved.gateway.list_tickets(state=state, limit=10)
+        # ELS-124: when the dispatcher pinned a specific ticket, drop
+        # everything else BEFORE the gates run so the gates don't
+        # silently reject our pin behind the operator's back. Keep
+        # the original order otherwise — gates depend on it.
+        if ticket_ref:
+            rows = [
+                row for row in rows
+                if str(row.get("id") or "") == ticket_ref
+            ]
     except RuntimeError as exc:
         logger.exception(
             "tracker/next: list_tickets failed ws=%s state=%s err=%s",
@@ -3082,6 +3104,7 @@ async def finish_agent_run(
             workspace_id=workspace_id,
             ticket_ref=payload.ticket_ref,
             trigger_kind="cascade",
+            fsm_stage=payload.stage_next,
             settings=settings,
         )
         await session.flush()
@@ -3590,7 +3613,7 @@ async def post_dispatch_routine(
     await dispatch_workflow(
         repo,
         install,
-        "ship-trigger-schedule.yml",
+        "ship-agent-run.yml",
         inputs=inputs,
         settings=settings,
     )
@@ -3606,7 +3629,7 @@ async def post_dispatch_routine(
             payload={
                 "routine_id": payload.routine_id,
                 "ticket_ref": payload.ticket_ref,
-                "workflow_file": "ship-trigger-schedule.yml",
+                "workflow_file": "ship-agent-run.yml",
             },
         )
     )
@@ -3615,7 +3638,7 @@ async def post_dispatch_routine(
     return RoutineDispatchOut(
         accepted=True,
         repo_full_name=repo.full_name,
-        workflow_file="ship-trigger-schedule.yml",
+        workflow_file="ship-agent-run.yml",
         routine_id=payload.routine_id,
         ticket_ref=payload.ticket_ref,
     )

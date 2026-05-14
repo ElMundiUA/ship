@@ -167,6 +167,7 @@ async def test_shadow_mode_records_and_refuses(db_session, monkeypatch) -> None:
         workspace_id=ws,
         ticket_ref="T-1",
         trigger_kind="tracker_poll",
+        fsm_stage="planning",
     )
     assert result.fired is False
     assert result.reason == "shadow"
@@ -222,6 +223,7 @@ async def test_cascade_blocked_after_limit_hits(
         workspace_id=ws,
         ticket_ref="T-1",
         trigger_kind="cascade",
+        fsm_stage="planning",
     )
     assert result.fired is False
     assert result.reason == "cascade_blocked"
@@ -260,6 +262,7 @@ async def test_cap_exceeded_releases_lock(db_session, monkeypatch) -> None:
         workspace_id=ws,
         ticket_ref="T-new",
         trigger_kind="tracker_poll",
+        fsm_stage="planning",
     )
     assert result.fired is False
     assert result.reason == "cap_exceeded"
@@ -290,9 +293,73 @@ async def test_lock_held_refuses_without_audit_storm(
         workspace_id=ws,
         ticket_ref="T-1",
         trigger_kind="tracker_poll",
+        fsm_stage="planning",
     )
     assert result.fired is False
     assert result.reason == "lock_held"
+
+
+@pytest.mark.asyncio
+async def test_unknown_fsm_stage_refuses_with_no_routine(
+    db_session, monkeypatch
+) -> None:
+    """An ``fsm_stage`` we can't map to a routine (unknown / missing
+    stage label on the ticket) refuses with ``no_routine`` so the
+    dispatcher doesn't burn a lock + GH dispatch on a ticket no
+    agent will pick up."""
+    ws = await _make_workspace(db_session)
+    monkeypatch.setattr(
+        dispatcher.get_settings(),
+        "tracker_poll_fire",
+        True,
+        raising=False,
+    )
+    result = await maybe_dispatch(
+        db_session,
+        workspace_id=ws,
+        ticket_ref="T-1",
+        trigger_kind="tracker_poll",
+        fsm_stage="unknown-stage-xyz",
+    )
+    assert result.fired is False
+    assert result.reason == "no_routine"
+    # No lock taken — we refused before acquire.
+    assert await count_active_locks(db_session, workspace_id=ws) == 0
+    # Audit row recorded.
+    refusals = (
+        await db_session.execute(
+            select(AuditLog).where(
+                AuditLog.workspace_id == ws,
+                AuditLog.action == "dispatch.no_routine",
+            )
+        )
+    ).scalars().all()
+    assert len(refusals) == 1
+
+
+@pytest.mark.asyncio
+async def test_missing_fsm_stage_refuses_with_no_routine(
+    db_session, monkeypatch
+) -> None:
+    """``fsm_stage=None`` (poller couldn't find a ``stage:`` label on
+    the ticket) should refuse the same way an unknown stage does —
+    we have no routine to fire."""
+    ws = await _make_workspace(db_session)
+    monkeypatch.setattr(
+        dispatcher.get_settings(),
+        "tracker_poll_fire",
+        True,
+        raising=False,
+    )
+    result = await maybe_dispatch(
+        db_session,
+        workspace_id=ws,
+        ticket_ref="T-1",
+        trigger_kind="tracker_poll",
+        fsm_stage=None,
+    )
+    assert result.fired is False
+    assert result.reason == "no_routine"
 
 
 @pytest.mark.asyncio
@@ -311,6 +378,7 @@ async def test_no_activated_repo_refuses(db_session, monkeypatch) -> None:
         workspace_id=ws,
         ticket_ref="T-1",
         trigger_kind="tracker_poll",
+        fsm_stage="planning",
     )
     assert result.fired is False
     assert result.reason == "no_repo"

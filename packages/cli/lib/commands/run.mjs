@@ -255,6 +255,7 @@ async function _runCommandImpl(ctx, rest) {
         apiToken,
         workspaceId,
         state: fsmStage,
+        ticketRef: args.ticket,
       });
       if (!task) {
         step("tracker_next", "noop", { fsm_stage: fsmStage, reason: "no_eligible_ticket" });
@@ -1284,8 +1285,10 @@ async function fetchPoliciesPreamble({ apiBase, apiToken, workspaceId, role }) {
 }
 
 
-async function getNextTask({ apiBase, apiToken, workspaceId, state }) {
-  const url = `${apiBase}/v1/workspaces/${encodeURIComponent(workspaceId)}/tracker/next?state=${encodeURIComponent(state)}`;
+async function getNextTask({ apiBase, apiToken, workspaceId, state, ticketRef }) {
+  const params = new URLSearchParams({ state });
+  if (ticketRef) params.set("ticket_ref", ticketRef);
+  const url = `${apiBase}/v1/workspaces/${encodeURIComponent(workspaceId)}/tracker/next?${params}`;
   const res = await fetchWithRetry(
     () =>
       fetch(url, {
@@ -1635,6 +1638,7 @@ function parseArgs(rest) {
   const out = {
     routine: null,
     specialist: null,
+    ticket: null,
     cwd: null,
     json: false,
     help: false,
@@ -1653,6 +1657,12 @@ function parseArgs(rest) {
     if (a === "--debug") { out.debug = true; copy.shift(); continue; }
     if (a === "--routine" && copy[1] !== undefined) { out.routine = copy[1]; copy.splice(0, 2); continue; }
     if (a === "--specialist" && copy[1] !== undefined) { out.specialist = copy[1]; copy.splice(0, 2); continue; }
+    // E16/ELS-124: pin the picker to one ticket. The backend
+    // dispatcher writes both ``routine_id`` and ``ticket_ref`` into
+    // the workflow inputs because we want the agent to act on the
+    // EXACT ticket whose state transition fired the dispatch — not
+    // whichever other ticket happens to be eligible for the routine.
+    if (a === "--ticket" && copy[1] !== undefined) { out.ticket = copy[1]; copy.splice(0, 2); continue; }
     if (a === "--cwd" && copy[1] !== undefined) { out.cwd = path.resolve(copy[1]); copy.splice(0, 2); continue; }
     if (a === "--status-file" && copy[1] !== undefined) { out.statusFile = path.resolve(copy[1]); copy.splice(0, 2); continue; }
     // Soft-ignore legacy flags that older trigger workflows still pass —

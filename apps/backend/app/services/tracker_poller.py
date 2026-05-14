@@ -90,11 +90,26 @@ query ShipTrackerPoll($filter: IssueFilter, $after: String) {
       identifier
       title
       state { name }
+      labels { nodes { name } }
       updatedAt
     }
   }
 }
 """
+
+
+# Stage labels Linear carries are prefixed (``stage:planning``,
+# ``stage:dev_implementation``, …). Strip the prefix to recover the
+# raw FSM stage id the dispatcher needs.
+_STAGE_LABEL_PREFIX = "stage:"
+
+
+def _extract_fsm_stage(labels: list[str]) -> str | None:
+    """Return the bare stage id from a Linear labels list, or ``None``."""
+    for label in labels:
+        if isinstance(label, str) and label.startswith(_STAGE_LABEL_PREFIX):
+            return label[len(_STAGE_LABEL_PREFIX):].strip() or None
+    return None
 
 
 async def _fetch_updated_issues(
@@ -221,16 +236,21 @@ async def _write_transition_event(
     old_state: str | None,
     new_state: str,
     updated_at: str | None,
+    fsm_stage: str | None,
     client: httpx.AsyncClient | None = None,
 ) -> None:
     """Insert a ``tracker.event.received`` row in ``audit_log`` and
     hand the event to the dispatcher.
 
+    ``fsm_stage`` is extracted from the ticket's Linear labels
+    (``stage:<id>``) so downstream consumers don't need to re-fetch
+    the ticket. ``None`` means the ticket has no FSM stage label
+    yet — the dispatcher will refuse to fire because there's no
+    routine to run.
+
     The dispatcher is responsible for the shadow-vs-fire decision —
     when ``SHIP_TRACKER_POLL_FIRE`` is off it just writes an
-    ``agent_run.dispatch_shadow`` audit row and returns. So calling
-    ``maybe_dispatch`` here is safe at any time; the env flag draws
-    the production line.
+    ``agent_run.dispatch_shadow`` audit row and returns.
     """
     session.add(
         AuditLog(
@@ -245,6 +265,7 @@ async def _write_transition_event(
                 "old_state": old_state,
                 "new_state": new_state,
                 "updated_at": updated_at,
+                "fsm_stage": fsm_stage,
             },
         )
     )
@@ -259,6 +280,7 @@ async def _write_transition_event(
         workspace_id=workspace_id,
         ticket_ref=ticket_ref,
         trigger_kind="tracker_poll",
+        fsm_stage=fsm_stage,
         client=client,
     )
 
@@ -340,6 +362,12 @@ async def _poll_installation(
         updated_at = issue.get("updatedAt")
         if not ref or not new_state:
             continue
+        label_nodes = (issue.get("labels") or {}).get("nodes") or []
+        labels = [
+            n.get("name") for n in label_nodes
+            if isinstance(n, dict) and n.get("name")
+        ]
+        fsm_stage = _extract_fsm_stage(labels)
         old_state = last_states.get(ref)
         if old_state != new_state:
             await _write_transition_event(
@@ -349,6 +377,7 @@ async def _poll_installation(
                 old_state=old_state,
                 new_state=new_state,
                 updated_at=updated_at,
+                fsm_stage=fsm_stage,
                 client=client,
             )
             events += 1
