@@ -316,14 +316,16 @@ E2E_NAVIGATOR_PAT_SECONDARY=ship_pat_…
 
 ### Запуск
 
+Все memory-спека делят один workspace и пишут в общую mem0/`navigator_memories`-таблицу, поэтому **обязательно `--workers=1`** — без этого два спека параллельно делают cleanup друг друга и видят чужие факты.
+
 ```bash
 # Только контракт + tenancy + UI (бесплатно):
 cd e2e
 set -a && source .env && set +a
-npx playwright test navigator-memory navigator-tenancy navigator-memory-ui
+npx playwright test navigator-memory navigator-tenancy navigator-memory-ui --workers=1
 
 # Полное покрытие, включая LLM-ring (платно):
-E2E_RUN_NAVIGATOR_STREAM=1 npx playwright test navigator-memory
+E2E_RUN_NAVIGATOR_STREAM=1 npx playwright test navigator-memory --workers=1
 ```
 
 ### Чем покрыты milestones (M1–M19)
