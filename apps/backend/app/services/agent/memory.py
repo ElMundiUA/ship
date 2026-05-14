@@ -198,7 +198,6 @@ async def add(
     if len(text_to_send) > _MAX_MESSAGE_CHARS:
         text_to_send = text_to_send[:_MAX_MESSAGE_CHARS]
 
-    client = _get_memory_client(settings)
     namespace = _namespace(workspace_id, owner_user_id)
     metadata = {
         "workspace_id": str(workspace_id),
@@ -212,6 +211,13 @@ async def add(
     metadata = {k: v for k, v in metadata.items() if v is not None}
 
     try:
+        # Client construction (mem0 import + pgvector adapter init) is
+        # inside the try so a missing optional dep takes only the
+        # extraction path down, never the chat hot path that called
+        # us — ``extract_in_background`` runs as a fire-and-forget
+        # task and any exception here would be silently swallowed
+        # but still produce a half-written transaction.
+        client = _get_memory_client(settings)
         # mem0's SDK is sync; off-load to a thread so we don't block
         # the asyncio event loop for the LLM round-trip (5-20s under
         # load).
@@ -293,10 +299,13 @@ async def search(
     if not (query or "").strip():
         return []
 
-    client = _get_memory_client(settings)
     namespace = _namespace(workspace_id, owner_user_id)
     started_at = time.monotonic()
     try:
+        # Client construction is inside the try for the same reason
+        # as ``add`` / ``delete`` above — a missing optional driver
+        # shouldn't take down the user-facing tool.
+        client = _get_memory_client(settings)
         result = await asyncio.to_thread(
             client.search,
             query,
@@ -442,13 +451,16 @@ async def delete(
         )
     )
 
-    client = _get_memory_client(settings)
+    # mem0's delete failure is non-fatal — the mirror is the
+    # access-control source of truth, and stale mem0 entries
+    # become invisible once we drop the mirror row. The client
+    # construction itself can also fail (missing optional driver
+    # in the image, mem0 import error, …); we don't let that
+    # take the user-facing delete down either.
     try:
+        client = _get_memory_client(settings)
         await asyncio.to_thread(client.delete, row.mem0_id)
     except Exception:  # noqa: BLE001
-        # mem0's delete failure is non-fatal — the mirror is the
-        # access-control source of truth, and stale mem0 entries
-        # become invisible once we drop the mirror row.
         log.exception("mem0.delete failed for mem0_id=%s", row.mem0_id)
 
     await session.delete(row)
