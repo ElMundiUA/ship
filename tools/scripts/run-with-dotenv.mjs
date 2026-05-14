@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 function stripInlineComment(value) {
   let quote = null;
@@ -73,7 +73,18 @@ if (!command) {
   process.exit(2);
 }
 
-const env = { ...process.env, ...parseDotenv(".env") };
+// Layered env: committed baseline → developer overrides → CLI args.
+//
+// `.env.shared` carries the laptop-friendly defaults (local Postgres,
+// local-mode auth, blank third-party keys) and is committed. `.env`
+// stays gitignored and overrides anything the developer wants to
+// retarget (point at Neon, switch to Auth0, plug in real OpenAI etc.).
+// CLI --default fills only when the merged file still left a key
+// blank; --set wins over everything.
+const layered = {};
+if (existsSync(".env.shared")) Object.assign(layered, parseDotenv(".env.shared"));
+if (existsSync(".env")) Object.assign(layered, parseDotenv(".env"));
+const env = { ...process.env, ...layered };
 for (const [key, value] of Object.entries(defaults)) {
   if (!env[key]) env[key] = value;
 }

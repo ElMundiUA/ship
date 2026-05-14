@@ -17,6 +17,12 @@ DEV_BACKEND_HOST ?= 127.0.0.1
 DEV_BACKEND_PORT ?= 8100
 DEV_CONSOLE_PORT ?= 3001
 DEV_API_URL ?= http://localhost:$(DEV_BACKEND_PORT)
+# Match docker-compose's POSTGRES_PORT default. Used by the dev-up
+# flow to build the local DSN before any env file is read.
+POSTGRES_PORT ?= 5433
+POSTGRES_USER ?= ship
+POSTGRES_PASSWORD ?= ship
+POSTGRES_DB ?= ship
 
 # Override on the command line, e.g.: make smoke SMOKE_BASE=http://staging:3001
 SMOKE_BASE ?= http://localhost:3001
@@ -28,7 +34,8 @@ SMOKE_API ?= http://localhost:8100
         logs-console health smoke psql redis-cli migrate revision shell \
         test test-backend test-fast clean nuke status backup backup-prune ps env-check \
         dev-env-check dev-port-backend dev-port-console dev-migrate dev-backend \
-        dev-console dev-local prod-up prod-down prod-logs \
+        dev-console dev-local dev-db-up dev-db-down dev-db-reset dev-seed \
+        dev-up dev-down dev-stack prod-up prod-down prod-logs \
         k8s-apply k8s-rollout k8s-rollout-undo k8s-logs k8s-pods
 
 help: ## Show this help.
@@ -76,6 +83,71 @@ dev-console: env-check dev-port-console ## Run the console locally against the l
 		--default APP_BASE_URL=http://localhost:$(DEV_CONSOLE_PORT) \
 		--default SHIP_CONSOLE_URL=http://localhost:$(DEV_CONSOLE_PORT) \
 		-- npm run dev --prefix apps/console
+
+dev-db-up: ## Start the docker-compose Postgres on :$(POSTGRES_PORT) (no backend/console).
+	$(COMPOSE) up -d $(DB_SVC)
+	@printf "waiting for postgres "
+	@for i in 1 2 3 4 5 6 7 8 9 10 11 12; do \
+		if $(COMPOSE) exec -T $(DB_SVC) pg_isready -U $${POSTGRES_USER:-ship} -d $${POSTGRES_DB:-ship} >/dev/null 2>&1; then \
+			printf " up\n"; exit 0; \
+		fi; \
+		printf "."; sleep 1; \
+	done; \
+	printf "\nERROR: postgres did not become ready\n" >&2; exit 1
+
+dev-db-down: ## Stop the dev Postgres (keep volume).
+	$(COMPOSE) stop $(DB_SVC)
+
+dev-db-reset: ## Drop the dev Postgres volume + bring it back up empty.
+	$(COMPOSE) rm -sfv $(DB_SVC)
+	$(COMPOSE) volume rm -f ship_postgres_data 2>/dev/null || true
+	@$(MAKE) dev-db-up
+
+dev-seed: dev-env-check ## Seed dev workspace + dev@localhost user (idempotent).
+	@PYTHONPATH=apps node tools/scripts/run-with-dotenv.mjs \
+		--set DATABASE_URL=$(DEV_LOCAL_DSN) \
+		-- .venv/bin/python tools/scripts/seed_dev.py
+
+# Local laptop profile — forces every env key that distinguishes
+# "pure local" from "laptop-debugging-against-prod". Anything not
+# pinned here falls through to .env / .env.shared as usual.
+DEV_LOCAL_DSN := postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@localhost:$(POSTGRES_PORT)/$(POSTGRES_DB)
+DEV_LOCAL_DSN_PSYCOPG := postgresql+psycopg://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@localhost:$(POSTGRES_PORT)/$(POSTGRES_DB)
+DEV_LOCAL_SETS := \
+	--set DATABASE_URL=$(DEV_LOCAL_DSN) \
+	--set ALEMBIC_DATABASE_URL=$(DEV_LOCAL_DSN_PSYCOPG) \
+	--set SHIP_AUTH_MODE=local \
+	--set SHIP_PUBLIC_URL=http://localhost:$(DEV_BACKEND_PORT) \
+	--set SHIP_CONSOLE_URL=http://localhost:$(DEV_CONSOLE_PORT) \
+	--set APP_BASE_URL=http://localhost:$(DEV_CONSOLE_PORT)
+
+dev-up: dev-env-check dev-db-up ## Local Postgres + migrate + seed + backend+console hot-reload.
+	@PYTHONPATH=apps node tools/scripts/run-with-dotenv.mjs \
+		$(DEV_LOCAL_SETS) \
+		-- .venv/bin/alembic -c apps/backend/alembic.ini upgrade head
+	@$(MAKE) dev-seed
+	@$(MAKE) dev-stack
+
+dev-stack: dev-env-check dev-port-backend dev-port-console ## Run backend + console hot-reload pinned to the local profile (no Neon, no Auth0).
+	@set -euo pipefail; \
+		backend_pid=""; console_pid=""; \
+		cleanup() { \
+			[ -n "$$backend_pid" ] && kill "$$backend_pid" >/dev/null 2>&1 || true; \
+			[ -n "$$console_pid" ] && kill "$$console_pid" >/dev/null 2>&1 || true; \
+			wait >/dev/null 2>&1 || true; \
+		}; \
+		trap cleanup INT TERM EXIT; \
+		( PYTHONPATH=apps node tools/scripts/run-with-dotenv.mjs \
+		  $(DEV_LOCAL_SETS) \
+		  -- .venv/bin/uvicorn backend.app.main:app --reload --host $(DEV_BACKEND_HOST) --port $(DEV_BACKEND_PORT) ) & backend_pid=$$!; \
+		( node tools/scripts/run-with-dotenv.mjs \
+		  $(DEV_LOCAL_SETS) \
+		  --default SHIP_API_URL=$(DEV_API_URL) \
+		  -- npm run dev --prefix apps/console ) & console_pid=$$!; \
+		wait "$$backend_pid" "$$console_pid"
+
+dev-down: ## Stop dev Postgres (alias for dev-db-down).
+	@$(MAKE) dev-db-down
 
 dev-local: dev-env-check dev-port-backend dev-port-console ## Run backend + console locally against shared dev infrastructure.
 	@set -euo pipefail; \

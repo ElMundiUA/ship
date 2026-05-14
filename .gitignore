@@ -16,6 +16,7 @@ output/playwright/
 .env
 .env.*
 !.env.example
+!.env.shared
 !e2e/.env.deployed.example
 
 # K8s prod secrets — materialized locally from .env, never committed.
