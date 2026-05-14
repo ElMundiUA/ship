@@ -15,6 +15,8 @@ from backend.app.services.agent.client import (
     ToolSpec,
     _anthropic_messages,
     _anthropic_tools,
+    _anthropic_usage_dict,
+    _mark_last_block_cacheable,
     _openai_messages,
     _openai_tools,
 )
@@ -135,3 +137,61 @@ def test_anthropic_messages_splits_system_and_rewrites_tool_use() -> None:
     assert tool_result_msg["role"] == "user"
     assert tool_result_msg["content"][0]["type"] == "tool_result"
     assert tool_result_msg["content"][0]["tool_use_id"] == "toolu_1"
+
+
+def test_mark_last_block_cacheable_upgrades_string_content() -> None:
+    """String-content messages get rewritten to a single text block so
+    ``cache_control`` (which is per-block) has somewhere to land."""
+    msg = {"role": "user", "content": "hello"}
+    _mark_last_block_cacheable(msg)
+    assert msg["content"] == [
+        {
+            "type": "text",
+            "text": "hello",
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+
+
+def test_mark_last_block_cacheable_stamps_last_block_in_list() -> None:
+    msg = {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "first"},
+            {"type": "text", "text": "second"},
+        ],
+    }
+    _mark_last_block_cacheable(msg)
+    assert "cache_control" not in msg["content"][0]
+    assert msg["content"][1]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_anthropic_usage_dict_surfaces_cache_counters() -> None:
+    class FakeUsage:
+        input_tokens = 120
+        output_tokens = 40
+        cache_read_input_tokens = 800
+        cache_creation_input_tokens = 200
+
+    usage = _anthropic_usage_dict(FakeUsage())
+    assert usage["prompt_tokens"] == 120
+    assert usage["completion_tokens"] == 40
+    # Total rolls up every input class so cost dashboards see the real
+    # work — uncached + cache reads + cache writes + output.
+    assert usage["total_tokens"] == 120 + 40 + 800 + 200
+    assert usage["cache_read_input_tokens"] == 800
+    assert usage["cache_creation_input_tokens"] == 200
+
+
+def test_anthropic_usage_dict_handles_missing_cache_fields() -> None:
+    """Older SDK versions / non-cache responses omit the cache fields;
+    the projection must default them to zero rather than crashing."""
+
+    class FakeUsage:
+        input_tokens = 50
+        output_tokens = 10
+
+    usage = _anthropic_usage_dict(FakeUsage())
+    assert usage["cache_read_input_tokens"] == 0
+    assert usage["cache_creation_input_tokens"] == 0
+    assert usage["total_tokens"] == 60

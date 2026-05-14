@@ -473,6 +473,61 @@ _ANTHROPIC_SERVER_WEB_SEARCH: dict[str, Any] = {
 }
 
 
+#: Anthropic prompt-cache marker (5-min TTL). Stamped on the last
+#: stable prefix segment so subsequent turns replay it from cache
+#: instead of paying full input tokens. The cache hierarchy is
+#: tools → system → messages, so a marker on ``system`` covers both
+#: tools and system; a second marker on the last history message
+#: extends the cached prefix through the conversation tail.
+_CACHE_EPHEMERAL: dict[str, Any] = {"type": "ephemeral"}
+
+
+def _anthropic_usage_dict(u: Any) -> dict[str, int]:
+    """Project Anthropic's usage object into our cross-vendor shape.
+
+    ``prompt_tokens`` stays equal to ``input_tokens`` (the non-cached
+    portion) for back-compat with OpenAI telemetry; the cache counters
+    are surfaced as extra fields so consoles can render hit/miss ratios.
+    Total tokens sums every input class so cost dashboards see the real
+    work the model did.
+    """
+    input_tokens = int(getattr(u, "input_tokens", 0) or 0)
+    output_tokens = int(getattr(u, "output_tokens", 0) or 0)
+    cache_read = int(getattr(u, "cache_read_input_tokens", 0) or 0)
+    cache_create = int(getattr(u, "cache_creation_input_tokens", 0) or 0)
+    return {
+        "prompt_tokens": input_tokens,
+        "completion_tokens": output_tokens,
+        "total_tokens": input_tokens + output_tokens + cache_read + cache_create,
+        "cache_read_input_tokens": cache_read,
+        "cache_creation_input_tokens": cache_create,
+    }
+
+
+def _mark_last_block_cacheable(message: dict[str, Any]) -> None:
+    """Attach ``cache_control`` to the final content block of ``message``.
+
+    Anthropic matches the longest cached prefix on each turn, so marking
+    the freshest message means the *next* turn (where it has become
+    mid-conversation) replays the whole stretch from cache. Handles both
+    string-content and list-of-blocks shapes — string content is
+    upgraded to a single text block since ``cache_control`` is a
+    per-block attribute.
+    """
+    content = message.get("content")
+    if isinstance(content, str):
+        message["content"] = [
+            {
+                "type": "text",
+                "text": content,
+                "cache_control": _CACHE_EPHEMERAL,
+            }
+        ]
+        return
+    if isinstance(content, list) and content and isinstance(content[-1], dict):
+        content[-1]["cache_control"] = _CACHE_EPHEMERAL
+
+
 def _anthropic_tools(tools: Sequence[ToolSpec]) -> list[dict[str, Any]]:
     rendered: list[dict[str, Any]] = [
         {
@@ -666,6 +721,8 @@ class AnthropicAgentClient:
         temperature: float,
     ) -> AsyncIterator[AgentEvent]:
         system, history = _anthropic_messages(messages)
+        if history:
+            _mark_last_block_cacheable(history[-1])
         kwargs: dict[str, Any] = {
             "model": model or self._default_model,
             "messages": history,
@@ -673,7 +730,13 @@ class AnthropicAgentClient:
             "temperature": temperature,
         }
         if system:
-            kwargs["system"] = system
+            kwargs["system"] = [
+                {
+                    "type": "text",
+                    "text": system,
+                    "cache_control": _CACHE_EPHEMERAL,
+                }
+            ]
         if tools:
             kwargs["tools"] = _anthropic_tools(tools)
 
@@ -721,16 +784,7 @@ class AnthropicAgentClient:
                         finish_reason = getattr(message, "stop_reason", "stop") or "stop"
                         u = getattr(message, "usage", None)
                         if u is not None:
-                            usage = {
-                                "prompt_tokens": int(getattr(u, "input_tokens", 0) or 0),
-                                "completion_tokens": int(
-                                    getattr(u, "output_tokens", 0) or 0
-                                ),
-                                "total_tokens": int(
-                                    (getattr(u, "input_tokens", 0) or 0)
-                                    + (getattr(u, "output_tokens", 0) or 0)
-                                ),
-                            }
+                            usage = _anthropic_usage_dict(u)
 
         # Anthropic's ``tool_use`` stop_reason is the signal that the
         # model wants us to run tools; normalise it to the OpenAI-ish
@@ -751,6 +805,8 @@ class AnthropicAgentClient:
         response_format: dict[str, Any] | None = None,
     ) -> str:
         system, history = _anthropic_messages(messages)
+        if history:
+            _mark_last_block_cacheable(history[-1])
         kwargs: dict[str, Any] = {
             "model": model or self._default_fast_model,
             "messages": history,
@@ -758,7 +814,13 @@ class AnthropicAgentClient:
             "temperature": temperature,
         }
         if system:
-            kwargs["system"] = system
+            kwargs["system"] = [
+                {
+                    "type": "text",
+                    "text": system,
+                    "cache_control": _CACHE_EPHEMERAL,
+                }
+            ]
         # Anthropic doesn't have ``response_format=json``; we rely on
         # prompt engineering to produce JSON and json.loads on our side.
         resp = await self._client.messages.create(**kwargs)
