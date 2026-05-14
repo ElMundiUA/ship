@@ -99,16 +99,22 @@ export async function streamNavigatorTurn(
     );
   }
 
+  // ``/chat/stream`` switched to ``multipart/form-data`` in phase 3b
+  // (attachments + text body in one request). Form fields:
+  // ``body`` (required), ``classify_shift`` (optional bool), and
+  // optional ``files[]``. JSON-body callers fail with 422 at the
+  // form-validator gate.
   const res = await request.post(
     `${trimmed}/v1/workspaces/${encodeURIComponent(workspaceId)}/chat/stream`,
     {
       headers: {
         Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
         Accept: "text/event-stream",
       },
-      // ChatStreamIn shape — see ``backend/app/api/v1/routes/chat.py``.
-      data: JSON.stringify({ body, classify_shift: classifyShift }),
+      multipart: {
+        body,
+        classify_shift: classifyShift ? "true" : "false",
+      },
       timeout: timeoutMs,
     },
   );
