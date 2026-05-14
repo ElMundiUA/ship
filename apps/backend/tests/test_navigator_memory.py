@@ -542,3 +542,175 @@ async def test_recall_tool_returns_user_facts_only(
     assert "Monday releases" in result[0]["fact_text"]
     assert "id" in result[0]
     assert "score" in result[0]
+
+
+# ---------------------------------------------------------------------------
+# ELS-129 — planning flow fix (intent reset + project-tagged fact)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_project_create_resets_intent_and_tags_fact(
+    db_session, _fake_mem0, monkeypatch
+) -> None:
+    """End-to-end of the ELS-129 wiring:
+
+    1. A chat thread sits in ``intent='shape_project'``.
+    2. ``_tool_project_create`` runs (with a stubbed tracker).
+    3. After the call, ``thread.intent`` is NULL.
+    4. A mem0 fact exists with ``project_native_id`` + ``intent_at_capture=shape_project``.
+    """
+    from backend.app.db.models.agent_surface import ChatThread
+    from backend.app.db.models.navigator_memory import NavigatorMemory
+    from backend.app.services.agent.tools import ToolBox
+
+    user_id, ws_id = await _make_user_and_workspace(db_session)
+    thread = ChatThread(
+        workspace_id=ws_id,
+        created_by_user_id=user_id,
+        title="Drafting a project",
+        status="active",
+        intent="shape_project",
+    )
+    db_session.add(thread)
+    await db_session.flush()
+
+    # Build the harness — only the fields ``_tool_project_create``
+    # touches need to be set.
+    box = ToolBox.__new__(ToolBox)
+    box._session = db_session
+    box._settings = None  # mem0 client is monkey-patched to a fake
+    box._workspace_id = ws_id
+    box._user_id = user_id
+    box._thread_id = thread.id
+    box._thread_intent = "shape_project"
+    box._subagent_active = False
+
+    # Fake tracker: returns a stubbed project with a deterministic id
+    # and no-op'd anchor / priorities helpers.
+    class _FakeTracker:
+        async def create_project(self, *, name, body, description=None):
+            return {
+                "id": "proj-ELS129-fixture",
+                "name": name,
+                "body": body,
+                "url": "https://linear.app/test/project/proj-ELS129-fixture",
+            }
+
+        async def get_planning_anchor(self, project_id):
+            return None
+
+        async def create_planning_anchor(self, project_id, *, title, body, labels=None):
+            return None
+
+    async def _resolve_tracker(_kind, _hint):
+        return _FakeTracker()
+
+    async def _ensure_drafts(*, project_native_id):
+        return None
+
+    box._resolve_tracker = _resolve_tracker  # type: ignore[assignment]
+    box._ensure_drafts_priorities_row = _ensure_drafts  # type: ignore[assignment]
+
+    import json
+    out_json = await box._tool_project_create(
+        {
+            "name": "E17 test project",
+            "body": "## Goal\nValidate the ELS-129 wiring end-to-end.",
+        }
+    )
+    out = json.loads(out_json)
+    assert out["id"] == "proj-ELS129-fixture"
+
+    # 1. Thread intent reset.
+    await db_session.refresh(thread)
+    assert thread.intent is None, "shape_project intent should be cleared after create"
+    assert box._thread_intent is None, "in-memory mirror should also reset"
+
+    # 2. mem0 fact tagged with the new project.
+    facts = (
+        (
+            await db_session.execute(
+                select(NavigatorMemory).where(
+                    NavigatorMemory.owner_user_id == user_id,
+                    NavigatorMemory.workspace_id == ws_id,
+                    NavigatorMemory.project_native_id == "proj-ELS129-fixture",
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(facts) == 1
+    f = facts[0]
+    assert f.intent_at_capture == "shape_project"
+    assert "E17 test project" in f.fact_text
+    assert "proj-ELS129-fixture" in f.fact_text
+    assert "Validate the ELS-129 wiring" in f.fact_text
+
+
+@pytest.mark.asyncio
+async def test_project_create_no_reset_when_intent_already_clear(
+    db_session, _fake_mem0
+) -> None:
+    """If the thread wasn't in shape_project (e.g. a normal chat
+    that happened to call create_project from a follow-up), the
+    reset is a no-op and no mem0 fact gets written."""
+    from backend.app.db.models.agent_surface import ChatThread
+    from backend.app.db.models.navigator_memory import NavigatorMemory
+    from backend.app.services.agent.tools import ToolBox
+
+    user_id, ws_id = await _make_user_and_workspace(db_session)
+    thread = ChatThread(
+        workspace_id=ws_id,
+        created_by_user_id=user_id,
+        title="Regular chat",
+        status="active",
+        intent=None,
+    )
+    db_session.add(thread)
+    await db_session.flush()
+
+    box = ToolBox.__new__(ToolBox)
+    box._session = db_session
+    box._settings = None
+    box._workspace_id = ws_id
+    box._user_id = user_id
+    box._thread_id = thread.id
+    box._thread_intent = None
+    box._subagent_active = False
+
+    class _FakeTracker:
+        async def create_project(self, *, name, body, description=None):
+            return {"id": "no-tag-fixture", "name": name, "body": body, "url": "x"}
+
+        async def get_planning_anchor(self, project_id):
+            return None
+
+        async def create_planning_anchor(self, project_id, *, title, body, labels=None):
+            return None
+
+    async def _resolve_tracker(_kind, _hint):
+        return _FakeTracker()
+
+    async def _ensure_drafts(*, project_native_id):
+        return None
+
+    box._resolve_tracker = _resolve_tracker  # type: ignore[assignment]
+    box._ensure_drafts_priorities_row = _ensure_drafts  # type: ignore[assignment]
+
+    await box._tool_project_create({"name": "Regular project", "body": "..."})
+
+    facts = (
+        (
+            await db_session.execute(
+                select(NavigatorMemory).where(
+                    NavigatorMemory.workspace_id == ws_id,
+                    NavigatorMemory.project_native_id == "no-tag-fixture",
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert facts == [], "no shape_project fact should be written outside drafting mode"

@@ -2267,6 +2267,67 @@ class ToolBox:
             # confirmation reliably ("Created · drafted in Drafts ·
             # ready for hand-off").
             result["dashboard_bucket"] = "drafts"
+
+        # E17/ELS-129 — escape drafting mode on success.
+        # The thread's ``intent='shape_project'`` was the reason
+        # Navigator was biased toward shaping a brief. Now that the
+        # brief has graduated into a real Linear project, leaving the
+        # intent sticky makes the agent start drafting a SECOND
+        # project on the next user turn — the symptom that's been
+        # painful for the PO. Reset to ``None`` so the system prompt
+        # drops the drafting-mode block on the next ``assemble_messages``.
+        # Plus: write a mem0 fact tagged with the just-created
+        # ``project_native_id`` so future chats about this project
+        # surface the drafting context via the retrieval boost.
+        if (
+            project_native_id
+            and self._thread_id is not None
+            and self._thread_intent == "shape_project"
+        ):
+            try:
+                from backend.app.db.models.agent_surface import ChatThread
+
+                thread_row = await self._session.get(
+                    ChatThread, self._thread_id
+                )
+                if thread_row is not None and thread_row.intent == "shape_project":
+                    thread_row.intent = None
+                    await self._session.flush()
+                    # Track in-memory copy too so any later tool call in
+                    # the same turn sees the reset.
+                    self._thread_intent = None
+            except Exception:  # noqa: BLE001 — never fail the create over the reset
+                logger.exception(
+                    "shape_project intent reset failed for thread %s",
+                    self._thread_id,
+                )
+
+            try:
+                from backend.app.services.agent import memory as navigator_memory
+
+                brief_excerpt = body[:500] if body else ""
+                fact_body = (
+                    f"Drafted project '{name}' (linear id {project_native_id}). "
+                    f"Brief excerpt: {brief_excerpt}"
+                ).strip()
+                await navigator_memory.add(
+                    self._session,
+                    workspace_id=self._workspace_id,
+                    owner_user_id=self._user_id,
+                    message=fact_body,
+                    source_thread_id=self._thread_id,
+                    source_message_id=None,
+                    source_message_position=None,
+                    project_native_id=project_native_id,
+                    intent_at_capture="shape_project",
+                    settings=self._settings,
+                )
+            except Exception:  # noqa: BLE001 — never fail create over a mem0 hiccup
+                logger.exception(
+                    "shape_project brief mem0.add failed for project %s",
+                    project_native_id,
+                )
+
         return _json_result(result)
 
     async def _ensure_planning_anchor(
