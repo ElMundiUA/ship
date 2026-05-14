@@ -616,5 +616,13 @@ def register_all() -> None:
     # every activated repo. ``_workflow_dispatch_tick`` and
     # ``workflow_dispatch_cron.py`` are deleted in the same commit.
 
+    # E16/ELS-125 — workspace bundles (daily-digest / weekly-audit /
+    # self-heal). The only time-driven dispatch path that survives.
+    from backend.app.services.daily_scheduler import (
+        register_all as register_workspace_ticks,
+    )
+
+    register_workspace_ticks()
+
 
 __all__ = ["register_all"]

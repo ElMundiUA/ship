@@ -250,9 +250,33 @@ async def sweep_expired_locks(
 
 
 async def count_active_locks(
-    session: AsyncSession, *, workspace_id: uuid.UUID
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    key_prefix: str | None = None,
 ) -> int:
-    """Count live (non-expired) locks for one workspace."""
+    """Count live (non-expired) locks for one workspace.
+
+    ``key_prefix`` filters by lock key namespace so the SDLC cap
+    (counting ``ticket:*`` keys) and the workspace-bundle cap
+    (counting ``daily-digest:*`` / ``weekly-audit:*`` / ``self-heal:*``
+    keys) don't compete on the same counter.
+    """
+    if key_prefix is None:
+        return int(
+            (
+                await session.execute(
+                    text(
+                        """
+                        SELECT COUNT(*)::int
+                        FROM agent_dispatch_locks
+                        WHERE workspace_id = :ws AND expires_at > now()
+                        """
+                    ),
+                    {"ws": workspace_id},
+                )
+            ).scalar_one()
+        )
     return int(
         (
             await session.execute(
@@ -260,10 +284,12 @@ async def count_active_locks(
                     """
                     SELECT COUNT(*)::int
                     FROM agent_dispatch_locks
-                    WHERE workspace_id = :ws AND expires_at > now()
+                    WHERE workspace_id = :ws
+                      AND expires_at > now()
+                      AND key LIKE :prefix
                     """
                 ),
-                {"ws": workspace_id},
+                {"ws": workspace_id, "prefix": f"{key_prefix}%"},
             )
         ).scalar_one()
     )
@@ -473,7 +499,13 @@ async def maybe_dispatch(
     # includes our own fresh row — using strictly-greater-than against
     # the cap means "this acquire pushed us past the limit, walk it
     # back". A cap of 4 allows exactly 4 simultaneous locks.
-    active = await count_active_locks(session, workspace_id=workspace_id)
+    # ``key_prefix="ticket:"`` scopes the count to SDLC dispatches so
+    # workspace-bundle dispatches (daily-digest / weekly-audit /
+    # self-heal) live on their own slot count via
+    # ``maybe_dispatch_workspace_bundle``.
+    active = await count_active_locks(
+        session, workspace_id=workspace_id, key_prefix="ticket:"
+    )
     workspace = (
         await session.execute(
             select(Workspace.max_concurrent_dispatches).where(
@@ -582,11 +614,195 @@ async def maybe_dispatch(
     return DispatchResult(fired=True, reason=_Reason.FIRED, lock_key=lock_key)
 
 
+# ---------------------------------------------------------------------------
+# Workspace-bundle dispatch (ELS-125)
+# ---------------------------------------------------------------------------
+
+
+# Workspace-level bundle ids → routine id used inside ``shipctl run
+# --routine X``. The role file (slug) under ``agent_roles/`` matches
+# the routine id 1:1. Cron cadence per bundle lives in
+# ``daily_scheduler.py`` (the only place where time-driven cron
+# survives after ELS-124).
+_WORKSPACE_BUNDLE_IDS: Final[frozenset[str]] = frozenset(
+    {"daily-digest", "weekly-audit", "self-heal"}
+)
+
+# Separate cap for workspace-bundle dispatches so they don't compete
+# with SDLC ticket dispatches for the workspace's primary 4 slots.
+# One slot means "at most one daily-digest / weekly-audit / self-heal
+# in flight per workspace at a time" — these bundles run minutes,
+# not minutes-of-CPU, and back-to-back daily-digest invocations make
+# no sense anyway.
+WORKSPACE_BUNDLE_CAP: Final[int] = 1
+
+
+async def maybe_dispatch_workspace_bundle(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    bundle_id: str,
+    trigger_kind: str,
+    settings: Settings | None = None,
+    client: httpx.AsyncClient | None = None,
+) -> DispatchResult:
+    """Dispatch a workspace-scope bundle (no ticket pin).
+
+    Mirrors :func:`maybe_dispatch` but with workspace-scope locks
+    (``<bundle_id>:scheduled``) and a separate cap counter that
+    doesn't compete with the SDLC ticket cap.
+
+    Bundle ids: ``daily-digest`` / ``weekly-audit`` / ``self-heal``.
+    Each fires the same workflow as ticket-dispatched bundles
+    (``ship-agent-run.yml``) but with ``ticket_ref=""`` so the
+    runner knows there's no FSM ticket to pin to and the bundle
+    operates on the workspace as a whole.
+    """
+    settings = settings or get_settings()
+
+    if bundle_id not in _WORKSPACE_BUNDLE_IDS:
+        return DispatchResult(
+            fired=False,
+            reason=_Reason.NO_ROUTINE,
+            lock_key=None,
+        )
+
+    lock_key = f"{bundle_id}:scheduled"
+
+    # 1. Shadow mode — recorded, never fires.
+    if not settings.tracker_poll_fire:
+        session.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                action="agent_run.dispatch_shadow",
+                target_kind="workspace_bundle",
+                target_id=bundle_id,
+                payload={
+                    "trigger_kind": trigger_kind,
+                    "reason": _Reason.SHADOW,
+                    "bundle_id": bundle_id,
+                },
+            )
+        )
+        return DispatchResult(
+            fired=False, reason=_Reason.SHADOW, lock_key=lock_key
+        )
+
+    # 2. Lock acquire — the unique (workspace_id, key) index enforces
+    # one concurrent run per bundle per workspace.
+    got_lock = await acquire_lock(
+        session, workspace_id=workspace_id, key=lock_key
+    )
+    if not got_lock:
+        return DispatchResult(
+            fired=False, reason=_Reason.LOCK_HELD, lock_key=lock_key
+        )
+
+    # 3. Separate cap — workspace bundles cap=1 by default. Counts
+    # only ``<bundle_id>:`` keys via prefix filter so SDLC dispatches
+    # don't push us over.
+    active = await count_active_locks(
+        session,
+        workspace_id=workspace_id,
+        key_prefix=f"{bundle_id}:",
+    )
+    if active > WORKSPACE_BUNDLE_CAP:
+        await release_lock(
+            session, workspace_id=workspace_id, key=lock_key
+        )
+        return DispatchResult(
+            fired=False,
+            reason=_Reason.CAP_EXCEEDED,
+            lock_key=lock_key,
+        )
+
+    # 4. Pick a repo to dispatch the workflow on. Workspace bundles
+    # operate over every repo in the workspace, but the
+    # ``workflow_dispatch`` call needs a single repo target for the
+    # GH Actions API. Use the oldest activated repo (deterministic);
+    # the runner inside the workflow iterates over every activated
+    # repo via Ship's API. The choice of dispatch target affects
+    # only which runner identity owns the GHA log.
+    target = await _pick_dispatch_repo(session, workspace_id=workspace_id)
+    if target is None:
+        await release_lock(
+            session, workspace_id=workspace_id, key=lock_key
+        )
+        return DispatchResult(
+            fired=False, reason=_Reason.NO_REPO, lock_key=lock_key
+        )
+    repo, install = target
+
+    try:
+        await dispatch_workflow(
+            repo,
+            install,
+            WORKFLOW_FILE,
+            inputs={
+                "routine_id": bundle_id,
+                # Workspace-bundles have no ticket — the runner sees
+                # the empty string and skips the per-ticket
+                # ``get_next_task`` pin.
+                "ticket_ref": "",
+            },
+            settings=settings,
+            client=client,
+        )
+    except WorkflowDispatchError as exc:
+        await release_lock(
+            session, workspace_id=workspace_id, key=lock_key
+        )
+        session.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                action="dispatch.failed",
+                target_kind="workspace_bundle",
+                target_id=bundle_id,
+                payload={
+                    "trigger_kind": trigger_kind,
+                    "repo": repo.full_name,
+                    "workflow_file": WORKFLOW_FILE,
+                    "upstream_status": exc.status_code,
+                    "error": exc.message[:512],
+                },
+            )
+        )
+        return DispatchResult(
+            fired=False,
+            reason=_Reason.DISPATCH_FAILED,
+            lock_key=lock_key,
+        )
+
+    session.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            action="agent_run.dispatch",
+            target_kind="workspace_bundle",
+            target_id=bundle_id,
+            payload={
+                "trigger_kind": trigger_kind,
+                "repo": repo.full_name,
+                "workflow_file": WORKFLOW_FILE,
+                "routine_id": bundle_id,
+            },
+        )
+    )
+    log.info(
+        "workspace dispatch fired: ws=%s bundle=%s trigger=%s",
+        workspace_id,
+        bundle_id,
+        trigger_kind,
+    )
+    return DispatchResult(fired=True, reason=_Reason.FIRED, lock_key=lock_key)
+
+
 __all__ = [
     "DispatchResult",
+    "WORKSPACE_BUNDLE_CAP",
     "acquire_lock",
     "count_active_locks",
     "maybe_dispatch",
+    "maybe_dispatch_workspace_bundle",
     "release_lock",
     "sweep_expired_locks",
 ]

@@ -30,9 +30,11 @@ from backend.app.services import dispatcher
 from backend.app.services.dispatcher import (
     CASCADE_LIMIT,
     CASCADE_WINDOW_S,
+    WORKSPACE_BUNDLE_CAP,
     acquire_lock,
     count_active_locks,
     maybe_dispatch,
+    maybe_dispatch_workspace_bundle,
     release_lock,
     sweep_expired_locks,
 )
@@ -384,3 +386,148 @@ async def test_no_activated_repo_refuses(db_session, monkeypatch) -> None:
     assert result.reason == "no_repo"
     # Lock was released — workspace ends with zero active locks.
     assert await count_active_locks(db_session, workspace_id=ws) == 0
+
+
+# ---------------------------------------------------------------------------
+# Workspace-bundle dispatch (ELS-125) — separate cap, no compete with SDLC
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_workspace_bundle_shadow_writes_audit(
+    db_session, monkeypatch
+) -> None:
+    """Shadow mode for workspace bundles records the intent without
+    a lock + without firing GH."""
+    ws = await _make_workspace(db_session)
+    result = await maybe_dispatch_workspace_bundle(
+        db_session,
+        workspace_id=ws,
+        bundle_id="daily-digest",
+        trigger_kind="daily_tick",
+    )
+    assert result.fired is False
+    assert result.reason == "shadow"
+    # No lock row was created.
+    assert await count_active_locks(db_session, workspace_id=ws) == 0
+
+
+@pytest.mark.asyncio
+async def test_workspace_bundle_unknown_id_refuses(
+    db_session, monkeypatch
+) -> None:
+    """A bundle id not in ``_WORKSPACE_BUNDLE_IDS`` refuses fast
+    (``no_routine``) without touching the lock table."""
+    ws = await _make_workspace(db_session)
+    monkeypatch.setattr(
+        dispatcher.get_settings(),
+        "tracker_poll_fire",
+        True,
+        raising=False,
+    )
+    result = await maybe_dispatch_workspace_bundle(
+        db_session,
+        workspace_id=ws,
+        bundle_id="nonexistent-bundle",
+        trigger_kind="daily_tick",
+    )
+    assert result.fired is False
+    assert result.reason == "no_routine"
+    assert await count_active_locks(db_session, workspace_id=ws) == 0
+
+
+@pytest.mark.asyncio
+async def test_workspace_bundle_lock_independent_of_sdlc(
+    db_session, monkeypatch
+) -> None:
+    """SDLC ticket locks must not consume the workspace-bundle cap
+    slot. With 4 active ``ticket:*`` locks (SDLC cap full), a
+    ``daily-digest`` dispatch still goes through because it counts
+    on a separate ``daily-digest:*`` prefix counter."""
+    ws = await _make_workspace(db_session)
+    monkeypatch.setattr(
+        dispatcher.get_settings(),
+        "tracker_poll_fire",
+        True,
+        raising=False,
+    )
+    # Fill the SDLC cap with 4 ticket locks.
+    for n in range(4):
+        await acquire_lock(
+            db_session, workspace_id=ws, key=f"ticket:T-{n}"
+        )
+
+    # Workspace-bundle cap counts only ``daily-digest:`` keys — still 0.
+    n_bundle = await count_active_locks(
+        db_session, workspace_id=ws, key_prefix="daily-digest:"
+    )
+    assert n_bundle == 0
+
+    # No activated repo, so we expect ``no_repo`` AFTER the cap +
+    # lock checks pass — that's evidence the SDLC locks didn't push
+    # us over the workspace-bundle cap.
+    result = await maybe_dispatch_workspace_bundle(
+        db_session,
+        workspace_id=ws,
+        bundle_id="daily-digest",
+        trigger_kind="daily_tick",
+    )
+    assert result.fired is False
+    # We reached the repo-pick step → the cap check passed.
+    assert result.reason == "no_repo"
+
+
+@pytest.mark.asyncio
+async def test_workspace_bundle_cap_one_concurrent(
+    db_session, monkeypatch
+) -> None:
+    """A second concurrent dispatch of the SAME workspace bundle
+    refuses with ``lock_held`` — the unique ``(ws, key)`` index
+    serialises racing daily-digest invocations."""
+    ws = await _make_workspace(db_session)
+    monkeypatch.setattr(
+        dispatcher.get_settings(),
+        "tracker_poll_fire",
+        True,
+        raising=False,
+    )
+    await acquire_lock(
+        db_session, workspace_id=ws, key="daily-digest:scheduled"
+    )
+    result = await maybe_dispatch_workspace_bundle(
+        db_session,
+        workspace_id=ws,
+        bundle_id="daily-digest",
+        trigger_kind="daily_tick",
+    )
+    assert result.fired is False
+    assert result.reason == "lock_held"
+
+
+@pytest.mark.asyncio
+async def test_workspace_bundle_separate_namespaces(
+    db_session, monkeypatch
+) -> None:
+    """``daily-digest`` and ``weekly-audit`` and ``self-heal`` are
+    independent locks — one held doesn't block the others."""
+    ws = await _make_workspace(db_session)
+    monkeypatch.setattr(
+        dispatcher.get_settings(),
+        "tracker_poll_fire",
+        True,
+        raising=False,
+    )
+    await acquire_lock(
+        db_session, workspace_id=ws, key="daily-digest:scheduled"
+    )
+    # Different bundle id → different lock key → must clear the
+    # lock_held check (it'll then fail on no_repo since no activated
+    # repo in this test workspace).
+    result = await maybe_dispatch_workspace_bundle(
+        db_session,
+        workspace_id=ws,
+        bundle_id="weekly-audit",
+        trigger_kind="weekly_tick",
+    )
+    assert result.fired is False
+    assert result.reason == "no_repo"

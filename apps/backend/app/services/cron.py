@@ -101,6 +101,12 @@ class CronLockId(IntEnum):
     # ``SHIP_TRACKER_POLL_INTERVAL_S`` seconds and emits
     # ``tracker.event.received`` audit rows for the dispatcher.
     TRACKER_POLL = 1012
+    # E16/ELS-125 workspace bundles — single-leader election across
+    # replicas for the three time-driven workspace routines that
+    # replaced the legacy reviewer chain.
+    WORKSPACE_DAILY_DIGEST = 1013
+    WORKSPACE_WEEKLY_AUDIT = 1014
+    WORKSPACE_SELF_HEAL = 1015
 
 
 # ---------------------------------------------------------------------------
