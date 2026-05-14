@@ -45,6 +45,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from backend.app.db.models.memory_adapters import (
+    MemoryGitRepo,
     MemoryTrackerProject,
     MemoryTrackerTicket,
 )
@@ -55,6 +56,8 @@ from backend.app.db.models.tenancy import (
     Workspace,
     WorkspaceMember,
 )
+from backend.app.integrations.local.ci import MemoryCi
+from backend.app.integrations.local.code_host import MemoryCodeHost
 from backend.app.integrations.local.tracker import MemoryTracker
 from backend.app.security.passwords import hash_password
 
@@ -179,6 +182,63 @@ async def _seed_memory_demo(session: AsyncSession, workspace_id: uuid.UUID) -> N
         print(f"  + {created.display_id}  [{stage}/{state}]  {title}")
 
 
+async def _seed_memory_repo(session: AsyncSession, workspace_id: uuid.UUID) -> None:
+    """Plant one demo repo + a couple files + one open PR + a CI run.
+
+    Mirrors what a fresh GitHub repo looks like after a Ship-driven
+    seed: README + a code-map sample + the project's ``ship.yml``
+    config. One PR is "open" and one workflow run is "in_progress"
+    so the dashboard renders both lanes immediately.
+    """
+    code_host = MemoryCodeHost(session=session, workspace_id=workspace_id)
+    ci = MemoryCi(session=session, workspace_id=workspace_id)
+    repo = await code_host.ensure_repo(
+        owner="dev",
+        name="sandbox",
+        default_branch="main",
+        description="Demo repo from seed_dev.py — feel free to delete.",
+    )
+    print(f"memory code host: created repo {repo.owner}/{repo.name}")
+    await code_host.upsert_file(
+        repo,
+        path="README.md",
+        content=(
+            "# Sandbox repo\n\n"
+            "Local-only demo repo. Edit / delete freely.\n"
+        ),
+    )
+    await code_host.upsert_file(
+        repo,
+        path=".ship/config.yml",
+        content=(
+            "preset: web-app\n"
+            "agent: cursor\n"
+            "tracker: memory\n"
+        ),
+    )
+    pr = await code_host.open_pull_request(
+        repo,
+        title="feat: wire CSV export",
+        body=(
+            "Demo PR. Implements the dashboard CSV export from MEM-1.\n\n"
+            "- streams rows via /api/dashboard/export.csv\n"
+            "- no pagination (covered by next ticket)\n"
+        ),
+        head="csv-export",
+        base="main",
+    )
+    print(f"memory code host: opened PR #{pr.number}  {pr.title}")
+    run = await ci.dispatch(
+        repo,
+        workflow_name="ci.yml",
+        branch="csv-export",
+        commit_sha="deadbeef",
+        outcome="success",
+        phase_seconds=8,
+    )
+    print(f"memory ci: queued run {run.id}  {run.workflow_name}")
+
+
 async def main() -> int:
     db_url, connect_args = _dsn()
     engine = create_async_engine(db_url, future=True, connect_args=connect_args)
@@ -290,6 +350,20 @@ async def main() -> int:
             print(f"memory tracker: reuse ({existing_ticket_count} tickets)")
         else:
             await _seed_memory_demo(session, workspace.id)
+
+        existing_repo_count = int(
+            (
+                await session.execute(
+                    select(func.count(MemoryGitRepo.id)).where(
+                        MemoryGitRepo.workspace_id == workspace.id
+                    )
+                )
+            ).scalar_one()
+        )
+        if existing_repo_count > 0:
+            print(f"memory code host: reuse ({existing_repo_count} repos)")
+        else:
+            await _seed_memory_repo(session, workspace.id)
 
         await session.commit()
 

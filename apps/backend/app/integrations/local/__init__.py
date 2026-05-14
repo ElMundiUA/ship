@@ -23,7 +23,9 @@ on by default in ``.env.shared`` so the laptop profile picks them
 up; production never sets it.
 """
 
+from backend.app.integrations.local.ci import MemoryCi
+from backend.app.integrations.local.code_host import MemoryCodeHost
 from backend.app.integrations.local.tracker import MemoryTracker
 
 
-__all__ = ["MemoryTracker"]
+__all__ = ["MemoryCi", "MemoryCodeHost", "MemoryTracker"]
