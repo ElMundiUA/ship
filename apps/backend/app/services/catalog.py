@@ -266,23 +266,26 @@ def default_development_process_config(
 ) -> dict[str, object]:
     """Return the canonical FSM process seeded into new repo configs.
 
-    Phase 1 introduced eight pipeline specialists; this PR collapsed
-    intake + ba into a single ``task_intake`` stage (same context-load
-    was feeding two LLM calls in a row producing overlapping output
-    shapes), leaving seven SDLC stages: intake, tech-architect, qa-
-    architect, developer, qa-engineer, qa-automation, reviewer.
+    E16/ELS-123 collapsed the 7-stage chain into 4 bundle stages so
+    one agent run produces what used to take three. The shape:
+
+    - ``planning`` — bundles the legacy ``task_intake`` + ``tech_arch_plan``
+      + ``qa_arch_plan`` into one agent invocation that reads the
+      ticket once and emits Brief + Architecture + Test plan in one
+      finish call. ~65% input-token saving vs the old chain.
+    - ``dev_implementation`` — unchanged; the developer role still owns
+      the git side (branch + commits + PR).
+    - ``validation`` — bundles the legacy ``qa_manual`` + ``qa_automation``
+      into one run against the open PR. The bundle's Phase 1 walks
+      the test plan manually; Phase 2 adds the regression suite (or
+      stops at Phase 1 with ``outcome=blocked`` if defects surfaced).
+    - ``code_review`` — unchanged; final human-facing agent gate.
+
     ``specialist.id`` carries the kebab-case agent-role slug — the
     same slug the runtime resolver accepts at
-    ``/v1/.../agent-roles/{slug}/resolve``.
-
-    Intake handles both feature requests and bug reports — the
-    bug-triage stage was folded into ``task_intake`` after the
-    parallel-entry design produced an infinite loop on every feature
-    ticket (bug-triage agent would correctly refuse to fabricate a
-    bug report, but the routine kept re-picking the same ticket
-    every cron tick). Linear's native issue type is the source of
-    truth for bug-vs-feature; the intake prompt shapes the
-    description accordingly.
+    ``/v1/.../agent-roles/{slug}/resolve``. The bundle slugs
+    (``planning``, ``validation``) point at the bundle prompt files
+    that absorbed their constituent roles.
     """
     return {
         "id": "development",
@@ -293,48 +296,21 @@ def default_development_process_config(
         # review and the human only approves + merges. Operators who
         # want earlier interjection points edit this in
         # ``.ship/config.yml`` (or the process editor, when the UI
-        # lands). Allowed: ``after_ba | after_arch | after_pr``.
+        # lands). Allowed: ``after_planning | after_pr``.
         "gates": "after_pr",
         "states": [
             {
-                "id": "task_intake",
-                "name": "Intake",
+                "id": "planning",
+                "name": "Planning",
                 "state": "planning",
-                "specialist": {"id": "intake", "name": "Intake"},
+                "specialist": {"id": "planning", "name": "Planning bundle"},
                 "instructions": (
-                    "Classify + produce the full impl-grade spec in one "
-                    "pass. Output sections depend on classification — "
-                    "features use Problem / Goal / Feature description / "
-                    "User stories / AC / Edge cases / Scope / Non-goals "
-                    "/ Impacted components / Technical notes / Test plan "
-                    "/ Risks; bugs use Summary / Steps / Expected / "
-                    "Actual / Environment / Severity / Scope / Suspect "
-                    "area / AC for fix. The legacy ``ba_requirements`` "
-                    "stage was folded in here — same context-load was "
-                    "feeding two LLM calls in a row, producing "
-                    "overlapping output shapes."
-                ),
-            },
-            {
-                "id": "tech_arch_plan",
-                "name": "Tech architecture",
-                "state": "planning",
-                "specialist": {"id": "tech-architect", "name": "Tech architect"},
-                "instructions": (
-                    "Plan the architecture of the change — components "
-                    "touched, contracts, risk + rollback. Design only, "
-                    "no code."
-                ),
-            },
-            {
-                "id": "qa_arch_plan",
-                "name": "Test architecture",
-                "state": "planning",
-                "specialist": {"id": "qa-architect", "name": "QA architect"},
-                "instructions": (
-                    "Design the test coverage strategy — unit / "
-                    "integration / e2e split, fixtures, edge cases. "
-                    "Design only, no test code."
+                    "One run produces Brief + Architecture + Test plan. "
+                    "Classifies the ticket (feature/bug/refactor/infra/"
+                    "improvement), writes the impl-grade spec, appends "
+                    "the architecture plan, then the test plan. All "
+                    "four phases share one context load so we don't "
+                    "pay for the same ticket-body fetch four times."
                 ),
             },
             {
@@ -348,23 +324,17 @@ def default_development_process_config(
                 ),
             },
             {
-                "id": "qa_manual",
-                "name": "Manual QA",
+                "id": "validation",
+                "name": "Validation",
                 "state": "executing",
-                "specialist": {"id": "qa-engineer", "name": "QA engineer"},
+                "specialist": {"id": "validation", "name": "Validation bundle"},
                 "instructions": (
-                    "Walk the manual test plan against the open PR; "
-                    "report defects without fixing them."
-                ),
-            },
-            {
-                "id": "qa_automation",
-                "name": "Test automation",
-                "state": "executing",
-                "specialist": {"id": "qa-automation", "name": "QA automation"},
-                "instructions": (
-                    "Add automated tests anchored to the architect's "
-                    "test plan so the regression sticks."
+                    "One run against the open PR. Phase 1 walks the "
+                    "test plan manually + probes for unlisted defects; "
+                    "Phase 2 adds the automated regression suite on "
+                    "the same branch. Defects in Phase 1 stop the "
+                    "bundle with outcome=blocked — automation never "
+                    "bakes in broken behaviour."
                 ),
             },
             {
@@ -380,12 +350,9 @@ def default_development_process_config(
             },
         ],
         "transitions": [
-            {"from": "task_intake", "to": "tech_arch_plan"},
-            {"from": "tech_arch_plan", "to": "qa_arch_plan"},
-            {"from": "qa_arch_plan", "to": "dev_implementation"},
-            {"from": "dev_implementation", "to": "qa_manual"},
-            {"from": "qa_manual", "to": "qa_automation"},
-            {"from": "qa_automation", "to": "code_review"},
+            {"from": "planning", "to": "dev_implementation"},
+            {"from": "dev_implementation", "to": "validation"},
+            {"from": "validation", "to": "code_review"},
         ],
         "routines": dict(routines or {}),
     }
@@ -409,17 +376,20 @@ def default_planning_process_config() -> dict[str, object]:
     template; the mode-switch lives in the role file's prompt and is
     keyed on the FSM context's ``process`` field.
 
-    Specialist reuse note: this config does NOT introduce a new
-    ``decomposer`` role. The product call (ELS-75) is "make a chain
-    out of existing specialists, don't grow the role corpus." The
-    role files (``ba.md``, ``tech-architect.md``, …) handle the mode
-    distinction; ``catalog.py`` carries the orchestration shape.
+    E16/ELS-123 collapsed the four-stage decomposition chain (wbs →
+    architecture → test_architecture → tasks) into one bundle. The
+    ``decomposition`` specialist's prompt walks all five phases
+    internally (brief sanity-check → WBS → architecture → test
+    architecture → child-ticket creation) and emits every project
+    section + child-tickets array in a single finish call. Same
+    project context loads once instead of four times.
 
     Naming hazard: this is the **decomposition process**, distinct
     from (1) the dashboard's ``priority_state.planning`` bucket
     (UI label ``Drafts``) and (2) the kind-of-work tag
-    ``state="planning"`` on the development process's task_intake
-    stage. See the module-level docstring for the full disambiguation.
+    ``state="planning"`` on the development process's planning
+    bundle. See the module-level docstring for the full
+    disambiguation.
     """
     return {
         "id": "decomposition",
@@ -427,65 +397,28 @@ def default_planning_process_config() -> dict[str, object]:
         "primary": False,
         # No human gates today — the operator's gate is the manual
         # **Hand off to decomposition** click on the dashboard. Once
-        # they hit it, the chain runs autonomously through to
+        # they hit it, the bundle runs autonomously through to
         # ``planning_done`` and the project flips Drafts → Parked
         # (the PO promotes Parked → Active when ready to ship).
         "gates": "after_pr",
         "states": [
             {
-                "id": "wbs",
-                "name": "Work breakdown structure",
+                "id": "decomposition",
+                "name": "Decomposition",
                 "state": "planning",
-                "specialist": {"id": "ba", "name": "BA / specification"},
+                "specialist": {
+                    "id": "decomposition",
+                    "name": "Decomposition bundle",
+                },
                 "instructions": (
-                    "Read the project brief and emit a coarse WBS — a "
-                    "list of child-ticket stubs (name + 2-3 line scope). "
-                    "Patch ONLY the ``## WBS`` section of the project "
-                    "body; do not touch the brief or the architecture "
-                    "below it. Do NOT create child tickets yourself; "
-                    "the ``tasks`` stage at the end of this pipeline "
-                    "creates them."
-                ),
-            },
-            {
-                "id": "architecture",
-                "name": "Architecture",
-                "state": "planning",
-                "specialist": {"id": "tech-architect", "name": "Tech architect"},
-                "instructions": (
-                    "Read the brief + WBS and write the system "
-                    "architecture — components touched, contracts, "
-                    "risk + rollback. Patch ONLY the ``## Architecture`` "
-                    "section. Design only, no code."
-                ),
-            },
-            {
-                "id": "test_architecture",
-                "name": "Test architecture",
-                "state": "planning",
-                "specialist": {"id": "qa-architect", "name": "QA architect"},
-                "instructions": (
-                    "Read the brief + WBS + architecture and design "
-                    "the test coverage strategy — unit / integration / "
-                    "e2e split, fixtures, edge cases. Patch ONLY the "
-                    "``## Test architecture`` section. Design only, no "
-                    "test code."
-                ),
-            },
-            {
-                "id": "tasks",
-                "name": "Task slicing",
-                "state": "executing",
-                "specialist": {"id": "developer", "name": "Developer"},
-                "instructions": (
-                    "Read the WBS + architecture + test architecture "
-                    "and create child tickets — one per WBS line, "
-                    "coarse (3-5 line bodies). Each child enters the "
-                    "per-ticket SDLC at ``task_intake`` and refines "
-                    "further; do NOT write detailed acceptance criteria "
-                    "or test plans here, the SDLC's BA does that. "
-                    "Patch the ``## Tasks`` section with a list of the "
-                    "ticket identifiers + names you created."
+                    "One run produces the full project plan: WBS, "
+                    "Architecture, Test architecture, and the child "
+                    "ticket stubs. Five phases run inside one agent "
+                    "session sharing one read of the planning anchor "
+                    "+ project body — the legacy four-routine chain "
+                    "(ba/tech-architect/qa-architect/developer roles "
+                    "in decomposition mode) collapsed here. Never "
+                    "touches ``## Brief`` (that's the PO's)."
                 ),
             },
             {
@@ -493,10 +426,14 @@ def default_planning_process_config() -> dict[str, object]:
                 "name": "Decomposition done",
                 "state": "reviewing",
                 # Terminal stage — no specialist runs here. ``ready_next_step``
-                # with ``stage_next='planning_done'`` from the ``tasks`` stage
-                # signals decomposition complete; the finish hook flips the
-                # dashboard row from Drafts → Parked (the PO promotes Parked → Active manually; ELS-81).
-                "specialist": {"id": "developer", "name": "Developer"},
+                # with ``stage_next='planning_done'`` from the bundle signals
+                # decomposition complete; the finish hook flips the dashboard
+                # row from Drafts → Parked (the PO promotes Parked → Active
+                # manually; ELS-81).
+                "specialist": {
+                    "id": "decomposition",
+                    "name": "Decomposition bundle",
+                },
                 "instructions": (
                     "Terminal — no work. Reaching this stage flips the "
                     "project from Drafts to Parked on the dashboard "
@@ -505,32 +442,20 @@ def default_planning_process_config() -> dict[str, object]:
             },
         ],
         "transitions": [
-            {"from": "wbs", "to": "architecture"},
-            {"from": "architecture", "to": "test_architecture"},
-            {"from": "test_architecture", "to": "tasks"},
-            {"from": "tasks", "to": "planning_done"},
+            {"from": "decomposition", "to": "planning_done"},
         ],
-        # Cron-driven, symmetric to the development process. Each
-        # non-terminal stage gets a routine that the customer-side
-        # GitHub Actions cron polls via ``shipctl run --routine X``;
-        # the routine carries an explicit ``fsm_stage`` so one role
-        # (``ba``) can serve both decomposition (``stage:wbs``) and
-        # SDLC (``ba_requirements``) without per-process role clones.
-        # ``planning_done`` is terminal — no routine — and the finish
-        # hook on the ``tasks`` stage flips the dashboard row Drafts →
-        # Parked.
-        # ``pipeline_priority`` drives drain-first ordering when
-        # multiple decomposition stages are cron-due simultaneously
-        # (the common case — they all run at ``*/30 * * * *``). The
-        # CLI sorts due routines DESC and picks the LATER stage so
-        # an anchor closest to ``planning_done`` clears before a new
-        # WBS starts. See ``cli/lib/runtime/routines.mjs::dueRoutines``.
+        # One routine — the bundle. Customer cron polls planning
+        # anchors in ``stage:decomposition`` and dispatches the
+        # bundle, which produces every project section in one shot.
+        # ``pipeline_priority`` no longer matters across decomposition
+        # stages (there's only one) but is kept for the drain-first
+        # ordering against the development process's routines.
         "routines": {
-            "wbs": {
-                "name": "Decomposition WBS",
+            "decomposition": {
+                "name": "Decomposition",
                 "enabled": True,
-                "specialist": "ba",
-                "fsm_stage": "wbs",
+                "specialist": "decomposition",
+                "fsm_stage": "decomposition",
                 "pipeline_priority": 10,
                 "trigger": {
                     "type": "schedule",
@@ -539,60 +464,11 @@ def default_planning_process_config() -> dict[str, object]:
                     "catchup": "latest",
                 },
                 "description": (
-                    "Customer cron polls planning anchors in stage:wbs "
-                    "and dispatches BA to produce the WBS section."
-                ),
-            },
-            "architecture": {
-                "name": "Decomposition Architecture",
-                "enabled": True,
-                "specialist": "tech-architect",
-                "fsm_stage": "architecture",
-                "pipeline_priority": 20,
-                "trigger": {
-                    "type": "schedule",
-                    "cron": "*/30 * * * *",
-                    "window": "30m",
-                    "catchup": "latest",
-                },
-                "description": (
-                    "Customer cron polls anchors in stage:architecture "
-                    "and dispatches Tech-architect."
-                ),
-            },
-            "test_architecture": {
-                "name": "Decomposition Test architecture",
-                "enabled": True,
-                "specialist": "qa-architect",
-                "fsm_stage": "test_architecture",
-                "pipeline_priority": 30,
-                "trigger": {
-                    "type": "schedule",
-                    "cron": "*/30 * * * *",
-                    "window": "30m",
-                    "catchup": "latest",
-                },
-                "description": (
-                    "Customer cron polls anchors in "
-                    "stage:test_architecture and dispatches QA-architect."
-                ),
-            },
-            "tasks": {
-                "name": "Decomposition Task slicing",
-                "enabled": True,
-                "specialist": "developer",
-                "fsm_stage": "tasks",
-                "pipeline_priority": 40,
-                "trigger": {
-                    "type": "schedule",
-                    "cron": "*/30 * * * *",
-                    "window": "30m",
-                    "catchup": "latest",
-                },
-                "description": (
-                    "Customer cron polls anchors in stage:tasks and "
-                    "dispatches Developer to slice the WBS into child "
-                    "tickets. On finish the project flips Drafts to Parked."
+                    "Customer cron polls planning anchors in "
+                    "stage:decomposition and dispatches the bundle, "
+                    "which emits WBS + Architecture + Test "
+                    "architecture + child tickets in one run. On "
+                    "finish the project flips Drafts to Parked."
                 ),
             },
         },

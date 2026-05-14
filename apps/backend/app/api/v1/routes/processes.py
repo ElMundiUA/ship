@@ -90,24 +90,31 @@ CANONICAL_STATES: tuple[str, ...] = (
 # carry the explicit ``state`` field. Tables in ``.ship/config.yml``
 # stay readable; we just impute the bucket.
 _LEGACY_STAGE_TO_STATE: dict[str, CanonicalState] = {
+    # E16/ELS-123 — current bundle stages.
+    "planning": "planning",
+    "dev_implementation": "executing",
+    "validation": "executing",
+    "code_review": "reviewing",
+    # Pre-E16 SDLC stages (intake / tech_arch / qa_arch / qa_manual /
+    # qa_automation) were absorbed into the ``planning`` and
+    # ``validation`` bundles. Kept here as aliases so any in-flight
+    # ticket carrying the old stage label still buckets into a
+    # canonical state until ELS-124 cuts the legacy labels.
     "task_intake": "planning",
     "bug_triage": "planning",
     "ba_requirements": "planning",
     "tech_arch_plan": "planning",
     "qa_arch_plan": "planning",
-    "dev_implementation": "executing",
     "qa_manual": "executing",
     "qa_automation": "executing",
     # ``pr_review`` was the legacy 5-state name for the final review
-    # stage; ``code_review`` is the Phase 1.5 canonical id. Both map
-    # to ``reviewing`` so older configs that haven't been re-seeded
-    # yet still bucket correctly.
+    # stage; ``code_review`` is the canonical id. Both map to
+    # ``reviewing``.
     "pr_review": "reviewing",
-    "code_review": "reviewing",
-    # Decomposition stages (ELS-75 / ELS-79). One specialist per stage
-    # patches its own section of the project body on the planning
-    # anchor; ``planning_done`` is terminal and triggers Drafts →
-    # Parked on the dashboard.
+    # Decomposition (E16/ELS-123): one bundle stage replaces the
+    # four-step wbs → architecture → test_architecture → tasks chain.
+    # Legacy names kept for in-flight anchors.
+    "decomposition": "planning",
     "wbs": "planning",
     "architecture": "planning",
     "test_architecture": "planning",
@@ -172,38 +179,35 @@ _SEEDED_PROCESSES: tuple[dict[str, Any], ...] = (
 )
 
 _PROCESS_STATE_ORDER: tuple[str, ...] = (
-    # Phase 1.5 canon — seven pipeline stages in execution order. The
+    # E16/ELS-123 canon — four bundle stages in execution order. The
     # dashboard's process projector iterates this tuple to render the
     # canvas; runtime aggregation skips lane keys not present here.
-    # Two retirements are kept as legacy aliases below in
-    # :data:`_PROCESS_STATE_ALIASES` so pre-v0.21 configs still
-    # project:
-    #   - ``bug_triage`` (parallel-intake entry) — folded into
-    #     ``task_intake`` after producing an infinite loop on feature
-    #     tickets (agent correctly refused to fabricate bug-report
-    #     fields, routine kept re-picking).
-    #   - ``ba_requirements`` (separate BA stage) — folded into
-    #     ``task_intake`` because the same context-load was feeding
-    #     two LLM calls in a row to produce overlapping output shapes.
-    #     Intake now writes the full impl-grade spec in one pass.
-    # ``pr_review`` is also legacy (renamed to ``code_review``); same
-    # alias treatment.
-    "task_intake",
-    "tech_arch_plan",
-    "qa_arch_plan",
+    # Pre-E16 stage ids are kept as aliases below in
+    # :data:`_PROCESS_STATE_ALIASES` so in-flight tickets carrying
+    # the old labels still project until ELS-124 wipes them.
+    "planning",
     "dev_implementation",
-    "qa_manual",
-    "qa_automation",
+    "validation",
     "code_review",
 )
 
-# Legacy stage ids that should still count as process states for
-# pre-v0.21 configs. Kept separate from ``_PROCESS_STATE_ORDER`` so
-# the canvas only renders the canonical seven but the runtime
-# aggregator (``_runtime_by_state``) doesn't drop pipeline runs that
-# referenced the old id.
+# Pre-E16 stage ids that should still count as process states for
+# in-flight tickets seeded against the 7-stage chain. Kept separate
+# from ``_PROCESS_STATE_ORDER`` so the canvas only renders the
+# canonical four but the runtime aggregator
+# (``_runtime_by_state``) doesn't drop pipeline runs that referenced
+# the old ids.
 _PROCESS_STATE_ALIASES: frozenset[str] = frozenset(
-    {"pr_review", "bug_triage", "ba_requirements"}
+    {
+        "task_intake",
+        "tech_arch_plan",
+        "qa_arch_plan",
+        "qa_manual",
+        "qa_automation",
+        "pr_review",
+        "bug_triage",
+        "ba_requirements",
+    }
 )
 
 _ROUTINE_IDS: frozenset[str] = frozenset(

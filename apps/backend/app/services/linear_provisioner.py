@@ -47,68 +47,57 @@ logger = logging.getLogger(__name__)
 # when patterns declare them in ``spec.fsm_stage``. Order matters —
 # the adapter uses adjacency to compute "previous stage done" filters.
 SHIP_FSM_STAGES: tuple[str, ...] = (
-    # Per-ticket SDLC (the "development" process). ``task_intake``
-    # is the only entry — the legacy ``bug_triage`` parallel entry
-    # was retired after producing an infinite loop on feature
-    # tickets (the bug agent correctly refused to fabricate bug-
-    # report fields and the routine kept re-picking the same ticket
-    # every cron tick). Bug-vs-feature is now Linear's native issue
-    # type; intake shapes the description accordingly.
+    # E16/ELS-123 bundle stages. The 7-stage SDLC chain and the
+    # 4-stage decomposition chain both collapsed into single bundle
+    # invocations:
+    #   - ``planning`` absorbs task_intake + tech_arch_plan + qa_arch_plan
+    #   - ``validation`` absorbs qa_manual + qa_automation
+    #   - ``decomposition`` absorbs wbs + architecture + test_architecture
+    #     + tasks on the planning anchor.
+    "planning",
+    "dev_implementation",
+    "validation",
+    "code_review",
+    "self_heal",
+    "decomposition",
+    "planning_done",
+    # Legacy pre-E16 labels kept provisioned for in-flight tickets so
+    # they still get a Linear label row that the picker can resolve.
+    # ELS-124 (cutover) deletes these from the provision list.
     "task_intake",
     "ba_requirements",
     "tech_arch_plan",
     "qa_arch_plan",
-    "dev_implementation",
     "qa_manual",
-    # Parallel quality lane to qa_manual — same loop hazard if the
-    # label isn't provisioned; pickers for both fan in on the same
-    # In Progress state so the missing-own-label fallback would mis-
-    # route every ticket post-dev_implementation.
     "qa_automation",
     "pr_review",
-    "self_heal",
-    # Per-project decomposition (the "decomposition" process — runs on
-    # the planning anchor of each new project, ELS-75). Specialists
-    # reuse the development-process slugs (BA / tech-architect / QA-
-    # architect / QA-engineer / developer); these labels live on the
-    # anchor issue and drive what specialist picks the run.
     "wbs",
     "architecture",
     "test_architecture",
     "tasks",
-    "planning_done",
 )
 
 
-# Linear order of the SDLC stages. Self-heal is parallel to the main
-# pipeline (any open ticket) so it stays out of the chain. The legacy
-# ``ba_requirements`` stage was folded into ``task_intake`` — they were
-# doing the same context-load twice in a row to produce overlapping
-# output shapes; the merged ``task_intake`` writes the full impl-grade
-# spec in one pass. The label stays in ``SHIP_FSM_STAGES`` /
-# ``FSM_TO_LINEAR_STATE`` so legacy in-flight tickets still parse,
-# but the chain advances ``task_intake → tech_arch_plan`` now and
-# ``previous_stage("tech_arch_plan")`` returns ``"task_intake"``
-# accordingly.
+# E16/ELS-123 — bundle stages in execution order. Self-heal is
+# parallel to the main pipeline (any open ticket) and stays out of
+# the chain. ``previous_stage("validation")`` returns
+# ``"dev_implementation"``, ``previous_stage("code_review")`` returns
+# ``"validation"``, etc.
 FSM_STAGE_ORDER: tuple[str, ...] = (
-    "task_intake",
-    "tech_arch_plan",
-    "qa_arch_plan",
+    "planning",
     "dev_implementation",
-    "qa_manual",
-    "pr_review",
+    "validation",
+    "code_review",
 )
 
 
-# Linear order of the decomposition pipeline (ELS-75). Sequential —
-# BA → Architect → QA-Architect → QA-Engineer + Developer — culminates
-# in ``planning_done`` which the finish hook reads to flip the
-# project's dashboard row from Drafts to Parked (the PO promotes Parked to Active manually; ELS-81).
+# E16/ELS-123 — decomposition is now a single bundle stage that
+# emits every project section + child tickets in one run.
+# ``planning_done`` stays as the terminal marker the finish hook
+# reads to flip the project's dashboard row from Drafts to Parked
+# (the PO promotes Parked to Active manually; ELS-81).
 DECOMPOSITION_STAGE_ORDER: tuple[str, ...] = (
-    "wbs",
-    "architecture",
-    "test_architecture",
-    "tasks",
+    "decomposition",
     "planning_done",
 )
 
@@ -138,34 +127,38 @@ def previous_stage(stage: str) -> str | None:
 # Linear state; stages mapped to ``Todo`` keep tickets in Todo with
 # the label carrying the SDLC stage.
 FSM_TO_LINEAR_STATE: dict[str, str] = {
+    # E16/ELS-123 bundle stages.
+    "planning": "Todo",
+    "dev_implementation": "In Progress",
+    "validation": "In Progress",
+    # ``code_review`` is human-facing — agents transition INTO Review
+    # but the human picks up from there.
+    "code_review": "Review",
+    # Self-heal runs out-of-band against any open ticket; no specific
+    # Linear state.
+    "self_heal": "Todo",
+    # Decomposition bundle lives on the planning anchor. The anchor
+    # sits in ``In Progress`` while the bundle runs and ``Done`` once
+    # ``planning_done`` lands. The project body carries the artefacts
+    # (WBS / Architecture / Test architecture / Tasks); the finish
+    # hook flips the dashboard row Drafts → Parked when
+    # ``planning_done`` arrives.
+    "decomposition": "In Progress",
+    "planning_done": "Done",
+    # Legacy pre-E16 stage names — kept so an in-flight ticket carrying
+    # ``stage:task_intake`` still maps to a Linear state. ELS-124
+    # cutover strips them from the map.
     "task_intake": "Todo",
     "ba_requirements": "Todo",
     "tech_arch_plan": "Todo",
     "qa_arch_plan": "Todo",
-    "dev_implementation": "In Progress",
     "qa_manual": "In Progress",
-    # Parallel quality lane to qa_manual — both pick from In Progress;
-    # the stage label is the only thing that distinguishes the two
-    # routines, so the label MUST be provisioned for the filter to
-    # work.
     "qa_automation": "In Progress",
-    # Review is human-only — agents transition INTO it but never pick
-    # FROM it.
     "pr_review": "Review",
-    # Self-heal runs out-of-band against any open ticket; no specific
-    # Linear state.
-    "self_heal": "Todo",
-    # Decomposition stages live on the planning anchor (one issue per
-    # project). The anchor sits in ``In Progress`` while the chain
-    # runs and ``Done`` once ``planning_done`` lands. The project body
-    # carries the artefacts (WBS / Architecture / Test architecture /
-    # Tasks); the finish hook flips the dashboard row Drafts → Parked (the PO promotes Parked → Active manually; ELS-81)
-    # when ``planning_done`` arrives.
     "wbs": "In Progress",
     "architecture": "In Progress",
     "test_architecture": "In Progress",
     "tasks": "In Progress",
-    "planning_done": "Done",
 }
 
 
