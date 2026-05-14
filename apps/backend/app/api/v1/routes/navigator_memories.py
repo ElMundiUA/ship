@@ -1,0 +1,263 @@
+"""E17/ELS-130 — REST surface powering the Console ``/memory`` page.
+
+Strict personal-scope: every read/delete is gated on
+``owner_user_id == auth.user.id``. A workspace admin canNOT see or
+delete another user's facts — the Console queries this endpoint
+with the operator's own session, and the service layer's
+``WHERE owner_user_id = ...`` clause is the authoritative gate.
+
+Three endpoints:
+
+- ``GET /v1/workspaces/{ws}/navigator-memories`` — paginated list
+  with optional ``project_native_id`` filter. The Console renders
+  facts grouped by project; the filter handles the "show only this
+  project" click.
+- ``DELETE /v1/workspaces/{ws}/navigator-memories/{id}`` — hard
+  delete + audit row carrying the original fact text. Uses
+  ``memory.delete`` which already enforces the actor-is-owner check.
+- ``POST /v1/workspaces/{ws}/navigator-memories/forget``  —
+  bulk-delete by age window ("forget the last N days"). The
+  ``days`` payload caps at 90 to prevent an accidental
+  ``forget all=true`` button on the UI.
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime, timedelta, timezone
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from backend.app.api.v1.deps import AuthContext, get_current_auth
+from backend.app.api.v1.routes.workspaces import (
+    ROLES_READ,
+    _require_membership,
+)
+from backend.app.core.config import Settings, get_settings
+from backend.app.db.models.navigator_memory import NavigatorMemory
+from backend.app.db.models.tenancy import AuditLog
+from backend.app.db.session import get_session
+from backend.app.services.agent import memory as navigator_memory
+
+
+router = APIRouter(prefix="/workspaces/{workspace_id}")
+
+
+# ---------------------------------------------------------------------------
+# Schemas
+# ---------------------------------------------------------------------------
+
+
+class NavigatorMemoryOut(BaseModel):
+    """One fact as the Console sees it.
+
+    Provenance pointers are nullable because a fact's source thread
+    or message can be deleted independently (FK SET NULL); the fact
+    itself outlives that linkage.
+    """
+
+    id: uuid.UUID
+    fact_text: str
+    project_native_id: str | None
+    intent_at_capture: str | None
+    source_thread_id: uuid.UUID | None
+    source_message_id: uuid.UUID | None
+    source_message_position: int | None
+    confidence: float
+    created_at: datetime
+    updated_at: datetime
+
+
+class NavigatorMemoriesListOut(BaseModel):
+    items: list[NavigatorMemoryOut]
+    total: int
+
+
+class BulkForgetIn(BaseModel):
+    """Body for the "forget last N days" bulk delete."""
+
+    days: int = Field(
+        ..., ge=1, le=90,
+        description="Forget facts captured in the last N days (1-90).",
+    )
+
+
+class BulkForgetOut(BaseModel):
+    deleted: int
+
+
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/navigator-memories",
+    response_model=NavigatorMemoriesListOut,
+)
+async def list_navigator_memories(
+    workspace_id: uuid.UUID,
+    project_native_id: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> NavigatorMemoriesListOut:
+    """Paginated list of the caller's facts.
+
+    ``project_native_id`` narrows to one project. Pass ``"untagged"``
+    to get only general-purpose facts (no project tag). Omit to get
+    everything (grouped client-side).
+    """
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
+
+    if project_native_id == "untagged":
+        rows = await navigator_memory.list_for_user(
+            session,
+            workspace_id=workspace_id,
+            owner_user_id=auth.user.id,
+            project_native_id=None,
+            limit=limit,
+            offset=offset,
+        )
+        # The helper treats ``project_native_id=None`` as "no filter",
+        # so re-filter here.
+        rows = [r for r in rows if r.project_native_id is None]
+        total = len(rows)
+    elif project_native_id:
+        rows = await navigator_memory.list_for_user(
+            session,
+            workspace_id=workspace_id,
+            owner_user_id=auth.user.id,
+            project_native_id=project_native_id,
+            limit=limit,
+            offset=offset,
+        )
+        total = len(rows)
+    else:
+        rows = await navigator_memory.list_for_user(
+            session,
+            workspace_id=workspace_id,
+            owner_user_id=auth.user.id,
+            project_native_id=None,
+            limit=limit,
+            offset=offset,
+        )
+        total = len(rows)
+
+    return NavigatorMemoriesListOut(
+        items=[_to_out(r) for r in rows],
+        total=total,
+    )
+
+
+@router.delete(
+    "/navigator-memories/{memory_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_navigator_memory(
+    workspace_id: uuid.UUID,
+    memory_id: uuid.UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> None:
+    """Hard-delete one fact. 404 when the caller doesn't own it."""
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
+    ok = await navigator_memory.delete(
+        session,
+        memory_id=memory_id,
+        actor_user_id=auth.user.id,
+        workspace_id=workspace_id,
+        settings=settings,
+    )
+    if not ok:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    await session.flush()
+
+
+@router.post(
+    "/navigator-memories/forget",
+    response_model=BulkForgetOut,
+)
+async def bulk_forget_navigator_memories(
+    workspace_id: uuid.UUID,
+    payload: BulkForgetIn,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> BulkForgetOut:
+    """Bulk-delete facts captured in the last ``days`` window.
+
+    Hard delete + per-row audit log entries. Capped at 90 days so
+    a misclick can't wipe a user's entire memory in one call.
+    """
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=payload.days)
+
+    rows = (
+        (
+            await session.execute(
+                select(NavigatorMemory).where(
+                    NavigatorMemory.workspace_id == workspace_id,
+                    NavigatorMemory.owner_user_id == auth.user.id,
+                    NavigatorMemory.created_at >= cutoff,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    deleted = 0
+    for r in rows:
+        ok = await navigator_memory.delete(
+            session,
+            memory_id=r.id,
+            actor_user_id=auth.user.id,
+            workspace_id=workspace_id,
+            settings=settings,
+        )
+        if ok:
+            deleted += 1
+
+    # Single roll-up audit row for the operator (per-fact audits land
+    # via ``memory.delete`` already; this one is the "user pressed
+    # the big bulk button" signal).
+    session.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=auth.user.id,
+            action="navigator.memory.bulk_forget",
+            target_kind="user",
+            target_id=str(auth.user.id),
+            payload={"days": payload.days, "deleted": deleted},
+        )
+    )
+    await session.flush()
+    return BulkForgetOut(deleted=deleted)
+
+
+# ---------------------------------------------------------------------------
+# Internal — serialisation
+# ---------------------------------------------------------------------------
+
+
+def _to_out(row: NavigatorMemory) -> NavigatorMemoryOut:
+    return NavigatorMemoryOut(
+        id=row.id,
+        fact_text=row.fact_text,
+        project_native_id=row.project_native_id,
+        intent_at_capture=row.intent_at_capture,
+        source_thread_id=row.source_thread_id,
+        source_message_id=row.source_message_id,
+        source_message_position=row.source_message_position,
+        confidence=row.confidence,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+__all__ = ["router"]

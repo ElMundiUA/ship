@@ -449,28 +449,12 @@ async def new_active_thread(
     )
     payload = payload or ChatActiveNewIn()
 
-    # Pack the outgoing thread if the caller asked. We only pack
-    # if it has real messages — an empty bootstrapped thread is
-    # not worth a bucket summary.
-    messages = await _thread_messages(session, current.id)
-    if (
-        (payload.pack_into_bucket_slug or payload.pack_into_bucket_name)
-        and messages
-    ):
-        agent = _get_agent_client(settings)
-        topic = TopicService(
-            session,
-            settings=settings,
-            client=agent,
-            workspace_id=workspace_id,
-            user_id=auth.user.id,
-        )
-        await topic.pack_topic(
-            current,
-            bucket_slug=payload.pack_into_bucket_slug,
-            bucket_name=payload.pack_into_bucket_name,
-        )
-
+    # E17/ELS-130 — chat side no longer packs into knowledge buckets.
+    # Per-message ``memory.add`` (ELS-127) already captured every
+    # meaningful fact while the thread was active; archiving the
+    # thread is now just a status flip. ``pack_into_bucket_slug`` /
+    # ``_name`` on the payload are kept on the schema for API
+    # compatibility with older clients but silently ignored.
     current.status = "archived"
     await session.flush()
 
@@ -1166,161 +1150,6 @@ async def _run_agent_turn(
     )
 
 
-# ---------------------------------------------------------------------------
-# Pack thread → bucket
-# ---------------------------------------------------------------------------
-
-
-async def pack_thread(
-    workspace_id: uuid.UUID,
-    thread_id: uuid.UUID,
-    payload: PackThreadIn,
-    auth: AuthContext = Depends(get_current_auth),
-    session: AsyncSession = Depends(get_session),
-    settings: Settings = Depends(get_settings),
-) -> BucketSummaryOut:
-    """Pack a thread into a bucket and archive it.
-
-    ``bucket_id`` / ``bucket_slug`` pick an existing bucket; if
-    only ``bucket_name`` is provided we auto-create one (the UI
-    uses this for "pack into new bucket"). The thread moves to
-    ``archived`` status once packed so the caller has to open a
-    fresh thread to continue.
-    """
-    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
-
-    thread = (
-        await session.execute(
-            select(ChatThread).where(
-                ChatThread.id == thread_id,
-                ChatThread.workspace_id == workspace_id,
-            )
-        )
-    ).scalars().first()
-    if thread is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-
-    agent = _get_agent_client(settings)
-    topic_service = TopicService(
-        session,
-        settings=settings,
-        client=agent,
-        workspace_id=workspace_id,
-        user_id=auth.user.id,
-    )
-    try:
-        summary = await topic_service.pack_topic(
-            thread,
-            bucket_id=payload.bucket_id,
-            bucket_slug=payload.bucket_slug,
-            bucket_name=payload.bucket_name,
-        )
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
-        ) from exc
-    thread.status = "archived"
-    await session.flush()
-
-    return BucketSummaryOut(
-        id=summary.id,
-        bucket_id=summary.bucket_id,
-        thread_id=summary.thread_id,
-        title=summary.title,
-        summary=summary.summary,
-        created_at=summary.created_at,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Save thread → user memory bucket (Phase 8)
-# ---------------------------------------------------------------------------
-
-
-@router.post(
-    "/chat/threads/{thread_id}/save-to-memory",
-    response_model=BucketSummaryOut,
-)
-async def save_thread_to_memory(
-    workspace_id: uuid.UUID,
-    thread_id: uuid.UUID,
-    auth: AuthContext = Depends(get_current_auth),
-    session: AsyncSession = Depends(get_session),
-    settings: Settings = Depends(get_settings),
-) -> BucketSummaryOut:
-    """Pack the thread into the caller's private ``my-memory`` bucket.
-
-    Phase 8 companion to :func:`pack_thread`. Differences:
-
-    - **Target is always the caller's** ``scope=user`` bucket — no
-      ``bucket_id`` / ``bucket_slug`` inputs. The bucket is minted
-      lazily the first time this endpoint fires (idempotent via
-      :func:`ensure_user_memory_bucket`). Running this against a
-      fresh account simply creates ``my-memory`` on the fly.
-    - **No archive.** ``pack_thread`` archives the thread so the UI
-      forces the user into a new one; "save to memory" is
-      non-destructive — users keep chatting after saving, and can
-      save again later if the thread evolves.
-    - **Role is ``ROLES_READ``, not ``ROLES_ADMIN``.** Writing into
-      your own ``scope=user`` bucket is a user-level action, not an
-      admin one; viewers can save. The visibility helper + the
-      Phase 7 resolver still guarantee other members can't read it.
-    - **Explicit action = implicit consent.** Phase 8 deliberately
-      does not auto-save at end of thread; the user has to hit
-      "save to memory" themselves. When we later add an auto-save
-      consent toggle (stored on ``users`` or ``workspace_members``),
-      it reuses this same endpoint — the write path stays stable.
-    """
-    await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
-
-    thread = (
-        await session.execute(
-            select(ChatThread).where(
-                ChatThread.id == thread_id,
-                ChatThread.workspace_id == workspace_id,
-            )
-        )
-    ).scalars().first()
-    if thread is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-
-    memory_bucket = await ensure_user_memory_bucket(
-        session,
-        workspace_id=workspace_id,
-        user_id=auth.user.id,
-    )
-
-    agent = _get_agent_client(settings)
-    topic_service = TopicService(
-        session,
-        settings=settings,
-        client=agent,
-        workspace_id=workspace_id,
-        user_id=auth.user.id,
-    )
-    try:
-        summary = await topic_service.pack_topic(
-            thread,
-            bucket_id=memory_bucket.id,
-        )
-    except ValueError as exc:
-        # Empty thread is the only documented raise from pack_topic.
-        # Surface it as 400 so the console can show a friendly
-        # "nothing to save yet" hint instead of a 500.
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
-        ) from exc
-
-    await session.flush()
-
-    return BucketSummaryOut(
-        id=summary.id,
-        bucket_id=summary.bucket_id,
-        thread_id=summary.thread_id,
-        title=summary.title,
-        summary=summary.summary,
-        created_at=summary.created_at,
-    )
 
 
 # ---------------------------------------------------------------------------

@@ -3798,3 +3798,78 @@ export function deleteTelegramLink(
   );
 }
 
+
+
+// ---------------------------------------------------------------------------
+// Navigator memory (E17/ELS-130 — Console /memory page)
+// ---------------------------------------------------------------------------
+
+export interface ApiNavigatorMemory {
+  id: string;
+  fact_text: string;
+  project_native_id: string | null;
+  intent_at_capture: string | null;
+  source_thread_id: string | null;
+  source_message_id: string | null;
+  source_message_position: number | null;
+  confidence: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ApiNavigatorMemoriesList {
+  items: ApiNavigatorMemory[];
+  total: number;
+}
+
+export function listNavigatorMemories(
+  workspaceId: string,
+  options: {
+    projectNativeId?: string | "untagged";
+    limit?: number;
+    offset?: number;
+    token?: string;
+  } = {},
+): Promise<ApiNavigatorMemoriesList> {
+  const params = new URLSearchParams();
+  if (options.projectNativeId)
+    params.set("project_native_id", options.projectNativeId);
+  if (options.limit !== undefined) params.set("limit", String(options.limit));
+  if (options.offset !== undefined)
+    params.set("offset", String(options.offset));
+  const qs = params.toString();
+  return apiFetch<ApiNavigatorMemoriesList>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/navigator-memories${
+      qs ? `?${qs}` : ""
+    }`,
+    { token: options.token },
+  );
+}
+
+export function deleteNavigatorMemory(
+  workspaceId: string,
+  memoryId: string,
+  token?: string,
+): Promise<void> {
+  return apiFetch<void>(
+    `/v1/workspaces/${encodeURIComponent(
+      workspaceId,
+    )}/navigator-memories/${encodeURIComponent(memoryId)}`,
+    { method: "DELETE", token },
+  );
+}
+
+export function bulkForgetNavigatorMemories(
+  workspaceId: string,
+  days: number,
+  token?: string,
+): Promise<{ deleted: number }> {
+  return apiFetch<{ deleted: number }>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/navigator-memories/forget`,
+    {
+      method: "POST",
+      body: { days },
+      token,
+    },
+  );
+}

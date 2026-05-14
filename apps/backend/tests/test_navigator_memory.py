@@ -714,3 +714,119 @@ async def test_project_create_no_reset_when_intent_already_clear(
         .all()
     )
     assert facts == [], "no shape_project fact should be written outside drafting mode"
+
+
+# ---------------------------------------------------------------------------
+# ELS-130 — Console-facing REST endpoints
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_endpoint_list_returns_only_own_facts(
+    v1_client, db_session, seed_workspace, _fake_mem0
+) -> None:
+    """``GET /navigator-memories`` is owner-scoped — viewing user
+    sees their own facts, not facts written by other users in the
+    same workspace."""
+    user, raw_token, workspace = seed_workspace
+    # Add facts for THIS user.
+    await memory_module.add(
+        db_session,
+        workspace_id=workspace.id,
+        owner_user_id=user.id,
+        message="The PO confirmed Monday releases are mandatory.",
+    )
+    # Plus a fact for a DIFFERENT user in the same workspace —
+    # mustn't show up in the listing for user A.
+    other_user, _ = await _make_user_and_workspace(db_session)
+    await memory_module.add(
+        db_session,
+        workspace_id=workspace.id,
+        owner_user_id=other_user,
+        message="User B prefers Tuesday deploys.",
+    )
+    await db_session.commit()
+
+    response = await v1_client.get(
+        f"/v1/workspaces/{workspace.id}/navigator-memories",
+        headers={"Authorization": f"Bearer {raw_token}"},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    fact_texts = {it["fact_text"] for it in body["items"]}
+    assert any("Monday" in t for t in fact_texts)
+    assert not any("Tuesday" in t for t in fact_texts)
+
+
+@pytest.mark.asyncio
+async def test_endpoint_delete_owner_check(
+    v1_client, db_session, seed_workspace, _fake_mem0
+) -> None:
+    """A user cannot delete another user's fact even with admin role.
+    Backend returns 404 (not 403) so the fact's existence isn't
+    leaked."""
+    user, raw_token, workspace = seed_workspace
+    other_user, _ = await _make_user_and_workspace(db_session)
+    added = await memory_module.add(
+        db_session,
+        workspace_id=workspace.id,
+        owner_user_id=other_user,
+        message="Some private fact about user B.",
+    )
+    await db_session.commit()
+    other_fact_id = added[0].id
+
+    # User A tries to delete user B's fact — should 404.
+    response = await v1_client.delete(
+        f"/v1/workspaces/{workspace.id}/navigator-memories/{other_fact_id}",
+        headers={"Authorization": f"Bearer {raw_token}"},
+    )
+    assert response.status_code == 404, response.text
+
+
+@pytest.mark.asyncio
+async def test_endpoint_bulk_forget_window(
+    v1_client, db_session, seed_workspace, _fake_mem0
+) -> None:
+    """``POST /forget`` deletes facts captured in the last N days
+    for the calling user only. Other users' facts in the same
+    workspace stay."""
+    user, raw_token, workspace = seed_workspace
+    await memory_module.add(
+        db_session,
+        workspace_id=workspace.id,
+        owner_user_id=user.id,
+        message="Recent fact about user A's flow.",
+    )
+    other_user, _ = await _make_user_and_workspace(db_session)
+    await memory_module.add(
+        db_session,
+        workspace_id=workspace.id,
+        owner_user_id=other_user,
+        message="Recent fact about user B's flow.",
+    )
+    await db_session.commit()
+
+    response = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/navigator-memories/forget",
+        headers={"Authorization": f"Bearer {raw_token}"},
+        json={"days": 1},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["deleted"] == 1  # only A's fact, not B's
+
+
+@pytest.mark.asyncio
+async def test_endpoint_bulk_forget_validates_days_range(
+    v1_client, seed_workspace, _fake_mem0
+) -> None:
+    """``days`` must be 1-90 — guards against an accidental
+    "forget everything" button."""
+    user, raw_token, workspace = seed_workspace
+    response = await v1_client.post(
+        f"/v1/workspaces/{workspace.id}/navigator-memories/forget",
+        headers={"Authorization": f"Bearer {raw_token}"},
+        json={"days": 365},
+    )
+    assert response.status_code == 422, response.text

@@ -42,6 +42,7 @@ from backend.app.api.v1.routes import (
     linear_oauth,
     members,
     native_integrations,
+    navigator_memories,
     notifications,
     notion_oauth,
     processes,
@@ -200,3 +201,8 @@ api_router.include_router(agent_secrets.router)
 # OAuth connections (no per-repo tokens); stores the team/project
 # selection and falls back to the workspace default on read.
 api_router.include_router(tracker_binding.router)
+# E17/ELS-130 — Navigator memory surface (mem0-backed) for the
+# Console ``/memory`` page. Strict personal scope: list / delete /
+# bulk-forget all go through the owner_user_id filter on the
+# service layer.
+api_router.include_router(navigator_memories.router)
