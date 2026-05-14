@@ -95,6 +95,36 @@ export interface ToolTrajectoryAnalysis {
 }
 
 
+/**
+ * Run two consecutive user turns on the same thread + aggregate the
+ * SSE events from both. Used by multi-turn tests that exercise
+ * mutating tools the agent gates behind "are you sure?" — turn 1
+ * asks, turn 2 confirms, the actual tool_call lands on turn 2.
+ */
+export async function streamTwoTurnTurn(
+  request: APIRequestContext,
+  opts: NavigatorStreamOptions & { followup: string },
+): Promise<NavigatorStreamResult> {
+  const { followup, ...firstOpts } = opts;
+  const first = await streamNavigatorTurn(request, firstOpts);
+  if (first.status !== 200) return first;
+  const second = await streamNavigatorTurn(request, {
+    ...firstOpts,
+    body: followup,
+    freshThread: false,
+  });
+  const combinedText = first.text + "\n" + second.text;
+  const combinedEvents = [...first.events, ...second.events];
+  const tools = new Set([...first.toolNames, ...second.toolNames]);
+  return {
+    text: combinedText,
+    events: combinedEvents,
+    toolNames: Array.from(tools),
+    status: second.status,
+  };
+}
+
+
 export function analyseToolTrajectory(
   events: NavigatorStreamEvent[],
 ): ToolTrajectoryAnalysis {
