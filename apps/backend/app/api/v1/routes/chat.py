@@ -428,6 +428,87 @@ async def get_active_thread(
     return _thread_to_out(thread, messages)
 
 
+# ---------------------------------------------------------------------------
+# E20-1 — Mid-thread planning pivot
+#
+# In-place flip of ``thread.intent`` without archiving. Drives the
+# "Switch to drafting" / "Exit drafting" inline CTAs the Console
+# renders mid-conversation. Audit log carries old + new intent so the
+# dashboard's "memory health" tile can plot drafting-session length
+# distributions over time.
+# ---------------------------------------------------------------------------
+
+
+class ChatActiveIntentIn(BaseModel):
+    """Flip the active thread's ``intent`` in place.
+
+    ``None`` = back to neutral chat; ``shape_project`` = drafting
+    mode. Any other value is rejected at the Pydantic layer (we
+    don't model other intents yet).
+    """
+
+    intent: Literal["shape_project"] | None = None
+
+
+@router.post("/chat/active/intent", response_model=ChatThreadOut)
+async def set_active_thread_intent(
+    workspace_id: uuid.UUID,
+    payload: ChatActiveIntentIn,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> ChatThreadOut:
+    """Set ``thread.intent`` on the caller's active thread without
+    archiving. Used by the in-thread "Switch to drafting" / "Exit
+    drafting" CTAs (E20-3).
+
+    Returns 409 when the caller's active thread is archived or
+    packed — the flip only makes sense on a live thread. Writes an
+    ``audit_log`` row carrying the before/after intent so we can
+    plot drafting-session lifetimes from the audit shelf without a
+    separate metric.
+    """
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+    thread = await _find_or_create_active_thread(
+        session, workspace_id=workspace_id, user_id=auth.user.id
+    )
+    # ``_find_or_create_active_thread`` is the standard resolver and
+    # only ever returns rows with status==active + no
+    # ``packed_into_bucket_id`` (see its query); if that contract
+    # ever changes the guard below catches the regression early.
+    if thread.status != "active" or thread.packed_into_bucket_id is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="active thread is archived or packed; cannot flip intent",
+        )
+
+    previous_intent = thread.intent
+    if previous_intent == payload.intent:
+        # Idempotent no-op — flipping to the same value shouldn't
+        # write an audit row, otherwise re-clicking the same CTA
+        # would stack duplicate entries.
+        return _thread_to_out(thread, [])
+
+    thread.intent = payload.intent
+    thread.last_user_activity_at = datetime.now(timezone.utc)
+    session.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=auth.user.id,
+            action="chat.thread.intent_flipped",
+            target_kind="chat_thread",
+            target_id=str(thread.id),
+            payload={
+                "from": previous_intent,
+                "to": payload.intent,
+            },
+        )
+    )
+    await session.flush()
+    await session.refresh(thread)
+    return _thread_to_out(thread, [])
+
+
 @router.post("/chat/active/new", response_model=ChatThreadOut)
 async def new_active_thread(
     workspace_id: uuid.UUID,
