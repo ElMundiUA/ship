@@ -459,3 +459,86 @@ def test_should_extract_short_non_ack_still_skipped() -> None:
     skipped — mem0 needs context to extract anything useful."""
     body = "do it"  # 5 chars, not in ack tokens but not extract-worthy
     assert memory_module.should_extract_memory(True, body) is False
+
+
+# ---------------------------------------------------------------------------
+# ELS-128 — formatter + recall tool
+# ---------------------------------------------------------------------------
+
+
+def test_format_mem0_facts_emits_compact_block() -> None:
+    """``_format_mem0_facts`` produces a system-prompt block the LLM
+    sees as one tidy section. Order preserved; metadata folded into
+    a short suffix per fact; empty fact rows skipped."""
+    from backend.app.services.agent.topic import _format_mem0_facts
+
+    class _Row:
+        def __init__(self, fact_text, project=None, intent=None, fid="abc"):
+            self.fact_text = fact_text
+            self.project_native_id = project
+            self.intent_at_capture = intent
+            self.id = fid
+
+    block = _format_mem0_facts(
+        [
+            _Row("PO prefers Monday releases.", project=None),
+            _Row("Project X needs feature flags.", project="proj-X"),
+            _Row("", project=None),  # empty fact — must be skipped
+            _Row(
+                "Drafted spec for project Y.",
+                project="proj-Y",
+                intent="shape_project",
+            ),
+        ]
+    )
+    assert "What Ship remembers about you" in block
+    assert "Monday releases" in block
+    assert "project=proj-X" in block
+    assert "captured under intent=shape_project" in block
+    # Empty row was filtered.
+    assert block.count("- ") == 3
+
+
+def test_format_mem0_facts_empty_input_returns_header_only() -> None:
+    from backend.app.services.agent.topic import _format_mem0_facts
+
+    block = _format_mem0_facts([])
+    # Single-line header — no bullet points.
+    assert "What Ship remembers about you" in block
+    assert "- " not in block
+
+
+@pytest.mark.asyncio
+async def test_recall_tool_returns_user_facts_only(
+    db_session, _fake_mem0
+) -> None:
+    """The ``recall`` tool uses ``memory.search`` under the hood, so
+    the per-user isolation already verified in ELS-126 implies the
+    tool can't leak someone else's fact. This test confirms the
+    wiring: same user, same workspace, ``recall(query='Monday')``
+    returns the right fact in the right shape."""
+    user_id, ws_id = await _make_user_and_workspace(db_session)
+    await memory_module.add(
+        db_session,
+        workspace_id=ws_id,
+        owner_user_id=user_id,
+        message="PO confirmed Monday releases are mandatory for prod.",
+    )
+
+    # Build a minimal ToolBox harness — we only need ``_tool_recall``.
+    from backend.app.services.agent.tools import ToolBox
+    box = ToolBox.__new__(ToolBox)  # bypass __init__'s heavy deps
+    box._session = db_session
+    box._workspace_id = ws_id
+    box._user_id = user_id
+
+    import json
+    result_json = await box._tool_recall(
+        {"query": "Monday releases", "limit": 5}
+    )
+    result = json.loads(result_json)
+    assert isinstance(result, list)
+    assert len(result) == 1
+    assert "Monday releases" in result[0]["fact_text"]
+    assert "id" in result[0]
+    assert "score" in result[0]

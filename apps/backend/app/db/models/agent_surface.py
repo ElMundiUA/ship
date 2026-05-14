@@ -338,6 +338,16 @@ class ChatThread(Base):
     memory_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("true")
     )
+    # E17/ELS-128 — cache of fact ids surfaced by the most recent
+    # ``mem0.search`` for this thread. Smart-trigger retrieval (first
+    # turn / after 30 min gap) writes here; UI re-renders read from
+    # here instead of re-searching. JSONB array of UUID strings.
+    last_retrieved_facts: Mapped[list] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    last_retrieved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     created_at: Mapped[datetime] = _ts_created()
     updated_at: Mapped[datetime] = _ts_updated()

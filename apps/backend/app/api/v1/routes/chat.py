@@ -896,32 +896,70 @@ async def _run_agent_turn(
         except Exception as exc:  # noqa: BLE001
             logger.warning("topic classifier errored: %s", exc)
 
-    # Retrieve supporting context. Both are best-effort — a KB miss
-    # or a bucket-retrieval error shouldn't kill the turn.
-    retrieved_buckets = []
-    try:
-        retrieved_buckets = await topic_service.retrieve_buckets(
-            query=user_msg.body, limit=3
-        )
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("bucket retrieval failed: %s", exc)
+    # E17/ELS-128 — smart-trigger mem0 retrieval.
+    # The old per-turn ``retrieve_buckets`` call ran a vector search
+    # on every message even when the agent already had the context
+    # from earlier in the thread. mem0 facts are durable and the
+    # conversation history carries the prefetch forward, so we only
+    # re-search on two events:
+    #
+    #   1. First turn of the session (no prior_messages).
+    #   2. Resumed session — last user activity > 30 min ago. By the
+    #      time someone comes back from a coffee break the previous
+    #      ``{{MEMORY_CONTEXT}}`` system message may have aged out
+    #      (or the model has lost focus on it); a fresh search keeps
+    #      the prefetch relevant.
+    #
+    # Between turns the agent can call the ``recall`` tool itself if
+    # the topic drifts (see ``apps/backend/app/resources/agent_roles/
+    # navigator.md``).
+    from backend.app.services.agent import memory as navigator_memory
 
-    # Surface what we pulled in so the UI can render the soft
-    # "Using N prior memories" disclosure. Skip when retrieval was
-    # empty — the disclosure would be a visual no-op.
-    if retrieved_buckets:
+    retrieved_facts: list = []
+    last_activity = thread.last_user_activity_at
+    secs_since = (
+        (datetime.now(timezone.utc) - last_activity).total_seconds()
+        if last_activity is not None
+        else None
+    )
+    needs_refetch = (
+        not prior_messages
+        or secs_since is None
+        or secs_since > 30 * 60
+    )
+    if needs_refetch and thread.memory_enabled:
+        try:
+            hits = await navigator_memory.search(
+                session,
+                workspace_id=workspace_id,
+                owner_user_id=auth.user.id,
+                query=user_msg.body,
+                project_native_id=_infer_project_hint(thread),
+                limit=10,
+            )
+            retrieved_facts = [h.row for h in hits]
+            thread.last_retrieved_facts = [str(r.id) for r in retrieved_facts]
+            thread.last_retrieved_at = datetime.now(timezone.utc)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("memory search failed: %s", exc)
+            retrieved_facts = []
+
+    # UI disclosure — "Using N memories". Only emitted when the
+    # smart-trigger actually ran AND surfaced something.
+    if retrieved_facts:
         yield _sse(
             {
                 "type": "retrieved_context",
                 "hits": [
                     {
-                        "bucket_slug": h.bucket_slug,
-                        "bucket_name": h.bucket_name,
-                        "article_id": str(h.article_id),
-                        "title": h.title,
-                        "similarity": round(float(h.similarity), 3),
+                        "memory_id": str(r.id),
+                        "fact_text": r.fact_text,
+                        "project_native_id": r.project_native_id,
+                        "source_thread_id": str(r.source_thread_id)
+                        if r.source_thread_id
+                        else None,
                     }
-                    for h in retrieved_buckets
+                    for r in retrieved_facts
                 ],
             }
         )
@@ -931,7 +969,7 @@ async def _run_agent_turn(
         recent_messages=prior_messages,
         new_user_message=user_msg.body,
         new_user_attachments=user_attachments,
-        retrieved_buckets=retrieved_buckets,
+        retrieved_facts=retrieved_facts,
     )
 
     cost_budget = settings.agent_max_tokens_per_turn

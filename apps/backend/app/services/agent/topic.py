@@ -699,7 +699,7 @@ class TopicService:
         recent_messages: Sequence[ChatMessageRow],
         new_user_message: str,
         new_user_attachments: "Sequence[Any]" = (),
-        retrieved_buckets: Sequence[BucketHit] = (),
+        retrieved_facts: "Sequence[Any]" = (),
         retrieved_kb: Sequence[KbChunk] = (),
     ) -> list[ChatMessage]:
         """Build the prompt the LLM sees for the next turn.
@@ -793,11 +793,11 @@ class TopicService:
                     ),
                 )
             )
-        if retrieved_buckets:
+        if retrieved_facts:
             out.append(
                 ChatMessage(
                     role="system",
-                    content=_format_bucket_memory(retrieved_buckets),
+                    content=_format_mem0_facts(retrieved_facts),
                 )
             )
         if retrieved_kb:
@@ -1172,11 +1172,57 @@ def _last_turns_text(
 
 
 def _format_bucket_memory(hits: Sequence[BucketHit]) -> str:
+    """Legacy bucket-memory formatter — kept for any non-Navigator
+    caller still on the old path. Navigator routes through
+    :func:`_format_mem0_facts` after ELS-128."""
     parts = ["Memory from related past conversations (warmed context):"]
     for h in hits:
         parts.append(
             f"- bucket `{h.bucket_slug}` / {h.title}\n  {_truncate(h.summary, 600)}"
         )
+    return "\n".join(parts)
+
+
+def _format_mem0_facts(facts: "Sequence[Any]") -> str:
+    """Render mem0-extracted facts as a system-prompt block.
+
+    Each fact entry carries:
+
+    - the distilled text mem0 stored
+    - the source ``message_id`` so the agent can call
+      ``recall_context(fact_id)`` for ±5 surrounding messages
+    - the project tag (when present) so the agent knows whether a
+      fact is project-specific or general-purpose
+    - the ``intent_at_capture`` so the agent can tell drafting-time
+      claims from steady-state ones (a fact captured under
+      ``shape_project`` may have been hypothetical)
+
+    The list is the **prefetch** — agents are told (in
+    ``navigator.md``) to call ``recall`` when the conversation drifts
+    to topics not covered by this batch instead of asking the user
+    things memory likely already has.
+    """
+    parts = [
+        "What Ship remembers about you (prefetched at session start "
+        "or after a 30+ min idle gap; call ``recall(query)`` if the "
+        "topic drifts and you need more):",
+    ]
+    for f in facts:
+        # Accept either a ``NavigatorMemory`` ORM row directly or a
+        # ``MemorySearchHit`` wrapper from ``memory.search``.
+        row = getattr(f, "row", f)
+        text_body = (getattr(row, "fact_text", "") or "").strip()
+        if not text_body:
+            continue
+        meta_bits: list[str] = []
+        if getattr(row, "project_native_id", None):
+            meta_bits.append(f"project={row.project_native_id}")
+        if getattr(row, "intent_at_capture", None):
+            meta_bits.append(f"captured under intent={row.intent_at_capture}")
+        if getattr(row, "id", None):
+            meta_bits.append(f"id={row.id}")
+        meta = f"  ({', '.join(meta_bits)})" if meta_bits else ""
+        parts.append(f"- {_truncate(text_body, 600)}{meta}")
     return "\n".join(parts)
 
 

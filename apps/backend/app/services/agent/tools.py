@@ -1628,6 +1628,78 @@ class ToolBox:
                     "additionalProperties": False,
                 },
             ),
+            # E17/ELS-128 — Navigator memory recall surface.
+            ToolSpec(
+                name="recall",
+                description=(
+                    "Semantic search across the PO's durable facts "
+                    "(per-message extractions Ship has accumulated). "
+                    "Call this when the conversation drifts to a "
+                    "topic NOT covered by the ``{{MEMORY_CONTEXT}}`` "
+                    "system message prefetched at session start. "
+                    "Do NOT ask the operator something memory likely "
+                    "already answers — use this first. Returns "
+                    "``[{id, fact_text, project_native_id, "
+                    "source_thread_id, captured_at}]`` ranked by "
+                    "similarity. ``id`` is what ``recall_context`` "
+                    "takes."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": (
+                                "Natural-language search query "
+                                "(short — 3-10 words)."
+                            ),
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 25,
+                            "default": 10,
+                        },
+                        "project_native_id": {
+                            "type": "string",
+                            "description": (
+                                "Optional project id to boost. "
+                                "Omit for general-purpose recall."
+                            ),
+                        },
+                    },
+                    "required": ["query"],
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
+                name="recall_context",
+                description=(
+                    "Pull ±5 surrounding chat messages around the "
+                    "source of a specific fact. Use sparingly — the "
+                    "bare fact text is usually enough. Call this "
+                    "when nuance matters (e.g. you need to know what "
+                    "the operator was responding to when they said "
+                    "X). Returns the source message body + up to 5 "
+                    "messages before and after it from the same "
+                    "thread."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "fact_id": {
+                            "type": "string",
+                            "description": (
+                                "``id`` from a ``recall`` result "
+                                "(or from the ``{{MEMORY_CONTEXT}}`` "
+                                "block in the system prompt)."
+                            ),
+                        },
+                    },
+                    "required": ["fact_id"],
+                    "additionalProperties": False,
+                },
+            ),
         ]
 
     # ------------------------------------------------------------------
@@ -1713,6 +1785,9 @@ class ToolBox:
             # specs() — invisible to the LLM.
             "decomposition_start": self._tool_decomposition_start,
             "specialist_consult": self._tool_specialist_consult,
+            # E17/ELS-128 — Navigator memory recall surface
+            "recall": self._tool_recall,
+            "recall_context": self._tool_recall_context,
         }
 
     # ------------------------------------------------------------------
@@ -5648,6 +5723,172 @@ class ToolBox:
                         content=result,
                     )
                 )
+
+    # ------------------------------------------------------------------
+    # Navigator memory recall surface (E17/ELS-128)
+    # ------------------------------------------------------------------
+
+    async def _tool_recall(self, args: dict[str, Any]) -> str:
+        """Semantic search across the PO's mem0 facts.
+
+        Returned JSON list keeps each item compact — the agent doesn't
+        need the embedding or the full source-message body here,
+        only enough to decide whether the fact is relevant and
+        whether to drill into ``recall_context`` for the source.
+        """
+        from backend.app.services.agent import memory as navigator_memory
+
+        query = _require_str(args, "query").strip()
+        limit = _clamp_int(args.get("limit"), default=10, low=1, high=25)
+        project_native_id_raw = args.get("project_native_id")
+        if project_native_id_raw is not None and not isinstance(
+            project_native_id_raw, str
+        ):
+            raise ToolInvocationError(
+                "project_native_id must be a string when provided"
+            )
+        project_native_id = (
+            project_native_id_raw.strip()
+            if isinstance(project_native_id_raw, str)
+            else None
+        )
+        hits = await navigator_memory.search(
+            self._session,
+            workspace_id=self._workspace_id,
+            owner_user_id=self._user_id,
+            query=query,
+            project_native_id=project_native_id or None,
+            limit=limit,
+        )
+        return _json_result(
+            [
+                {
+                    "id": str(h.row.id),
+                    "fact_text": h.row.fact_text,
+                    "project_native_id": h.row.project_native_id,
+                    "source_thread_id": str(h.row.source_thread_id)
+                    if h.row.source_thread_id
+                    else None,
+                    "source_message_id": str(h.row.source_message_id)
+                    if h.row.source_message_id
+                    else None,
+                    "captured_at": h.row.created_at.isoformat()
+                    if h.row.created_at
+                    else None,
+                    "score": round(h.score, 3),
+                }
+                for h in hits
+            ]
+        )
+
+    async def _tool_recall_context(self, args: dict[str, Any]) -> str:
+        """Pull ±5 surrounding messages around a fact's source.
+
+        The fact has to belong to the calling user — the
+        access-control check happens via the same
+        ``(owner_user_id, workspace_id)`` filter the rest of the
+        memory surface uses. A foreign fact id returns ``not_found``
+        rather than the surrounding context for someone else's chat.
+        """
+        from backend.app.db.models.agent_surface import ChatMessage as ChatMessageRow
+        from backend.app.db.models.navigator_memory import NavigatorMemory
+
+        fact_id_raw = _require_str(args, "fact_id").strip()
+        try:
+            fact_id = uuid.UUID(fact_id_raw)
+        except (ValueError, TypeError):
+            raise ToolInvocationError("fact_id must be a UUID string")
+
+        fact = (
+            await self._session.execute(
+                select(NavigatorMemory).where(
+                    NavigatorMemory.id == fact_id,
+                    NavigatorMemory.owner_user_id == self._user_id,
+                    NavigatorMemory.workspace_id == self._workspace_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if fact is None:
+            return _json_result({"error": "not_found"})
+        if fact.source_thread_id is None or fact.source_message_id is None:
+            # Backfilled facts that lost their pointer when the
+            # original chat was deleted (SET NULL cascade) — we have
+            # the text but no neighbourhood to fetch.
+            return _json_result(
+                {
+                    "fact_text": fact.fact_text,
+                    "context_messages": [],
+                    "note": "source thread / message no longer available",
+                }
+            )
+
+        anchor = (
+            await self._session.execute(
+                select(ChatMessageRow).where(
+                    ChatMessageRow.id == fact.source_message_id
+                )
+            )
+        ).scalar_one_or_none()
+        if anchor is None:
+            return _json_result(
+                {
+                    "fact_text": fact.fact_text,
+                    "context_messages": [],
+                    "note": "source message deleted",
+                }
+            )
+
+        # Pull 5 before + the anchor + 5 after by ``created_at``.
+        before = (
+            (
+                await self._session.execute(
+                    select(ChatMessageRow)
+                    .where(
+                        ChatMessageRow.thread_id == fact.source_thread_id,
+                        ChatMessageRow.created_at < anchor.created_at,
+                    )
+                    .order_by(ChatMessageRow.created_at.desc())
+                    .limit(5)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        after = (
+            (
+                await self._session.execute(
+                    select(ChatMessageRow)
+                    .where(
+                        ChatMessageRow.thread_id == fact.source_thread_id,
+                        ChatMessageRow.created_at > anchor.created_at,
+                    )
+                    .order_by(ChatMessageRow.created_at.asc())
+                    .limit(5)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        window = list(reversed(before)) + [anchor] + list(after)
+        return _json_result(
+            {
+                "fact_text": fact.fact_text,
+                "source_message_id": str(anchor.id),
+                "source_thread_id": str(fact.source_thread_id),
+                "context_messages": [
+                    {
+                        "id": str(m.id),
+                        "role": m.role,
+                        "body": _truncate(m.body or "", 1000),
+                        "created_at": m.created_at.isoformat()
+                        if m.created_at
+                        else None,
+                        "is_anchor": m.id == anchor.id,
+                    }
+                    for m in window
+                ],
+            }
+        )
 
 
 # ---------------------------------------------------------------------------
