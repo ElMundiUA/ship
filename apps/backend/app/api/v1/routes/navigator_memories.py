@@ -417,19 +417,51 @@ async def seed_navigator_memory_for_tests(
     payload: SandboxSeedIn,
     auth: AuthContext = Depends(get_current_auth),
     session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
 ) -> SandboxSeedOut:
-    """E2E-only: write a fact directly into ``navigator_memories``.
+    """E2E-only: store a fact in mem0 + mirror it into ``navigator_memories``.
 
     Returns 404 unless the workspace slug starts with ``e2e-`` so the
     endpoint is invisible on any production workspace. The auth /
     membership gate is unchanged — only members of the e2e workspace
     can call this, and the fact is bound to the caller's
     ``owner_user_id``.
+
+    Pushes the fact through mem0 with ``infer=False`` so mem0 stores
+    the raw text verbatim (no LLM extraction) but **does** compute an
+    embedding — the seeded row is therefore retrievable via
+    ``mem0.search`` just like a fact extracted from a real chat turn.
+    When mem0 is unavailable (laptop without OPENAI_API_KEY, prod
+    pool cooldown) we still write the mirror row so non-retrieval
+    tests (list / delete / forget / health) work without the LLM.
     """
     ws = await session.get(Workspace, workspace_id)
     if ws is None or not ws.slug.startswith("e2e-"):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
+
+    # Try mem0 first so the resulting row carries mem0's id +
+    # an embedding (retrievable by search). On any failure we
+    # fall through to a mirror-only insert so non-retrieval tests
+    # don't depend on mem0 being healthy.
+    mem0_id: str | None = None
+    try:
+        added = await navigator_memory.add(
+            session,
+            workspace_id=workspace_id,
+            owner_user_id=auth.user.id,
+            message=payload.fact_text,
+            project_native_id=payload.project_native_id,
+            intent_at_capture=payload.intent_at_capture,
+            infer=False,
+        )
+        if added:
+            return SandboxSeedOut(id=added[0].id)
+    except Exception:  # noqa: BLE001
+        # mem0 may be cooling down (Neon timeout) or unavailable
+        # entirely. Fall through to mirror-only so tests that don't
+        # exercise retrieval still work.
+        pass
 
     row = NavigatorMemory(
         workspace_id=workspace_id,

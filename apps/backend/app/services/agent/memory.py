@@ -247,6 +247,7 @@ async def add(
     project_native_id: str | None = None,
     intent_at_capture: str | None = None,
     settings: Settings | None = None,
+    infer: bool = True,
 ) -> list[AddedFact]:
     """Extract facts from ``message`` via mem0 and mirror them.
 
@@ -259,6 +260,13 @@ async def add(
     mem0 runs its own LLM call to extract facts, so this is **not**
     cheap — the caller should fire-and-forget (``asyncio.create_task``)
     from the chat hot path rather than awaiting inline.
+
+    ``infer=False`` skips mem0's LLM fact-extraction step and stores
+    the message verbatim. The embedding still gets computed (mem0's
+    embedder runs regardless), so the row remains retrievable via
+    ``search``. Used by the e2e sandbox seed endpoint to plant
+    deterministic, retrievable fixtures without burning extractor
+    tokens.
     """
     settings = settings or get_settings()
     text_to_send = (message or "").strip()
@@ -295,6 +303,7 @@ async def add(
             text_to_send,
             user_id=namespace,
             metadata=metadata,
+            infer=infer,
         )
     except Exception as exc:  # noqa: BLE001
         log.exception("mem0.add failed for user=%s ws=%s", owner_user_id, workspace_id)

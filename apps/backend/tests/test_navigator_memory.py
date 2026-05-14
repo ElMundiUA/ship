@@ -48,7 +48,13 @@ class _FakeMem0:
         # mem0_id → {"memory": text, "user_id": namespace, "metadata": {...}}
         self.store: dict[str, dict] = {}
 
-    def add(self, text, *, user_id, metadata=None):
+    def add(self, text, *, user_id, metadata=None, infer=True):
+        # mem0's real signature accepts ``infer``; tests cover both
+        # branches now (``infer=False`` for sandbox fixtures). The
+        # fake doesn't need to behave differently — storing the
+        # text verbatim either way matches the contract the wrapper
+        # cares about.
+        del infer
         new_id = uuid.uuid4().hex
         self.store[new_id] = {
             "memory": text[:200],
