@@ -518,11 +518,110 @@ async def _delete_mirror_by_mem0_id(
         await session.delete(row)
 
 
+# ---------------------------------------------------------------------------
+# Public helpers — chat-route side
+# ---------------------------------------------------------------------------
+
+
+# Minimum length to bother running extraction. Anything shorter than
+# this is overwhelmingly likely to be ack noise — "ok", "thanks",
+# "yes please", "ага", "норм" — and the LLM extractor's fixed
+# overhead isn't worth it.
+_MIN_EXTRACT_CHARS = 30
+
+# Plain ack patterns we filter before pre-length even matters. Match
+# is case-insensitive, allows trailing punctuation / emoji. Anything
+# captured here is a single-word acknowledgement with no factual
+# payload.
+_ACK_TOKENS: frozenset[str] = frozenset(
+    {
+        "ok", "okay", "yes", "no", "sure", "thanks", "thank you",
+        "got it", "noted", "great", "cool", "nice", "perfect",
+        "да", "нет", "ага", "ок", "норм", "спасибо", "понятно",
+    }
+)
+
+
+def should_extract_memory(memory_enabled: bool, message_body: str) -> bool:
+    """Decide whether a user message is worth running through mem0.
+
+    Two pre-filters: the per-thread toggle (Console "Pause memory"
+    button) and a content gate that drops obvious ack-noise before
+    we burn an LLM call.
+    """
+    if not memory_enabled:
+        return False
+    body = (message_body or "").strip()
+    if not body:
+        return False
+    if len(body) < _MIN_EXTRACT_CHARS:
+        # Cheap: strip punctuation, see if what's left is just an ack.
+        normalised = "".join(c for c in body.lower() if c.isalnum() or c == " ").strip()
+        if normalised in _ACK_TOKENS:
+            return False
+        # Short but not an ack token — still skip; mem0 needs more to chew on.
+        return False
+    return True
+
+
+async def extract_in_background(
+    *,
+    workspace_id: uuid.UUID,
+    owner_user_id: uuid.UUID,
+    message_body: str,
+    source_thread_id: uuid.UUID | None,
+    source_message_id: uuid.UUID | None,
+    source_message_position: int | None,
+    project_native_id: str | None,
+    intent_at_capture: str | None,
+    settings: Settings | None = None,
+) -> None:
+    """Open a fresh DB session, run ``add``, commit on success.
+
+    Designed for ``asyncio.create_task`` from the chat-stream handler
+    so the LLM round-trip (5-20s) doesn't block the response. Never
+    raises — every failure path logs + (when DB is reachable) writes
+    an audit row.
+    """
+    from backend.app.db.session import get_sessionmaker
+
+    settings = settings or get_settings()
+    sm = get_sessionmaker()
+    try:
+        async with sm() as session:
+            try:
+                await add(
+                    session,
+                    workspace_id=workspace_id,
+                    owner_user_id=owner_user_id,
+                    message=message_body,
+                    source_thread_id=source_thread_id,
+                    source_message_id=source_message_id,
+                    source_message_position=source_message_position,
+                    project_native_id=project_native_id,
+                    intent_at_capture=intent_at_capture,
+                    settings=settings,
+                )
+                await session.commit()
+            except Exception:  # noqa: BLE001
+                await session.rollback()
+                log.exception(
+                    "memory background extract failed ws=%s user=%s msg=%s",
+                    workspace_id,
+                    owner_user_id,
+                    source_message_id,
+                )
+    except Exception:  # noqa: BLE001 — sessionmaker itself flaking
+        log.exception("memory background extract — sessionmaker error")
+
+
 __all__ = [
     "AddedFact",
     "MemorySearchHit",
     "add",
     "delete",
+    "extract_in_background",
     "list_for_user",
     "search",
+    "should_extract_memory",
 ]

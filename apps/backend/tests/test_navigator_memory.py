@@ -416,3 +416,46 @@ async def test_project_scope_filter(db_session, _fake_mem0) -> None:
     assert any("short PR descriptions" in t for t in fact_texts)
     assert any("feature flags" in t for t in fact_texts)
     assert not any("canary" in t for t in fact_texts)
+
+
+# ---------------------------------------------------------------------------
+# ELS-127 — pre-filter + toggle + background extraction
+# ---------------------------------------------------------------------------
+
+
+def test_should_extract_short_acks_skipped() -> None:
+    """Ack-noise should never reach mem0 — the LLM extractor's
+    fixed overhead isn't worth it on "ok" / "thanks"."""
+    for body in ("ok", "OK!", "thanks ", "ага", "норм", "yes", "great", "got it"):
+        assert memory_module.should_extract_memory(True, body) is False, body
+
+
+def test_should_extract_long_substantive_message() -> None:
+    """A real PO statement >= 30 chars passes the filter."""
+    body = (
+        "The PO prefers Monday releases. Avoid Friday deploys until "
+        "the on-call rotation has been fixed."
+    )
+    assert memory_module.should_extract_memory(True, body) is True
+
+
+def test_should_extract_respects_memory_enabled_toggle() -> None:
+    """Console "Pause memory" button → ``memory_enabled=False`` →
+    skip regardless of message length / content."""
+    long_meaningful = (
+        "The PO confirmed the release date should slip to next "
+        "Wednesday because of the conference."
+    )
+    assert memory_module.should_extract_memory(False, long_meaningful) is False
+
+
+def test_should_extract_empty_string_skipped() -> None:
+    assert memory_module.should_extract_memory(True, "") is False
+    assert memory_module.should_extract_memory(True, "    ") is False
+
+
+def test_should_extract_short_non_ack_still_skipped() -> None:
+    """Short messages that aren't a known ack pattern are still
+    skipped — mem0 needs context to extract anything useful."""
+    body = "do it"  # 5 chars, not in ack tokens but not extract-worthy
+    assert memory_module.should_extract_memory(True, body) is False

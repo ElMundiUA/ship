@@ -29,6 +29,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -329,6 +330,13 @@ class ChatThread(Base):
     # through the sweeper) so the audit trail stays unambiguous.
     archived_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    # E17/ELS-127 — Console "Pause memory for this chat" button writes
+    # to this column. When ``false``, the chat-turn handler skips
+    # ``memory.add`` for user messages in this thread (anonymous
+    # mode). Default is on so existing threads keep auto-extraction.
+    memory_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true")
     )
 
     created_at: Mapped[datetime] = _ts_created()

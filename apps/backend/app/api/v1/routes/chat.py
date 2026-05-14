@@ -39,6 +39,7 @@ older ``ChatThread`` rows around for audit.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -328,6 +329,23 @@ def _thread_to_summary(thread: ChatThread) -> ChatThreadSummaryOut:
         created_at=thread.created_at,
         updated_at=thread.updated_at,
     )
+
+
+def _infer_project_hint(thread: ChatThread) -> str | None:
+    """Best-effort guess at the project this chat is "about".
+
+    Today we have one signal: ``intent='shape_project'`` indicates a
+    drafting session whose project doesn't yet exist (the
+    ``create_project`` tool will mint it later — ELS-129 wires the
+    ``project_native_id`` back on success). Returning ``None`` for
+    everything else is fine; memory facts get a global tag and the
+    retrieval boost in ELS-128 falls back gracefully.
+    """
+    # Placeholder for future heuristics — repo pin, project picker
+    # in the UI, ``project_native_id`` baked on the thread row, etc.
+    # For now there's nothing better than None to return.
+    _ = thread
+    return None
 
 
 async def _find_or_create_active_thread(
@@ -646,6 +664,38 @@ async def chat_stream(
     session.add(user_msg)
     thread.last_user_activity_at = datetime.now(timezone.utc)
     await session.flush()
+
+    # E17/ELS-127 — fire mem0 extraction as a background task so the
+    # LLM round-trip doesn't block the streaming response. The
+    # per-thread ``memory_enabled`` toggle + the content pre-filter
+    # decide together whether mem0 sees this message; the background
+    # path opens its own DB session so we don't leak request-scoped
+    # state into a task that outlives the connection.
+    try:
+        from backend.app.services.agent import memory as navigator_memory
+
+        if navigator_memory.should_extract_memory(
+            thread.memory_enabled, user_msg.body
+        ):
+            asyncio.create_task(
+                navigator_memory.extract_in_background(
+                    workspace_id=workspace_id,
+                    owner_user_id=auth.user.id,
+                    message_body=user_msg.body,
+                    source_thread_id=thread.id,
+                    source_message_id=user_msg.id,
+                    # No ``position`` column on ChatMessage today —
+                    # leave NULL; the Console can sort by created_at
+                    # when it needs ±5 context (ELS-128 follow-up).
+                    source_message_position=None,
+                    project_native_id=_infer_project_hint(thread),
+                    intent_at_capture=thread.intent,
+                    settings=settings,
+                ),
+                name="ship.navigator_memory.extract",
+            )
+    except Exception:  # noqa: BLE001 — the chat turn must NEVER fail because of mem0
+        logger.exception("memory extract scheduling failed")
 
     # Attachments: persist + read bytes so they survive past the
     # multipart stream's lifetime. Message-level caps (file count,
