@@ -44,6 +44,8 @@ from backend.app.db.models.memory_adapters import (
     MemoryTrackerProject,
     MemoryTrackerTicket,
 )
+from backend.app.db.models.integrations import WorkspaceRepo
+from backend.app.db.models.pipelines import PullRequest, WorkflowRun
 from backend.app.db.models.tenancy import User, Workspace
 from backend.app.integrations.local.ci import MemoryCi
 from backend.app.integrations.local.code_host import MemoryCodeHost
@@ -325,6 +327,160 @@ async def _seed_ci(
     print(f"  ci: 3 runs ({rows[0].id} success / {rows[1].id} failure / {rows[2].id} in-flight)")
 
 
+async def _seed_workspace_repo(
+    session,
+    workspace_id: uuid.UUID,
+    repo: MemoryGitRepo,
+) -> uuid.UUID:
+    """Mirror the MemoryGitRepo into ``workspace_repos`` so the
+    Navigator's context-injection (dashboard / system prompt) lists
+    the repo as bound. Without this, the agent assumes the workspace
+    has no repo and skips ``pr_list`` / ``repo_tree`` entirely.
+
+    Provider is ``memory`` and ``installation_id`` is NULL — the
+    code-host gateway resolver branches on ``settings.use_memory_adapters``
+    and ignores the installation lookup in laptop mode.
+    """
+    existing = (
+        await session.execute(
+            select(WorkspaceRepo).where(
+                WorkspaceRepo.workspace_id == workspace_id,
+                WorkspaceRepo.provider == "memory",
+                WorkspaceRepo.external_id == int(str(repo.id.int)[:10]),
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        print(f"  workspace_repos: reuse {existing.id}")
+        return existing.id
+    row = WorkspaceRepo(
+        workspace_id=workspace_id,
+        installation_id=None,
+        provider="memory",
+        external_id=int(str(repo.id.int)[:10]),
+        full_name=f"{repo.owner}/{repo.name}",
+        default_branch=repo.default_branch,
+        html_url=f"http://localhost:3001/local-tracker/repos/{repo.owner}/{repo.name}",
+        description=repo.description or "",
+        private=repo.private,
+        activated_at=datetime.now(timezone.utc),
+    )
+    session.add(row)
+    await session.flush()
+    print(f"  workspace_repos: created {row.id} -> {repo.owner}/{repo.name}")
+    return row.id
+
+
+async def _seed_pr_cache(
+    session,
+    workspace_id: uuid.UUID,
+    repo: MemoryGitRepo,
+    ws_repo_id: uuid.UUID,
+) -> None:
+    """Mirror MemoryGitPullRequest rows into ``pull_requests`` so the
+    Navigator's ``pr_list`` (DB-driven) returns the same PRs the agent
+    sees through ``pr_get`` (gateway-driven). Without this mirror the
+    two views diverge and the LLM gets confused — list says "no PRs"
+    but the gateway can fetch them by number."""
+    existing = (
+        await session.execute(
+            select(PullRequest).where(
+                PullRequest.workspace_id == workspace_id,
+                PullRequest.repo_full_name == f"{repo.owner}/{repo.name}",
+            )
+        )
+    ).scalars().all()
+    if existing:
+        print(f"  pr cache: reuse {len(existing)} rows")
+        return
+    mem_prs = (
+        (
+            await session.execute(
+                select(MemoryGitPullRequest).where(
+                    MemoryGitPullRequest.repo_id == repo.id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    now = datetime.now(timezone.utc)
+    for i, pr in enumerate(mem_prs):
+        session.add(
+            PullRequest(
+                workspace_id=workspace_id,
+                repo_id=ws_repo_id,
+                external_id=int(pr.number) + 1_000_000,  # synthetic numeric id
+                number=pr.number,
+                repo_full_name=f"{repo.owner}/{repo.name}",
+                title=pr.title,
+                state=pr.state,
+                merged=pr.merged,
+                draft=pr.draft,
+                author="dev-bot",
+                html_url=f"http://localhost:3001/local-tracker/repos/{repo.owner}/{repo.name}/pull/{pr.number}",
+                opened_at=pr.created_at,
+                updated_at_external=pr.updated_at,
+                closed_at=pr.merged_at if pr.merged else None,
+                merged_at=pr.merged_at if pr.merged else None,
+            )
+        )
+    await session.flush()
+    print(f"  pr cache: mirrored {len(mem_prs)} rows from MemoryGitPullRequest")
+
+
+async def _seed_runs_cache(
+    session,
+    workspace_id: uuid.UUID,
+    repo: MemoryGitRepo,
+    ws_repo_id: uuid.UUID,
+) -> None:
+    """Mirror MemoryCiRun rows into ``workflow_runs``. ``runs_list``
+    reads this table directly; without the mirror the agent sees no
+    CI runs even though the dashboard query has results."""
+    existing = (
+        await session.execute(
+            select(WorkflowRun).where(
+                WorkflowRun.workspace_id == workspace_id,
+                WorkflowRun.repo_full_name == f"{repo.owner}/{repo.name}",
+            )
+        )
+    ).scalars().all()
+    if existing:
+        print(f"  runs cache: reuse {len(existing)} rows")
+        return
+    mem_runs = (
+        (
+            await session.execute(
+                select(MemoryCiRun).where(MemoryCiRun.repo_id == repo.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for i, run in enumerate(mem_runs):
+        session.add(
+            WorkflowRun(
+                workspace_id=workspace_id,
+                repo_id=ws_repo_id,
+                external_id=1_000_000 + i,
+                repo_full_name=f"{repo.owner}/{repo.name}",
+                name=run.workflow_name,
+                event="push",
+                status=run.status,
+                conclusion=run.conclusion,
+                head_branch=run.branch,
+                head_sha=run.commit_sha,
+                actor="dev-bot",
+                html_url=f"http://localhost:3001/local-tracker/repos/{repo.owner}/{repo.name}/runs/{run.id}",
+                started_at=run.created_at,
+                finished_at=run.updated_at if run.status == "completed" else None,
+            )
+        )
+    await session.flush()
+    print(f"  runs cache: mirrored {len(mem_runs)} rows from MemoryCiRun")
+
+
 async def _seed_inbox(
     session,
     workspace_id: uuid.UUID,
@@ -393,7 +549,10 @@ async def main() -> int:
         print("seeding…")
         await _seed_tracker(session, ws_id)
         repo = await _seed_repo(session, ws_id)
+        ws_repo_id = await _seed_workspace_repo(session, ws_id, repo)
         await _seed_ci(session, ws_id, repo)
+        await _seed_pr_cache(session, ws_id, repo, ws_repo_id)
+        await _seed_runs_cache(session, ws_id, repo, ws_repo_id)
         await _seed_inbox(session, ws_id, primary_id)
         await session.commit()
         print("done.")

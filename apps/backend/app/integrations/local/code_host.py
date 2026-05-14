@@ -30,7 +30,6 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.db.models.memory_adapters import (
-    MemoryCiRun,
     MemoryGitFile,
     MemoryGitPullRequest,
     MemoryGitRepo,
@@ -103,6 +102,64 @@ class MemoryCodeHost:
             )
             for r in rows
         ]
+
+    # ``list_pull_request_*`` aren't on the gateway protocol but the
+    # Navigator pr_get tool calls them when include_files / _reviews
+    # / _commits / _comments is true. We return empty lists for the
+    # memory adapter — sandbox PRs don't have commits, reviews,
+    # comments or detailed file diffs.
+
+    async def list_pull_request_files(
+        self, ref: PullRequestRef, *, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        del ref, limit
+        return []
+
+    async def list_pull_request_reviews(
+        self, ref: PullRequestRef, *, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        del ref, limit
+        return []
+
+    async def list_pull_request_commits(
+        self, ref: PullRequestRef, *, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        del ref, limit
+        return []
+
+    async def list_pull_request_issue_comments(
+        self, ref: PullRequestRef, *, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        del ref, limit
+        return []
+
+    async def search_code(
+        self,
+        ref: RepoRef,
+        *,
+        query: str,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """GitHub-style code-search shim — substring match over the
+        seeded file paths so the Navigator's ``repo_symbols`` tool
+        has something to hand to the symbol parser in memory mode."""
+        repo = await self._fetch_repo_for(ref)
+        if repo is None:
+            return []
+        rows = (
+            (
+                await self._session.execute(
+                    select(MemoryGitFile.path).where(
+                        MemoryGitFile.repo_id == repo.id,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        q = (query or "").lower()
+        hits = [p for p in rows if not q or q in p.lower()][:limit]
+        return [{"path": p} for p in hits]
 
     async def get_pull_request(self, ref: PullRequestRef) -> dict[str, Any]:
         repo = await self._fetch_repo_for(ref.repo)

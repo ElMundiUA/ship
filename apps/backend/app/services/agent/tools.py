@@ -1865,12 +1865,7 @@ class ToolBox:
         if start_val is not None and end_val is not None and end_val < start_val:
             raise ToolInvocationError("end_line must be >= start_line")
 
-        repo, install = await self._resolve_repo_with_install(repo_id)
-        gateway = GitHubCodeHost(
-            install.installation_id, settings=self._settings
-        )
-        owner, _, name = repo.full_name.partition("/")
-        ref = RepoRef(kind="github", owner=owner, repo=name)
+        gateway, ref, _ = await self._resolve_code_host_gateway(repo_id)
         try:
             blob = await gateway.get_blob(ref, path=path, ref_sha=ref_sha)
         except FileNotFoundError as exc:
@@ -1931,11 +1926,10 @@ class ToolBox:
         glob_pat = args.get("glob")
         directories_only = bool(args.get("directories_only", False))
 
-        repo, install = await self._resolve_repo_with_install(repo_id)
-        gateway = GitHubCodeHost(install.installation_id, settings=self._settings)
-        owner, _, name = repo.full_name.partition("/")
-        ref = RepoRef(kind="github", owner=owner, repo=name)
-        files = await gateway.list_files(ref, ref_sha=repo.default_branch)
+        gateway, ref, default_branch = await self._resolve_code_host_gateway(
+            repo_id
+        )
+        files = await gateway.list_files(ref, ref_sha=default_branch)
 
         total_before_filter = len(files)
         if isinstance(path_prefix, str) and path_prefix:
@@ -1963,9 +1957,9 @@ class ToolBox:
             truncated = len(seen) > _MAX_CODE_MAP_ENTRIES
             return _json_result(
                 {
-                    "repo_id": str(repo.id),
-                    "full_name": repo.full_name,
-                    "default_branch": repo.default_branch,
+                    "repo_id": str(repo_id),
+                    "full_name": ref.full_name,
+                    "default_branch": default_branch,
                     "total_files_before_filter": total_before_filter,
                     "truncated": truncated,
                     "directories": seen[:_MAX_CODE_MAP_ENTRIES],
@@ -1975,9 +1969,9 @@ class ToolBox:
         truncated = len(files) > _MAX_CODE_MAP_ENTRIES
         return _json_result(
             {
-                "repo_id": str(repo.id),
-                "full_name": repo.full_name,
-                "default_branch": repo.default_branch,
+                "repo_id": str(repo_id),
+                "full_name": ref.full_name,
+                "default_branch": default_branch,
                 "total_files_before_filter": total_before_filter,
                 "matched": len(files),
                 "truncated": truncated,
@@ -2041,10 +2035,7 @@ class ToolBox:
                 "candidate files via code search before parsing)"
             )
 
-        repo, install = await self._resolve_repo_with_install(repo_id)
-        gateway = GitHubCodeHost(install.installation_id, settings=self._settings)
-        owner, _, name = repo.full_name.partition("/")
-        ref = RepoRef(kind="github", owner=owner, repo=name)
+        gateway, ref, _ = await self._resolve_code_host_gateway(repo_id)
 
         # Build the list of files to parse. Explicit ``paths`` win;
         # otherwise GitHub code search narrows down by ``query``.
@@ -2122,8 +2113,8 @@ class ToolBox:
         truncated = len(rows) >= limit
         return _json_result(
             {
-                "repo_id": str(repo.id),
-                "full_name": repo.full_name,
+                "repo_id": str(repo_id),
+                "full_name": ref.full_name,
                 "query": query_str or None,
                 "kinds": sorted(kinds) if kinds else None,
                 "supported_extensions": sorted(LANGUAGE_BY_EXTENSION.keys()),
@@ -2642,17 +2633,13 @@ class ToolBox:
         include_commits = bool(args.get("include_commits", False))
         include_comments = bool(args.get("include_comments", False))
 
-        repo, install = await self._resolve_repo_with_install(repo_id)
-        gateway = GitHubCodeHost(install.installation_id, settings=self._settings)
-        owner, _, name = repo.full_name.partition("/")
-        ref = PullRequestRef(
-            repo=RepoRef(kind="github", owner=owner, repo=name), number=number
-        )
+        gateway, repo_ref, _ = await self._resolve_code_host_gateway(repo_id)
+        ref = PullRequestRef(repo=repo_ref, number=number)
         try:
             raw = await gateway.get_pull_request(ref)
         except Exception as exc:  # noqa: BLE001 — GitHub HTTP errors
             raise ToolInvocationError(
-                f"failed to fetch PR #{number} in {repo.full_name}: {exc}"
+                f"failed to fetch PR #{number} in {repo_ref.full_name}: {exc}"
             ) from exc
 
         created_at = raw.get("created_at")
@@ -2661,7 +2648,7 @@ class ToolBox:
         merged_at = raw.get("merged_at")
 
         summary: dict[str, Any] = {
-            "repo": repo.full_name,
+            "repo": repo_ref.full_name,
             "number": number,
             "title": raw.get("title"),
             "state": raw.get("state"),
@@ -3322,6 +3309,89 @@ class ToolBox:
                 "GitHub App installation is missing or suspended; reinstall Ship."
             )
         return row, install
+
+    async def _resolve_code_host_gateway(
+        self, repo_id: uuid.UUID
+    ) -> tuple[Any, RepoRef, str]:
+        """Return ``(gateway, repo_ref, default_branch)`` for a workspace
+        repo, routing through the memory adapter when the laptop-offline
+        profile is active.
+
+        Memory mode (``settings.use_memory_adapters``): looks up the
+        workspace's ``MemoryGitRepo`` (by id when present, otherwise the
+        single seeded row) and returns a :class:`MemoryCodeHost`. The
+        e2e-navigator sandbox seeds a real ``workspace_repos`` row
+        whose ``provider`` is ``"memory"`` so the agent's ``repo_id``
+        argument resolves to a stable id between calls.
+
+        Prod mode: existing flow — ``_resolve_repo_with_install`` plus
+        a fresh :class:`GitHubCodeHost`. Behaviour is unchanged for
+        every non-memory workspace.
+        """
+        settings = self._settings
+        if getattr(settings, "use_memory_adapters", False):
+            from backend.app.db.models.memory_adapters import MemoryGitRepo
+            from backend.app.integrations.local.code_host import MemoryCodeHost
+
+            # The agent typically passes ``workspace_repos.id`` from
+            # dashboard_get. Resolve it to (owner, name) so we can
+            # find the matching MemoryGitRepo row.
+            owner: str | None = None
+            name: str | None = None
+            ws_repo = (
+                await self._session.execute(
+                    select(WorkspaceRepo).where(
+                        WorkspaceRepo.workspace_id == self._workspace_id,
+                        WorkspaceRepo.id == repo_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if ws_repo is not None:
+                owner, _, name = ws_repo.full_name.partition("/")
+            mem_row: MemoryGitRepo | None = None
+            if owner and name:
+                mem_row = (
+                    await self._session.execute(
+                        select(MemoryGitRepo).where(
+                            MemoryGitRepo.workspace_id == self._workspace_id,
+                            MemoryGitRepo.owner == owner,
+                            MemoryGitRepo.name == name,
+                        )
+                    )
+                ).scalar_one_or_none()
+            if mem_row is None:
+                # Fall back to the workspace's first MemoryGitRepo —
+                # what the agent likely wants when there's only one
+                # seeded repo.
+                mem_row = (
+                    await self._session.execute(
+                        select(MemoryGitRepo)
+                        .where(MemoryGitRepo.workspace_id == self._workspace_id)
+                        .order_by(MemoryGitRepo.created_at.asc())
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+            if mem_row is None:
+                raise ToolInvocationError(
+                    "no MemoryGitRepo seeded for this workspace; "
+                    "run tools/scripts/seed_e2e_navigator_state.py"
+                )
+            return (
+                MemoryCodeHost(
+                    session=self._session, workspace_id=self._workspace_id
+                ),
+                RepoRef(kind="github", owner=mem_row.owner, repo=mem_row.name),
+                mem_row.default_branch,
+            )
+        # Production path. Same as the four inline constructions this
+        # helper replaces.
+        repo, install = await self._resolve_repo_with_install(repo_id)
+        owner, _, name = repo.full_name.partition("/")
+        return (
+            GitHubCodeHost(install.installation_id, settings=settings),
+            RepoRef(kind="github", owner=owner, repo=name),
+            repo.default_branch,
+        )
 
     async def _resolve_tracker(
         self, preferred_kind: str | None, project_hint: str | None
