@@ -732,7 +732,16 @@ async def maybe_dispatch(
     # surface — a guaranteed merge-conflict pile-up that no human can
     # review (caught at askslayer/PAC-23 design 2026-05-15).
     is_anchor = "planning:anchor" in ticket_labels
-    if project_id and not is_anchor:
+    # Cascade dispatches (a finish handler firing the next stage of
+    # the *same* ticket) must NOT re-take the project lock — the
+    # original dispatch on this ticket already holds it. Treating
+    # the cascade as a fresh entrant would refuse every stage past
+    # planning with ``project_busy``, exactly the loop we just hit
+    # on PAC-23: planning finished, cascade fired dev_implementation,
+    # the same ticket's project lock was still held → silent refusal
+    # → chain stalls one stage in.
+    is_cascade = trigger_kind == "cascade"
+    if project_id and not is_anchor and not is_cascade:
         project_lock_key = f"project:{project_id}"
         got_project_lock = await acquire_lock(
             session, workspace_id=workspace_id, key=project_lock_key,
