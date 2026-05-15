@@ -62,10 +62,27 @@ Fix the smallest reproducible cause:
 - Missing stage label → look at the ticket's description for
   obvious shape; if it has acceptance criteria, label
   `stage:dev_implementation`; if just a problem statement, label
-  `stage:planning`. Comment one line on the ticket explaining
-  the label you set.
+  `stage:planning`. **Always comment** one line on the ticket
+  explaining the label you set (tag the comment
+  `[Ship workspace:role-self-heal]`).
 - Cap-exhausted permanently → file an inbox letter, no Linear
   change.
+
+**Capability-gap fallback.** If the tracker adapter rejects the
+label edit (e.g., `relabel_stages_unsupported` for memory mode,
+permission errors on Linear), DO NOT silently bail. Always:
+
+1. File one inbox letter naming the ticket + the exact error.
+2. Comment on the affected ticket — even if the comment is the
+   only mutation that landed — so the operator's tracker timeline
+   shows that self-heal looked at this row and explains why no
+   automatic fix was applied. Tag it
+   `[Ship workspace:role-self-heal]`.
+
+A self-heal tick that touched nothing on the tracker but reports
+`ready_next_step` is the worst-of-both-worlds: the rubric scores
+it as a missed fix AND the operator has no breadcrumb. Always
+leave a tagged comment OR finish `noop`, never both empty.
 
 ### Phase 3 — Stuck PRs
 
@@ -100,6 +117,40 @@ If you found nothing actionable across all four phases, finish
 with a single audit line and `outcome=noop` (no inbox letter —
 silent passes are fine for self-heal; the heartbeat is the daily
 digest).
+
+## Outcome ↔ action mapping — hard rule
+
+This is the load-bearing decision the rubric checks. Pick exactly
+one row from this table and finish accordingly. Mis-mapping is the
+single biggest regression mode in self-heal:
+
+| Did you find an actionable item? | Did your fix land? | outcome |
+| ------------------------------ | ------------------ | --------------------- |
+| No                             | n/a                | `noop`                |
+| Yes                            | Yes (≥1 mutation)  | `ready_next_step`     |
+| Yes                            | No (tool errored)  | `blocked`             |
+
+A `ready_next_step` outcome with zero mutations is **always
+wrong** — it tells the orchestrator the bundle made progress when
+it didn't. The rubric scores this at 0 on C1 regardless of phase
+narration quality.
+
+## Phase 2 — decision rule for missing stage labels
+
+When a ticket is `In Progress` with no `stage:*` label, infer
+which stage it belongs in from body shape:
+
+- Body has a checklist (lines starting with `- [ ]` or `- [x]`)
+  OR a heading like `## Acceptance criteria` / `## AC` →
+  `stage:dev_implementation` (the planner already finished;
+  developer can pick it up).
+- Body has a Problem / Goal section but no AC →
+  `stage:planning` (needs the planning bundle).
+- Body is a one-liner or empty → file an inbox letter asking the
+  PO to flesh out the brief; don't guess a stage.
+
+Apply the chosen label, then comment one line on the ticket
+explaining the inference (tag `[Ship workspace:role-self-heal]`).
 
 ## Finish
 

@@ -47,9 +47,25 @@ move on to Phase 2.
 
 ### Phase 2 — Test automation
 
-Add automated tests so the regression sticks. Work on the same branch
-as the developer (`fix/{{ISSUE}}-auto`). Add tests at the layers the
-architect specified:
+Add automated tests so the regression sticks.
+
+**Branch contract — this is non-negotiable.** You commit on the
+**developer's existing branch**. The runner already checked it out
+for you at the start of this run — you do not `git checkout` a new
+branch, you do not `gh pr create`, you do not open a second PR.
+Push test commits on top of what the developer wrote so the
+existing PR picks them up.
+
+If you find yourself preparing to call `gh pr create`, stop — that's
+the sign you went off the rails. The developer's PR is the one that
+ships; your job is to extend it, not duplicate it.
+
+The dev's branch is what `git rev-parse --abbrev-ref HEAD` shows;
+the dev's PR URL is in the prior `[Ship SDLC:role-developer]`
+comment on this ticket (or `gh pr list --head $(git rev-parse
+--abbrev-ref HEAD)` if you need to confirm).
+
+Add tests at the layers the architect specified:
 
 - **Unit / component** for new pure logic, schema validation, edge
   cases.
@@ -70,10 +86,34 @@ missing the issue is fine — that's why we run both layers.)
 
 ## Finish
 
+**Test commits are the deliverable for shape A.** The rubric
+scores `outcome=ready_next_step` at 0 if `test_commits` is empty
+on the dev's branch. Before you transition the ticket or add the
+`[Ship SDLC:role-validation]` tag, verify:
+
+1. `git status` shows no uncommitted test changes (you committed
+   them) AND
+2. `git log origin/main..HEAD --oneline` shows at least one
+   `test(...)` commit you authored AND
+3. Those commits actually touch files under `tests/`.
+
+If any of the three is false, you didn't deliver Phase 2 — finish
+with `outcome=blocked` describing why (e.g., "couldn't write tests
+without adding `supertest` as a dev dep, deferring to operator").
+Do NOT transition to code_review claiming the run is done when no
+tests landed.
+
 You ARE a code-changing role for Phase 2, so when both phases pass
 and you've added automated tests, your sidecar MUST set `pr` (the
 runner will push your test commits to the same branch and let the
-existing PR pick them up — no second PR):
+existing PR pick them up — no second PR).
+
+**`pr.title` and `pr.body` are metadata for the existing PR** —
+the runner uses them only if it needs to amend the PR description
+to mention the test coverage. They do **not** open a new PR. If a
+second PR shows up in the audit log after your run, the runner
+detected an unexpected push pattern; the rubric flags this as a
+breach of the branch contract above.
 
 ```json
 {
