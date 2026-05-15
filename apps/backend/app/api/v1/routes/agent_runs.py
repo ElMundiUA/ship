@@ -328,7 +328,14 @@ class FinishIn(BaseModel):
     # carries the structured shape (Problem / Goal / AC / Scope /
     # Risks / etc.). Linear keeps prior bodies in the issue activity
     # feed so the operator can always see what changed.
-    description: str | None = Field(default=None, max_length=20_000)
+    # 100KB cap — Linear's own description cap is ~256KB so we stay
+    # well under that, but we lift the original 20KB ceiling because
+    # the planning bundle's combined Brief + Architecture + Test plan
+    # on a real ticket easily runs 25-40KB (askslayer/PAC-23 wrote
+    # 26KB on its second clean planning run and got rejected with
+    # 422 by this validator on 2026-05-15, stalling the entire
+    # chain three weeks past the E16 cutover).
+    description: str | None = Field(default=None, max_length=100_000)
     # Decomposition stage artefacts: the role's section of the project
     # body. Persisted via the tracker's ``upsert_project_section``
     # adapter (replace-or-append the ``## <section>`` block). Empty
