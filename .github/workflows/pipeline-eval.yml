@@ -1,0 +1,152 @@
+name: Ship · pipeline eval
+
+# End-to-end pipeline e2e suite + dual-judge eval, captured into a
+# tagged metrics row. Cost ~$0.10/run (Anthropic + OpenAI judges) +
+# Cursor compute time, so this is **manual dispatch by default**.
+# Weekly cron is wired but disabled — flip ``schedule`` on if you
+# want continuous baseline tracking.
+#
+# Required repository secrets (Settings → Secrets and variables →
+# Actions → New repository secret):
+#
+#   E2E_PIPELINE_WORKSPACE_ID   — UUID from seed_e2e_pipeline_workspace.py
+#   E2E_PIPELINE_PO_TOKEN       — PO PAT (from same seed)
+#   E2E_PIPELINE_DEV_TOKEN      — dev PAT (from same seed)
+#   E2E_PIPELINE_GH_TOKEN       — GH PAT with write on ElMundiUA/ship-e2e-pipeline
+#   E2E_SHIP_API_BASE           — Ship backend origin (https://api.ship.elmundi.com)
+#   CURSOR_API_KEY              — Cursor Cloud key
+#   ANTHROPIC_API_KEY           — Claude judge
+#   OPENAI_API_KEY              — GPT-5-mini judge
+#
+# Workspace bootstrap is operator-side: run
+# ``tools/scripts/seed_e2e_pipeline_workspace.py`` once against the
+# target backend, paste the printed tokens into the secrets above.
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "EVAL_RUN_ID label (defaults to git sha + timestamp)"
+        required: false
+        type: string
+      routines:
+        description: "Subset of routines to run, comma-separated (default: all)"
+        required: false
+        type: string
+        default: "all"
+  # Uncomment to enable weekly baseline tracking. Each run costs
+  # ~$0.10 + a Cursor session per bundle (5-7 min × 5 routines).
+  # schedule:
+  #   - cron: "0 5 * * 1"   # Mondays 05:00 UTC
+
+concurrency:
+  # Serialise so two operator-triggered runs don't both file PRs
+  # on the same ticket lineage in the sandbox repo.
+  group: pipeline-eval
+  cancel-in-progress: false
+
+jobs:
+  pipeline:
+    name: pipeline e2e + judge
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-backend.txt
+
+      - name: Resolve run id
+        id: runid
+        run: |
+          if [ -n "${{ inputs.run_id }}" ]; then
+            echo "id=${{ inputs.run_id }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "id=$(date -u +%Y-%m-%dT%H-%M-%SZ)-${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install shipctl + Cursor CLI + Playwright
+        run: |
+          npm install -g @elmundi/ship-cli@latest
+          curl -fsS https://cursor.com/install | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.local/share/cursor-agent/versions" >> "$GITHUB_PATH"
+          cd e2e && npm ci && npx playwright install --with-deps chromium
+
+      - name: Install eval-judge deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install anthropic openai json-repair
+
+      - name: Use local monorepo shipctl
+        run: echo "E2E_SHIPCTL_BIN=$(pwd)/packages/cli/bin/shipctl.mjs" >> "$GITHUB_ENV"
+
+      - name: Run pipeline e2e suite (capture artifacts)
+        working-directory: e2e
+        env:
+          EVAL_RUN_ID: ${{ steps.runid.outputs.id }}
+          E2E_RUN_PIPELINE: "1"
+          E2E_SHIP_API_BASE: ${{ secrets.E2E_SHIP_API_BASE }}
+          E2E_PIPELINE_WORKSPACE_ID: ${{ secrets.E2E_PIPELINE_WORKSPACE_ID }}
+          E2E_PIPELINE_PO_TOKEN: ${{ secrets.E2E_PIPELINE_PO_TOKEN }}
+          E2E_PIPELINE_DEV_TOKEN: ${{ secrets.E2E_PIPELINE_DEV_TOKEN }}
+          E2E_PIPELINE_REPO: ElMundiUA/ship-e2e-pipeline
+          E2E_PIPELINE_AGENT: cursor
+          E2E_PIPELINE_GH_TOKEN: ${{ secrets.E2E_PIPELINE_GH_TOKEN }}
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.routines }}" = "all" ] || [ -z "${{ inputs.routines }}" ]; then
+            specs=(pipeline-planning.wired.spec.ts
+                   pipeline-decomposition.wired.spec.ts
+                   pipeline-dev.wired.spec.ts
+                   pipeline-validation.wired.spec.ts
+                   pipeline-self-heal.wired.spec.ts)
+          else
+            IFS=',' read -ra ROUTINES <<< "${{ inputs.routines }}"
+            specs=()
+            for r in "${ROUTINES[@]}"; do
+              specs+=("pipeline-${r}.wired.spec.ts")
+            done
+          fi
+          npx playwright test "${specs[@]}" --workers=1 --reporter=line --timeout=1800000
+
+      - name: Judge artifacts (Claude + GPT-5-mini)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          PYTHONPATH=. python tools/eval/judge.py \
+            --run-id "${{ steps.runid.outputs.id }}" | tee eval-summary.txt
+
+      - name: Upload artifacts + verdicts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-eval-${{ steps.runid.outputs.id }}
+          path: |
+            tools/eval/runs/${{ steps.runid.outputs.id }}/
+            tools/eval/results/${{ steps.runid.outputs.id }}/
+            tools/eval/metrics.jsonl
+            eval-summary.txt
+          retention-days: 90
+
+      - name: Post summary to job log
+        if: always()
+        run: |
+          {
+            echo "## Pipeline eval — \`${{ steps.runid.outputs.id }}\`"
+            echo ""
+            echo '```'
+            cat eval-summary.txt || echo "(no summary captured)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

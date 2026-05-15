@@ -22,9 +22,30 @@
 
 ---
 
+### 3. `pipeline-eval.yml` — **Ship · pipeline eval**
+
+**Когда:** `workflow_dispatch` only (LLM cost — ~$0.10/run + Cursor compute).
+
+**Что делает:** запускает `pipeline-*.wired.spec.ts` против реального Cursor на sandbox repo `ElMundiUA/ship-e2e-pipeline`, дампит per-routine артефакты, потом гоняет `tools/eval/judge.py` (Claude Sonnet 4.6 + GPT-5-mini) поверх. Скоры + improvements выгружаются как actions artifact (`pipeline-eval-<run-id>/`), per-tick row append'ится в `tools/eval/metrics.jsonl`. Секреты — см. header в YAML.
+
+---
+
 ## Без префикса `Ship` в `name:`
 
-### 3. `version-check.yml`
+### 4. `ci.yml`
+
+**Когда:** PR (любые пути) и push в `main`.
+
+**Что делает:** PR-валидация. Пять параллельных job'ов:
+- **pytest (apps/backend)** — service Postgres (pgvector) + alembic upgrade + полный pytest по `apps/backend/tests/`
+- **tsc --noEmit** — typecheck матрицей по `e2e` + `apps/console`
+- **vitest (apps/console)** — `apps/console/src/**/*.test.tsx`
+- **node --test (packages/cli)** — `packages/cli/tests/*.test.mjs`
+- **eval imports + rubric sanity** — smoke: судьи импортируются, все 5 rubric markdown'ов содержат "Output format". Реальные LLM-вызовы здесь не делаются.
+
+Конкурентный gate: новый коммит в ту же PR-ветку отменяет stale ран.
+
+### 5. `version-check.yml`
 
 **Когда:** PR (по путям версий) и каждый push в `main`.
 
@@ -32,7 +53,7 @@
 
 ---
 
-### 4. `bundle-version-check.yml`
+### 6. `bundle-version-check.yml`
 
 **Когда:** PR при изменениях сид-бандла / стартеров.
 
@@ -40,7 +61,7 @@
 
 ---
 
-### 5. `artifact-check.yml`
+### 7. `artifact-check.yml`
 
 **Когда:** PR при изменениях `artifacts/`**.
 
@@ -48,7 +69,7 @@
 
 ---
 
-### 6. `auto-tag-version.yml`
+### 8. `auto-tag-version.yml`
 
 **Когда:** push в `main`, если изменился `VERSION`.
 
@@ -56,7 +77,7 @@
 
 ---
 
-### 7. `npm-publish-cli.yml` — **Publish @elmundi/ship-cli to npm**
+### 9. `npm-publish-cli.yml` — **Publish @elmundi/ship-cli to npm**
 
 **Когда:** теги `v`* / `cli-v*`, `workflow_dispatch`.
 
@@ -84,12 +105,14 @@ Playwright в GitHub Actions не гоняем — см. `e2e/README.md`.
 ## Сводка
 
 
-| Файл                          | Суть                  |
-| ----------------------------- | --------------------- |
-| `docker-publish-platform.yml` | Образы + деплой       |
-| `ship-trigger-schedule.yml`   | Trigger каждые 30 мин |
-| `version-check.yml`           | Версии синхрон        |
-| `bundle-version-check.yml`    | Версия сид-бандла     |
-| `artifact-check.yml`          | Хэши `artifacts/`**   |
+| Файл                          | Суть                                      |
+| ----------------------------- | ----------------------------------------- |
+| `docker-publish-platform.yml` | Образы + деплой                           |
+| `ship-trigger-schedule.yml`   | Trigger каждые 30 мин                     |
+| `pipeline-eval.yml`           | Pipeline e2e + dual-judge eval (manual)   |
+| `ci.yml`                      | PR-валидация: pytest / tsc / vitest / cli |
+| `version-check.yml`           | Версии синхрон                            |
+| `bundle-version-check.yml`    | Версия сид-бандла                         |
+| `artifact-check.yml`          | Хэши `artifacts/`**                       |
 | `auto-tag-version.yml`        | Автотег               |
 | `npm-publish-cli.yml`         | npm publish CLI       |

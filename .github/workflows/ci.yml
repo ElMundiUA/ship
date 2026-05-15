@@ -1,0 +1,183 @@
+name: ci
+
+# PR-validation gate. Runs on every PR + every push to main. Each
+# job is independent so a backend-only change doesn't pay the
+# console-build tax, and a frontend tweak doesn't wait on pytest.
+#
+# Slow paths (process e2e against real Cursor / GitHub) live in a
+# separate workflow gated on manual dispatch — keep this one under
+# ~5 minutes total wall clock.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+# Cancel stale runs on the same branch when a new commit lands.
+# Saves both wall clock and runner minutes.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # ---- Python backend ----------------------------------------------------
+  backend-tests:
+    name: pytest (apps/backend)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      # pytest-postgresql can spin its own pg per test, but a service
+      # container gives the fixtures a stable connection target —
+      # half the test files target this. Matches DEV_LOCAL_DSN in
+      # the root Makefile so devs and CI hit the same shape.
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: ship
+          POSTGRES_PASSWORD: ship
+          POSTGRES_DB: ship
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-backend.txt
+
+      - name: Install backend deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-backend.txt
+
+      - name: Run migrations against the service Postgres
+        env:
+          ALEMBIC_DATABASE_URL: postgresql+psycopg://ship:ship@localhost:5433/ship
+          DATABASE_URL: postgresql://ship:ship@localhost:5433/ship
+        run: |
+          alembic -c apps/backend/alembic.ini upgrade head
+
+      - name: pytest
+        env:
+          DATABASE_URL: postgresql://ship:ship@localhost:5433/ship
+          ALEMBIC_DATABASE_URL: postgresql+psycopg://ship:ship@localhost:5433/ship
+          # Test fixtures don't need real keys, but the auth middleware
+          # sniffs them at import time on some paths.
+          SHIP_AUTH_MODE: local
+          SHIP_USE_MEMORY_ADAPTERS: "true"
+          ENCRYPTION_KEY: dGVzdC1lbmNyeXB0aW9uLWtleS0zMi1ieXRlcw==
+          JWT_SECRET: ci-test-jwt-secret-32-bytes-long-xx
+          PYTHONPATH: apps
+        run: pytest apps/backend/tests -ra --tb=short
+
+  # ---- TypeScript typecheck ---------------------------------------------
+  # Tight typecheck without running the full Next builds. The Docker
+  # workflow handles end-to-end build verification on merge.
+  typecheck:
+    name: tsc --noEmit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - e2e
+          - apps/console
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: ${{ matrix.package }}/package-lock.json
+
+      - name: Install deps (${{ matrix.package }})
+        working-directory: ${{ matrix.package }}
+        run: npm ci
+
+      - name: tsc --noEmit
+        working-directory: ${{ matrix.package }}
+        run: npx tsc --noEmit
+
+  # ---- Console unit tests (vitest) --------------------------------------
+  console-tests:
+    name: vitest (apps/console)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/console/package-lock.json
+      - name: Install console deps
+        working-directory: apps/console
+        run: npm ci
+      - name: vitest
+        working-directory: apps/console
+        run: npm test
+
+  # ---- shipctl CLI tests (node --test) ----------------------------------
+  cli-tests:
+    name: node --test (packages/cli)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: packages/cli/package-lock.json
+      - name: Install cli deps
+        working-directory: packages/cli
+        run: npm ci || npm install
+      - name: node --test
+        working-directory: packages/cli
+        run: npm test
+
+  # ---- Eval layer smoke (no LLM calls) ----------------------------------
+  # Confirms the judge imports + rubric parses; doesn't burn provider
+  # quota. Real LLM scoring lives in the nightly pipeline workflow.
+  eval-smoke:
+    name: eval imports + rubric sanity
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install eval deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install anthropic openai json-repair
+      - name: Imports + rubric markdown sanity
+        run: |
+          PYTHONPATH=. python -c "
+          from tools.eval.judges import claude, openai_judge
+          from tools.eval.judges.base import JudgeRequest, Improvement
+          from tools.eval import prices
+          import pathlib, sys
+          rubrics_dir = pathlib.Path('tools/eval/rubrics')
+          expected = {'planning.md', 'decomposition.md', 'dev.md', 'validation.md', 'self-heal.md'}
+          actual = {p.name for p in rubrics_dir.glob('*.md')}
+          missing = expected - actual
+          if missing:
+              print(f'missing rubrics: {missing}', file=sys.stderr); sys.exit(1)
+          for rubric in rubrics_dir.glob('*.md'):
+              body = rubric.read_text()
+              if 'Output format' not in body and 'output format' not in body:
+                  print(f'{rubric.name}: rubric lacks Output format section', file=sys.stderr)
+                  sys.exit(1)
+          print('imports OK; rubrics OK')
+          "
