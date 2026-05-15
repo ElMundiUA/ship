@@ -382,7 +382,14 @@ async def _emit_env_separation_warning(
     ``InboxItem.intake_handle`` — a second dispatch on the same
     project doesn't re-spam.
     """
-    handle = f"env-warn:{workspace_id}:{project_id}"
+    # ``InboxItem.intake_handle`` is VARCHAR(64); two full UUIDs +
+    # prefix overflow at 82 chars and the poller's transaction
+    # rolls back with ``StringDataRightTruncationError``, stalling
+    # the entire dispatch chain (caught on askslayer 2026-05-15
+    # right after this guard was added). Short-prefix the IDs —
+    # collision risk is per-workspace + per-project and 8 hex chars
+    # of each is well under 2⁻³² per pair within a single tenant.
+    handle = f"env-warn:{str(workspace_id)[:8]}:{str(project_id)[:8]}"
     existing = (
         await session.execute(
             select(InboxItem.id).where(InboxItem.intake_handle == handle).limit(1)
