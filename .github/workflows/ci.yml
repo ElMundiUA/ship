@@ -73,7 +73,10 @@ jobs:
           # sniffs them at import time on some paths.
           SHIP_AUTH_MODE: local
           SHIP_USE_MEMORY_ADAPTERS: "true"
-          ENCRYPTION_KEY: dGVzdC1lbmNyeXB0aW9uLWtleS0zMi1ieXRlcw==
+          # Valid Fernet key — fresh generated for CI only. Not used
+          # to encrypt anything that outlives the test run; rotate
+          # if you copy this anywhere production-shaped.
+          ENCRYPTION_KEY: eYOoXOtmW3DOn6R6pZWq6RlaSp-zHHXt4lPm_XfNOWk=
           JWT_SECRET: ci-test-jwt-secret-32-bytes-long-xx
           PYTHONPATH: apps
         run: pytest apps/backend/tests -ra --tb=short

@@ -1713,7 +1713,7 @@ Run
   --routine     id from process.routines in .ship/config.yml (cron-driven)
   --specialist  agent-role slug from the Ship registry (pipeline-pick fallback)
   --status-file <path>  also write the final status JSON to this file (the
-                        same payload as ``--json`` stdout). The schedule
+                        same payload as --json stdout). The schedule
                         workflow uses this to loop through routines and
                         skip past noops without parsing stderr.
 
