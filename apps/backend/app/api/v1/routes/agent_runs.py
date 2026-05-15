@@ -565,6 +565,36 @@ async def get_next_task(
         # apply uniformly. Caught on askslayer/PAC-23 2026-05-15
         # after E16/ELS-124 + bundle 0.36 reseed.
         if ticket_ref:
+            # Cross-stage cascade hands the next agent its prompt from
+            # the tracker's description, which the previous stage just
+            # finished writing. Linear's read-replica lag (40-90s in
+            # practice on askslayer/PAC-{21,22,23} 2026-05-15) is
+            # longer than any reasonable cascade settle, so we read
+            # Ship's own ``agent_run.finish`` audit as the
+            # authoritative source for the freshly-written description
+            # and overlay it on top of whatever the tracker returned.
+            # The agent's sidecar always lands in our DB before the
+            # tracker mutation, so this read is always at least as
+            # fresh as the tracker.
+            from sqlalchemy import desc as _sa_desc
+            last_finish = (
+                await session.execute(
+                    select(AuditLog)
+                    .where(
+                        AuditLog.workspace_id == workspace_id,
+                        AuditLog.action == "agent_run.finish",
+                        AuditLog.payload["ticket_ref"].astext == ticket_ref,
+                    )
+                    .order_by(_sa_desc(AuditLog.created_at))
+                    .limit(1)
+                )
+            ).scalars().first()
+            audit_description = None
+            audit_title = None
+            if last_finish is not None and isinstance(last_finish.payload, dict):
+                audit_description = last_finish.payload.get("description")
+                if not isinstance(audit_description, str) or len(audit_description) < 50:
+                    audit_description = None
             snapshot_fn = getattr(resolved.gateway, "get_ticket_snapshot", None)
             snapshot = None
             if snapshot_fn is not None:
@@ -600,11 +630,18 @@ async def get_next_task(
             if snapshot is None:
                 rows = []
             else:
+                snap_body = snapshot.get("description") or ""
+                # Overlay Ship's DB description if it's longer than
+                # what the tracker returned (i.e. the tracker's
+                # replica hasn't caught up to our last
+                # ``set_description`` mutation yet).
+                if audit_description and len(audit_description) > len(snap_body):
+                    snap_body = audit_description
                 rows = [
                     {
                         "id": snapshot.get("ticket_ref") or ticket_ref,
                         "title": snapshot.get("title"),
-                        "body": snapshot.get("description"),
+                        "body": snap_body,
                         "url": snapshot.get("url"),
                         "labels": snapshot.get("labels") or [],
                         "state": snapshot.get("state"),
