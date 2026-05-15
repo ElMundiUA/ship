@@ -1113,6 +1113,16 @@ async def wizard_seed(
             mint_new_api_pat=True,
         )
     except Exception as exc:  # pragma: no cover — surfaced as 502
+        # Real reason has been swallowed by HTTPException all summer.
+        # Operators (and Sentry, when wired) need the traceback
+        # surfaced loud the moment the secret-push step fails —
+        # repo permission drift / App-scope drift / libsodium boot
+        # issues all land here and the 502 body alone is useless.
+        logger.exception(
+            "wizard_seed: ship_ci_secret_push_failed for repo=%s install=%s",
+            repo_row.full_name,
+            install_row.installation_id,
+        )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail={
@@ -1121,6 +1131,8 @@ async def wizard_seed(
                     "Couldn't push Ship CI secrets (SHIP_API_BASE / "
                     "SHIP_API_TOKEN) to GitHub Actions. The seed PR was not opened."
                 ),
+                "error_class": exc.__class__.__name__,
+                "error": str(exc)[:512],
             },
         ) from exc
 
