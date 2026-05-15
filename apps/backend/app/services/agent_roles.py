@@ -163,14 +163,53 @@ def _load_defaults() -> dict[str, AgentRoleDefault]:
     return out
 
 
+# Legacy slug → current slug. The E16 / E17 refactors collapsed
+# several pre-bundle specialists into bundle roles. Customer repos
+# still on the pre-cutover bundle (0.34 and earlier) carry .ship/
+# config.yml entries referencing the old names; without this map
+# their hourly cron tick blows up with ``unknown agent role`` and
+# the whole pipeline stalls (askslayer 2026-05-15).
+#
+# This is a forward-compat shim — once every customer is reseeded
+# to the current bundle the map can drop to {}. Kept here rather
+# than as fake-content .md files in the resources dir so
+# ``list_defaults()`` doesn't return zombie entries.
+_LEGACY_ALIASES: dict[str, str] = {
+    "workflow-self-heal": "self-heal",
+    "daily-retro": "daily-digest",
+    "learning-capture": "weekly-audit",
+    "tech-reviewer": "reviewer",
+    "qa-reviewer": "reviewer",
+    "security-officer": "reviewer",
+    "process-reviewer": "reviewer",
+    "intake": "planning",
+    "ba": "planning",
+    "tech-architect": "planning",
+    "qa-architect": "planning",
+    "qa-engineer": "validation",
+    "qa-automation": "validation",
+}
+
+
 def list_defaults() -> list[AgentRoleDefault]:
     """All Ship-shipped defaults, sorted by slug."""
     return list(_load_defaults().values())
 
 
 def get_default(slug: str) -> AgentRoleDefault | None:
-    """One Ship default by slug, or ``None`` when missing."""
-    return _load_defaults().get(slug)
+    """One Ship default by slug, or ``None`` when missing.
+
+    Legacy slugs from the pre-bundle catalog are silently aliased
+    to their bundle equivalents via :data:`_LEGACY_ALIASES`.
+    """
+    defaults = _load_defaults()
+    hit = defaults.get(slug)
+    if hit is not None:
+        return hit
+    alias = _LEGACY_ALIASES.get(slug)
+    if alias is not None:
+        return defaults.get(alias)
+    return None
 
 
 def reset_default_cache() -> None:
