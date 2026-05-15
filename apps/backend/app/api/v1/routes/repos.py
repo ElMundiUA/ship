@@ -950,6 +950,59 @@ async def wizard_seed(
             },
         )
 
+    # ── Idempotency gate ─────────────────────────────────────────
+    # Wizard was opening a fresh PR on every operator click even when
+    # the bundle was already up to date — 11 sequential
+    # ``ship/bundle-wizard-default-<ts>`` PRs piled up on askslayer/
+    # visitor-web in two weeks, all with identical content. Check
+    # ``installed_bundle_version`` and, if the most recent seed audit
+    # for this repo records the **current** ``BUNDLE_VERSION``,
+    # short-circuit with the existing PR URL (if it's still open) or
+    # a 200 "no-op" payload so the FE can show "already up to date"
+    # instead of opening another draft.
+    #
+    # Bumping ``BUNDLE_VERSION`` server-side (e.g. 0.35 → 0.36 in this
+    # commit) is what *forces* a fresh seed PR — the gate compares
+    # against the canonical constant, not against the last audit's
+    # version, so a server-side bundle fix doesn't get masked by a
+    # stale recorded version.
+    if (
+        repo_row.installed_bundle_version is not None
+        and repo_row.installed_bundle_version == _BUNDLE_VERSION
+    ):
+        last_seed = (
+            await session.execute(
+                select(AuditLog)
+                .where(
+                    AuditLog.workspace_id == workspace_id,
+                    AuditLog.action == "repo.wizard_seed",
+                    AuditLog.target_id == str(repo_row.id),
+                )
+                .order_by(AuditLog.created_at.desc())
+                .limit(1)
+            )
+        ).scalars().first()
+        if last_seed is not None:
+            seed_pr_url = (last_seed.payload or {}).get("pr_url")
+            seed_pr_number = (last_seed.payload or {}).get("pr_number")
+            try:
+                seed_pr_number_int = int(seed_pr_number) if seed_pr_number else 0
+            except (TypeError, ValueError):
+                seed_pr_number_int = 0
+            seed_branch = (last_seed.payload or {}).get("branch") or ""
+            return WizardSeedOut(
+                pr_url=str(seed_pr_url or ""),
+                pr_number=seed_pr_number_int,
+                branch=str(seed_branch),
+                files=[],
+                presets=["default"],
+                knowledge_slugs=[],
+                tracker_kind=(last_seed.payload or {}).get("tracker_kind"),
+                run_token_prefix=repo_row.run_token_prefix,
+                run_token_rotated=False,
+                synthetic_lanes_created=0,
+            )
+
     # ── Workspace defaults gate ──────────────────────────────────
     # Three workspace-level invariants must hold before any repo can
     # be seeded. Each missing piece flips a stable error code so the

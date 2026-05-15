@@ -91,10 +91,16 @@ CASCADE_WINDOW_S: Final[int] = 60
 
 # Per-ticket lock TTL. The dispatch fires a single workflow run which
 # typically completes in 5-10 min for the SDLC bundles we'll ship in
-# ELS-123. Set the lock at 60 min so an agent that legitimately needs
-# longer (decomposition bundle) doesn't get its slot re-taken
-# mid-run. Operators can override per-row at insert time if needed.
-DEFAULT_LOCK_TTL_S: Final[int] = 3600
+# ELS-123. 20 min keeps decomposition (the slow tail) inside the
+# window while making sure a runner that died early (Cursor crash,
+# CLI exited usage) doesn't strand the next transition for an hour —
+# we release explicitly from the ``workflow_run.completed`` webhook
+# (``github_app._release_dispatch_lock_for_workflow_run``), and the
+# TTL is the belt-and-braces fallback in case the webhook never
+# arrives (customer egress firewall, GitHub outage). Pre-2026-05-15
+# this was 60 min and stranded askslayer's PAC-23 retry for the full
+# hour after the first GHA run died on ``unknown argument: --ticket``.
+DEFAULT_LOCK_TTL_S: Final[int] = 20 * 60
 
 
 # ---------------------------------------------------------------------------
@@ -491,6 +497,28 @@ async def maybe_dispatch(
         session, workspace_id=workspace_id, key=lock_key
     )
     if not got_lock:
+        # Audit the refusal so operators don't see a silent black hole
+        # when a transition arrives but no GH workflow_dispatch follows.
+        # Without this row the only signal that we refused was an
+        # absence of ``agent_run.dispatch`` next to ``tracker.event.
+        # received`` — which is what stalled askslayer's PAC-23 test
+        # on 2026-05-15: the previous lock from a failed run never
+        # released and every poll tick refused silently for the next
+        # hour.
+        session.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                action="dispatch.lock_held",
+                target_kind="ticket",
+                target_id=ticket_ref,
+                payload={
+                    "trigger_kind": trigger_kind,
+                    "fsm_stage": fsm_stage,
+                    "routine_id": routine_id,
+                    "lock_key": lock_key,
+                },
+            )
+        )
         return DispatchResult(
             fired=False, reason=_Reason.LOCK_HELD, lock_key=lock_key
         )

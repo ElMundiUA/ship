@@ -145,31 +145,37 @@ async function _runCommandImpl(ctx, rest) {
   }
 
   const { config } = readConfig(cwd);
-  // Routine mode: resolve from ``.ship/config.yml``. Specialist mode
-  // (used by the pipeline-pick fallback in the trigger workflow):
-  // synthesize a minimal executable so the rest of the pipeline can
-  // stay routine-shaped without inventing a ``pipeline:<slug>``
-  // routine in the YAML.
-  let resolved;
-  if (args.specialist) {
-    resolved = {
-      kind: "specialist",
-      id: args.specialist,
-      source: { specialist: args.specialist },
-      executable: {
-        id: args.specialist,
-        type: "specialist",
-        kind: "pipeline_pick",
-        specialist: args.specialist,
-        prompt: null,
-      },
-    };
-  } else {
-    resolved = resolveExecutable(config, args.routine);
-    if (!resolved) {
-      die(EXIT_USAGE, `unknown routine '${args.routine}' in .ship/config.yml`);
-    }
-  }
+  // Post-E16, the backend dispatcher fires `workflow_dispatch` with
+  // a concrete `(routine_id, ticket_ref)` pair — ``routine_id`` is
+  // the bundle slug (``planning`` / ``developer`` / ``validation`` /
+  // ``reviewer`` / ``decomposition`` / workspace ``self-heal`` /
+  // ``daily-digest`` / ``weekly-audit``) and matches the agent-role
+  // slug on the server. The customer's ``.ship/config.yml`` no longer
+  // owns the schedule (the customer-side cron picker was retired in
+  // ELS-124), so there's no ``process.routines`` map to look anything
+  // up in. Both ``--routine`` and ``--specialist`` collapse to the
+  // same synthetic executable: pass the slug straight through and let
+  // ``GET /v1/.../agent-roles/{slug}/resolve`` decide whether it's a
+  // real role.
+  //
+  // ``process.routines`` entries in legacy config files (preserved
+  // for back-compat with repos that still carry overrides like a
+  // custom inline prompt) take precedence when ``--routine`` matches
+  // — that's the only path that still cracks open ``config``.
+  const slug = args.specialist || args.routine;
+  const override = !args.specialist ? resolveExecutable(config, args.routine) : null;
+  const resolved = override || {
+    kind: "specialist",
+    id: slug,
+    source: { specialist: slug },
+    executable: {
+      id: slug,
+      type: "specialist",
+      kind: "pipeline_pick",
+      specialist: slug,
+      prompt: null,
+    },
+  };
 
   // ``runId`` for emit/branch naming carries either the routine id or
   // the specialist slug. Logging downstream uses ``runHandle``.

@@ -35,9 +35,17 @@ jobs:
           # changed in the merge commit vs. the tree before it, so
           # pull at least two commits.
           fetch-depth: 2
-          # Default ``GITHUB_TOKEN`` is enough to push tags because
-          # tags are a ``contents: write`` operation.
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # IMPORTANT — must be a PAT, not ``GITHUB_TOKEN``. GitHub
+          # by design refuses to fan out workflow triggers from tag
+          # pushes authored by ``GITHUB_TOKEN`` (anti-recursion
+          # guard). Using ``RELEASE_TAG_PAT`` (classic PAT with
+          # ``contents:write`` + ``workflow``) makes the tag push
+          # propagate to ``npm-publish-cli.yml`` automatically —
+          # before this fix every VERSION bump tagged silently and
+          # never published (caught on 2026-05-15 when v0.16.11 was
+          # missing from npm for 4 days, masked by stale latest=
+          # 0.16.10 in the runner install).
+          token: ${{ secrets.RELEASE_TAG_PAT }}
 
       - uses: actions/setup-node@v4
         with:

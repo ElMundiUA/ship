@@ -24,7 +24,7 @@ import json
 import logging
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
@@ -806,6 +806,81 @@ async def _transition_linked_tickets_on_merge(
         )
 
 
+async def _release_dispatch_locks_for_workflow_run(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    run_started_at: datetime | None,
+    conclusion: str | None,
+) -> None:
+    """Free per-ticket dispatch locks bound to ``run_started_at``.
+
+    The dispatcher acquires ``agent_dispatch_locks`` rows before
+    firing ``workflow_dispatch`` so concurrent transitions on the
+    same ticket can't race. The happy path releases through the
+    runner's ``/finish`` callback; this fallback covers runs that
+    fail before reaching ``/finish`` (CLI usage errors, Cursor
+    crashes, runner OOM, GHA timeout) by deleting any lock whose
+    ``claimed_at`` is within a tight window around the run's start.
+
+    The window has to be tight because the same workspace may have
+    several locks alive (multiple tickets in flight). 60s on each
+    side of ``run_started_at`` is the empirical span between
+    ``dispatch_workflow`` accept (204) and the workflow_run.queued
+    webhook — well over normal API latency, well under typical
+    per-ticket spacing (we observe transitions ~5 min apart at the
+    most aggressive cadence). ``conclusion`` is logged for audit
+    but doesn't gate the release — even a success path benefits
+    from the cleanup if the runner crashed AFTER ``/finish`` but
+    before clean shutdown.
+    """
+    if run_started_at is None:
+        return
+    from sqlalchemy import text as _text
+
+    deleted = (
+        await session.execute(
+            _text(
+                """
+                DELETE FROM agent_dispatch_locks
+                WHERE workspace_id = :ws
+                  AND key LIKE 'ticket:%'
+                  AND claimed_at BETWEEN :lo AND :hi
+                RETURNING key
+                """
+            ),
+            {
+                "ws": workspace_id,
+                "lo": run_started_at - timedelta(seconds=60),
+                "hi": run_started_at + timedelta(seconds=60),
+            },
+        )
+    ).all()
+    if deleted:
+        keys = ",".join(row[0] for row in deleted)
+        logger.info(
+            "workflow_run.completed → released %d dispatch lock(s) "
+            "ws=%s conclusion=%s keys=%s",
+            len(deleted),
+            workspace_id,
+            conclusion,
+            keys,
+        )
+        session.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                action="dispatch.lock_released",
+                target_kind="workspace_repo",
+                target_id=None,
+                payload={
+                    "via": "workflow_run.completed",
+                    "conclusion": conclusion,
+                    "keys": [row[0] for row in deleted],
+                },
+            )
+        )
+
+
 async def _apply_workflow_run_event(
     session: AsyncSession, payload: dict[str, Any], action: str | None
 ) -> None:
@@ -922,6 +997,26 @@ async def _apply_workflow_run_event(
                 repo_row.full_name,
                 exc,
             )
+
+    # On Ship-managed run completion (success OR failure), release
+    # any dispatch lock acquired around the run's start time so the
+    # next Linear state transition can re-fire instead of bouncing
+    # off ``_Reason.LOCK_HELD`` for the rest of the lock's TTL. The
+    # in-runner ``/finish`` callback already releases the lock on
+    # the happy path; this handler is the fallback for runs that
+    # die before reaching the finish endpoint (CLI usage errors,
+    # Cursor crashes, runner OOM) — exactly the askslayer 2026-05-15
+    # symptom where the first GHA run died on ``unknown argument:
+    # --ticket`` and the lock kept refusing every subsequent
+    # transition for the full hour.
+    if is_ship_workflow and run.get("status") == "completed":
+        await _release_dispatch_locks_for_workflow_run(
+            session,
+            workspace_id=repo_row.workspace_id,
+            run_started_at=_parse_iso(run.get("run_started_at"))
+            or _parse_iso(run.get("created_at")),
+            conclusion=run.get("conclusion"),
+        )
 
     logger.debug("workflow_run cached action=%s run_id=%s", action, external_id)
 

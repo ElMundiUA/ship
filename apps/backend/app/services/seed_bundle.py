@@ -51,7 +51,6 @@ from datetime import datetime, timezone
 from backend.app.services import catalog as catalog_service
 from backend.app.services.catalog import KNOWLEDGE_STARTERS
 from backend.app.services.lane_recipes import DEFAULT_BUNDLE
-from backend.app.services.lane_recipes import default_seed_lanes
 from backend.app.services.tracker_fsm import (
     FSM_INSTALL_PATH,
     render_tracker_fsm,
@@ -212,7 +211,19 @@ from backend.app.services.tracker_fsm import (
 #         Still drains 4× more per tick than the pre-v0.32 single-
 #         action mode; just leaves headroom for the occasional 7-min
 #         agent without GHA hard-killing mid-stage.
-BUNDLE_VERSION: str = "0.35"
+# ``0.36`` → Drops ``process.routines`` / ``process.states`` /
+#         ``process.transitions`` from the seeded ``.ship/config.yml``.
+#         E16/ELS-124 moved scheduling to the backend dispatcher, so
+#         the customer-side routine map is dead weight — and the
+#         pre-E16 ``DEFAULT_SEED_LANES`` was still emitting the legacy
+#         slugs (``intake``/``tech_arch_plan``/…) while the dispatcher
+#         fires the new bundle slugs (``planning``/``developer``/…),
+#         exposed on askslayer 2026-05-15 as ``unknown routine
+#         'planning' in .ship/config.yml``. The seeded config now
+#         carries only repo metadata + API base + stack hints; the
+#         CLI's ``--routine X`` collapses straight to specialist
+#         resolution against the server-side agent-role registry.
+BUNDLE_VERSION: str = "0.36"
 
 # Default knowledge starters for PR 1. Empty by design: generated knowledge is
 # analyzed post-merge and proposed in a second PR. Historical callers can still
@@ -395,26 +406,23 @@ def compose_seed_files(
     # silently fall out of the runtime mapping; they still belong in
     # the bundle accounting (v2 marker) so the wizard can show them.
     #
-    # Decomposition routines (ELS-79) are merged into the same
-    # ``process.routines`` map so customer-side ``shipctl run
-    # --routine wbs`` resolves them like any SDLC routine. Each
-    # decomposition routine carries an explicit ``fsm_stage`` that
-    # overrides the role's default — that's how one role (``ba``)
-    # serves both ``ba_requirements`` (SDLC) and ``wbs``
-    # (decomposition) without per-process role clones.
-    routine_entries = catalog_service.bundle_routine_entries(default_seed_lanes())
-    decomp_routines = catalog_service.default_planning_process_config().get(
-        "routines", {}
-    )
-    if isinstance(decomp_routines, dict):
-        for routine_id, routine in decomp_routines.items():
-            if routine_id not in routine_entries:
-                routine_entries[routine_id] = dict(routine)
+    # E16/ELS-124 retired the customer-side scheduler. The backend
+    # dispatcher fires ``workflow_dispatch`` with the exact
+    # ``(routine_id, ticket_ref)`` pair to run — customers no longer
+    # own the schedule, and ``shipctl run`` no longer reads
+    # ``process.routines`` to map cron → specialist. So we stop
+    # writing the ``process.routines`` block: it's dead weight that
+    # only causes drift bugs (e.g. pre-E16 routine slugs lingering
+    # in fresh seed PRs while the new bundle dispatcher fires
+    # ``--routine planning``, exposed on askslayer 2026-05-15). The
+    # ``states`` / ``transitions`` map is also gone — operators read
+    # the FSM definition from Ship's catalog UI now, not from a YAML
+    # echo in their repo.
     config_yaml = catalog_service.emit_config_yaml(
         preset_id="default",
         repo_full_name=repo_full_name,
         lanes={},
-        process=catalog_service.default_development_process_config(routines=routine_entries),
+        process=None,
     )
     _add(CONFIG_PATH, config_yaml)
 
