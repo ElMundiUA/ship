@@ -309,6 +309,11 @@ class FinishIn(BaseModel):
         "needs_clarification",
         "blocked",
         "out_of_scope",
+        # Workspace bundles (self-heal / daily-digest) report
+        # ``noop`` when a tick found nothing actionable. Treated like
+        # ``ready_next_step`` with no ticket: only the audit row
+        # lands, no transition, no inbox.
+        "noop",
     ]
     fsm_stage: str | None = Field(default=None, max_length=64)
     stage_next: str | None = Field(default=None, max_length=64)
@@ -341,7 +346,15 @@ class FinishIn(BaseModel):
     # whether ``stage_next='planning_done'`` should flip the project's
     # dashboard row from Drafts → Parked (the PO promotes Parked →
     # Active manually when ready to ship; ELS-81).
-    process: Literal["development", "decomposition"] = "development"
+    # Loose accept: ``development`` (SDLC default), ``decomposition``
+    # (anchor pipeline), or any ``workspace_*`` flavour (self-heal /
+    # daily-digest / weekly-audit). Workspace bundles' role prompts
+    # don't constrain ``process``, and Cursor sometimes synthesises a
+    # bundle-specific label here — we accept that rather than 422
+    # the agent's audit row over a free-text field that the handler
+    # only reads as a coarse hint (``process == 'decomposition'`` is
+    # the only branch that actually keys on it).
+    process: str = Field(default="development", max_length=64)
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -2734,6 +2747,12 @@ async def finish_agent_run(
         )
         actions.append("inbox:no_tracker_bound")
 
+    elif payload.outcome == "noop":
+        # Workspace bundle reported "checked, nothing to do". Just
+        # record the audit row at the bottom; no transitions, no
+        # inbox letter.
+        actions.append("noop:workspace_bundle")
+
     elif payload.outcome == "ready_next_step":
         # Context-free routines (daily_*, audits with no findings, intake
         # on an empty queue) finish with ``ready_next_step`` + no ticket
@@ -2744,7 +2763,16 @@ async def finish_agent_run(
         if not payload.ticket_ref:
             actions.append("noop:no_ticket")
         else:
-            if not payload.stage_next:
+            # Workspace-scope bundles (self-heal / daily-digest /
+            # weekly-audit) reference a ticket in their finish when
+            # they make a targeted fix (relabeling an orphan,
+            # commenting on a stuck PR), but they don't move the
+            # FSM — ``stage_next`` is properly empty. SDLC routines
+            # still need ``stage_next``.
+            is_workspace_bundle = isinstance(payload.fsm_stage, str) and (
+                payload.fsm_stage.startswith("workspace_")
+            )
+            if not payload.stage_next and not is_workspace_bundle:
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                     detail={"code": "stage_next_required", "outcome": payload.outcome},
@@ -2932,12 +2960,24 @@ async def finish_agent_run(
             # not the next role's. The picker for ``stage_next`` reads
             # the previous-stage label as its "predecessor done"
             # signal — adding the wrong label breaks the chain.
-            await resolved.gateway.transition(
-                ref,
-                to_state=payload.stage_next,
-                from_state=payload.fsm_stage,
+            #
+            # Workspace bundles skip the FSM transition entirely:
+            # their corrections land via the agent's tool calls
+            # (label edit, comment), finish just records the audit
+            # row. Some agents synthesise a bundle-specific
+            # ``stage_next`` value like ``workspace_self_heal_done``;
+            # we ignore it rather than try to apply it as an FSM
+            # label and pollute the ticket.
+            is_workspace_bundle = isinstance(payload.fsm_stage, str) and (
+                payload.fsm_stage.startswith("workspace_")
             )
-            actions.append(f"tracker:transition:{payload.stage_next}")
+            if payload.stage_next and not is_workspace_bundle:
+                await resolved.gateway.transition(
+                    ref,
+                    to_state=payload.stage_next,
+                    from_state=payload.fsm_stage,
+                )
+                actions.append(f"tracker:transition:{payload.stage_next}")
 
             # Decomposition completion hook (ELS-75 + ELS-81). When
             # the planning anchor reaches the terminal stage, flip

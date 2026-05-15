@@ -236,8 +236,34 @@ async function _runCommandImpl(ctx, rest) {
   // 3) Resolve task. ``--dry-run`` skips the server call and uses a
   // synthetic task so the operator can see the prompt shape without
   // needing the new endpoints deployed.
+  //
+  // Workspace-scope bundles (``self-heal`` / ``daily-digest`` /
+  // ``weekly-audit``) carry an ``fsm_stage`` that starts with
+  // ``workspace_``. Their role prompts have no ``{{ISSUE}}``
+  // expectation — the agent operates on the workspace as a whole
+  // (audit-log scans + corrective writes). Hitting ``/tracker/next``
+  // for these would always return null and noop us out, so we skip
+  // the picker entirely and feed the agent a synthetic
+  // workspace-scope task.
   let task = null;
-  if (fsmStage) {
+  const isWorkspaceScope =
+    typeof fsmStage === "string" && fsmStage.startsWith("workspace_");
+  if (isWorkspaceScope) {
+    task = {
+      ticket_ref: "",
+      kind: "workspace",
+      title: `Workspace bundle: ${specialistSlug}`,
+      body: "",
+      url: null,
+      labels: [],
+      state: "open",
+      fsm_stage: fsmStage,
+    };
+    step("tracker_next", "skipped", {
+      reason: "workspace_scope",
+      fsm_stage: fsmStage,
+    });
+  } else if (fsmStage) {
     if (args.dryRun || ctx.dryRun) {
       task = {
         ticket_ref: "dry-run/sample#1",

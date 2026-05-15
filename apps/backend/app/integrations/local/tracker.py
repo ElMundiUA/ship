@@ -140,7 +140,18 @@ class MemoryTracker:
         rows = (await self._session.execute(stmt)).scalars().all()
         return [self._ticket_row_to_dict(r) for r in rows]
 
-    async def transition(self, ticket: TicketRef, *, to_state: str) -> None:
+    async def transition(
+        self,
+        ticket: TicketRef,
+        *,
+        to_state: str,
+        from_state: str | None = None,
+    ) -> None:
+        # ``from_state`` is the dispatcher's optimistic check — Linear's
+        # GraphQL transition mutation accepts it as a guard. Memory mode
+        # always succeeds and just swaps the label, so we accept the
+        # kwarg and ignore it.
+        del from_state
         row = await self._fetch_ticket_for_ref(ticket)
         if row is None:
             return  # mirror Linear behaviour: silently no-op on missing
@@ -159,6 +170,102 @@ class MemoryTracker:
             labels = [l for l in labels if not l.startswith("stage:")]
             labels.append(f"stage:{to_state}")
             row.labels = labels
+        row.updated_at = _utcnow()
+
+    async def add_signal_label(self, ticket: TicketRef, *, key: str) -> None:
+        """Memory parity for ``LinearTracker.add_signal_label``.
+
+        The finish handler's ``needs_clarification`` path calls this
+        to tag the ticket with ``needs:clarification`` so the picker
+        stops re-claiming it until the operator answers. Without the
+        method, finish returns 501 ``needs_clarification_unsupported``
+        for any memory-mode workspace.
+
+        ``key`` matches Linear's ``SIGNAL_LABELS`` keys — currently
+        only ``needs_clarification``; the label name is
+        ``needs:<key>``.
+        """
+        row = await self._fetch_ticket_for_ref(ticket)
+        if row is None:
+            return
+        label = f"needs:{key.replace('_', '-')}"
+        labels = list(row.labels or [])
+        if label not in labels:
+            labels.append(label)
+            row.labels = labels
+            row.updated_at = _utcnow()
+
+    async def list_project_tickets(
+        self,
+        *,
+        project_id: str,
+        open_only: bool = True,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Memory parity for ``LinearTracker.list_project_tickets``.
+
+        Reviewer routines + the e2e pipeline read this to inspect
+        children of a project. ``identifier`` keeps the Linear-shape
+        contract so callers can use the same dedup key
+        (``display_id``).
+        """
+        proj_uuid = _safe_uuid(project_id)
+        if proj_uuid is None:
+            return []
+        stmt = select(MemoryTrackerTicket).where(
+            MemoryTrackerTicket.workspace_id == self._workspace_id,
+            MemoryTrackerTicket.project_id == proj_uuid,
+        )
+        if open_only:
+            stmt = stmt.where(MemoryTrackerTicket.state.in_(_OPEN_STATES))
+        stmt = stmt.order_by(MemoryTrackerTicket.serial.asc()).limit(
+            max(1, min(limit, 250))
+        )
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return [
+            {
+                "id": row.display_id,
+                "identifier": row.display_id,
+                "title": row.title,
+                "url": self._ticket_url(row.display_id),
+                "state": row.state,
+                "labels": list(row.labels or []),
+            }
+            for row in rows
+        ]
+
+    async def get_ticket_snapshot(
+        self, ticket: TicketRef
+    ) -> dict[str, Any] | None:
+        """Cheap snapshot mirroring ``LinearTracker.get_ticket_snapshot``.
+
+        Read by the decomposition completion hook to walk
+        ``ticket_ref → project_id → priorities row`` and flip it to
+        ``parked``. Without this the hook bails on
+        ``snapshot_fn is None`` and the project never leaves Drafts.
+        """
+        row = await self._fetch_ticket_for_ref(ticket)
+        if row is None:
+            return None
+        return {
+            "ticket_ref": row.display_id,
+            "title": row.title,
+            "description": row.body,
+            "url": self._ticket_url(row.display_id),
+            "state": row.state,
+            "labels": list(row.labels or []),
+            "project_id": str(row.project_id) if row.project_id else None,
+        }
+
+    async def set_description(self, ticket: TicketRef, *, body: str) -> None:
+        """Replace the ticket body. Used by the finish handler to splice
+        the planner / BA / intake markdown into the issue description
+        (Linear-shape adapters update the GraphQL ``description`` field;
+        memory mode just overwrites the row's ``body``)."""
+        row = await self._fetch_ticket_for_ref(ticket)
+        if row is None:
+            return
+        row.body = body
         row.updated_at = _utcnow()
 
     async def comment(self, ticket: TicketRef, *, body: str) -> None:
@@ -183,8 +290,13 @@ class MemoryTracker:
         project_hint: str | None = None,
         project_id: str | None = None,
         ticket_type: Literal["bug", "feature", "task"] | None = None,
+        priority: int | None = None,
     ) -> CreatedTicket:
-        del project_hint  # no multi-project ambiguity in offline mode
+        # Linear-shaped adapters accept ``priority`` (0-4). The memory
+        # adapter has no priority column today; drop the value rather
+        # than 422 the caller so the route's ``priority=payload.priority``
+        # default-None pass-through doesn't break memory-mode workspaces.
+        del project_hint, priority
         merged_labels = list(labels or [])
         if ticket_type and not any(
             l.startswith("type:") for l in merged_labels
