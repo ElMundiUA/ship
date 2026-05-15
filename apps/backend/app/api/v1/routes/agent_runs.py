@@ -627,8 +627,48 @@ async def get_next_task(
                         break
                     if attempt < 2:
                         await _asyncio.sleep(5)
-            if snapshot is None:
-                rows = []
+            # Fallback synthesis: when the tracker replica returned
+            # NULL or an empty issue but we have a recent audit
+            # finish for the same ticket_ref, synthesise the row
+            # from the audit description + a placeholder title.
+            # Without this fallback the cascade dies on stale
+            # replicas — caught on PAC-{19,20,21,22} 2026-05-15.
+            if snapshot is None or not (snapshot.get("title") or ""):
+                if audit_description:
+                    # Pull a reasonable title from the previous
+                    # tracker.event.received audit (we recorded the
+                    # ticket's title at the moment dispatch fired)
+                    # or fall back to the ticket_ref itself.
+                    audit_title_row = (
+                        await session.execute(
+                            select(AuditLog)
+                            .where(
+                                AuditLog.workspace_id == workspace_id,
+                                AuditLog.action == "tracker.event.received",
+                                AuditLog.target_id == ticket_ref,
+                            )
+                            .order_by(_sa_desc(AuditLog.created_at))
+                            .limit(1)
+                        )
+                    ).scalars().first()
+                    audit_title = None
+                    if audit_title_row is not None and isinstance(audit_title_row.payload, dict):
+                        audit_title = audit_title_row.payload.get("title")
+                    rows = [
+                        {
+                            "id": ticket_ref,
+                            "title": audit_title or ticket_ref,
+                            "body": audit_description,
+                            "url": (snapshot or {}).get("url"),
+                            "labels": (snapshot or {}).get("labels") or [],
+                            "state": (snapshot or {}).get("state"),
+                            "project_id": (snapshot or {}).get("project_id"),
+                        }
+                    ]
+                elif snapshot is None:
+                    rows = []
+                else:
+                    rows = []
             else:
                 snap_body = snapshot.get("description") or ""
                 # Overlay Ship's DB description if it's longer than
