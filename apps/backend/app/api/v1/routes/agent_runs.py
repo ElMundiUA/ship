@@ -3445,6 +3445,14 @@ async def finish_agent_run(
                 "ticket_ref": payload.ticket_ref,
                 "actions": actions,
                 "had_comment": bool(payload.comment),
+                # Persist the description the agent wrote so the
+                # next cascade-fired stage can read it from our DB
+                # while Linear's replica catches up
+                # (``/tracker/next`` overlay path). Without this the
+                # downstream dev_implementation stage saw an empty
+                # snapshot and exited noop with ``ticket_ref:null``
+                # (askslayer/PAC-20,21,22,23 2026-05-15).
+                "description": payload.description,
             },
         )
     )
