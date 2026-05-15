@@ -141,10 +141,24 @@ export async function runClaudeAgent({
     child.on("error", reject);
     child.on("exit", (code) => resolve(code ?? 1));
   });
-  // ``readline`` close is async w.r.t. ``exit`` — wait for it so we
-  // don't miss the trailing ``result`` event when claude flushes
-  // stdout right before exiting.
-  await new Promise((resolve) => rl.once("close", resolve));
+  // ``readline`` close is async w.r.t. ``exit``. We used to await
+  // ``rl.once("close")`` here to make sure no trailing ``result``
+  // event got truncated — but with ``stdio: ["ignore", "pipe",
+  // "inherit"]`` on certain Node 20 / Linux runner combos the
+  // child's stdout is half-closed before readline ever emits its
+  // ``close`` event, the await hangs forever, the top-level await
+  // in ``bin/shipctl.mjs`` never resolves, the event loop drains,
+  // and Node terminates with exit code 13 ("Unfinished Top-Level
+  // Await") with no stack — askslayer/PAC-23 planning 2026-05-15:
+  // agent finished cleanly, sidecar written, 25 seconds of dead
+  // air, then exit 13 with no /finish call sent and no further
+  // logs. Tear down the readline explicitly + bound the wait so
+  // worst case is a one-second delay instead of an unkillable hang.
+  rl.close();
+  await Promise.race([
+    new Promise((resolve) => rl.once("close", resolve)),
+    new Promise((resolve) => setTimeout(resolve, 1000)),
+  ]);
 
   if (finalUsage) {
     onLog(formatUsageLine(finalUsage));
