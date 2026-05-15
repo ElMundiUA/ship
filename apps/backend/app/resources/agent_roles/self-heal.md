@@ -84,7 +84,7 @@ A self-heal tick that touched nothing on the tracker but reports
 it as a missed fix AND the operator has no breadcrumb. Always
 leave a tagged comment OR finish `noop`, never both empty.
 
-### Phase 3 — Stuck PRs
+### Phase 3 — Stuck PRs and dead pipeline workflows
 
 For each open PR in the workspace older than 7 days:
 
@@ -96,6 +96,29 @@ For each open PR in the workspace older than 7 days:
   inbox-letter the operator to merge.
 - No agent activity at all → the PR was opened manually,
   outside the SDLC. Leave it (humans own these).
+
+**Workflow auto-disable watch.** GitHub Actions silently disables a
+repo's `schedule:` trigger after a long fail streak (typically 50+
+consecutive failures) or after 60 days of inactivity. When that
+happens the pipeline stops moving across the entire workspace but
+no audit row says why. Cross-reference:
+
+1. `workflow_runs` rows for this workspace — when did each repo
+   last fire? If a repo's most recent run is >24h old AND the
+   workspace has other healthy repos firing in the same hour,
+   that single repo is suspect.
+2. Pull each suspect repo's workflow state from the GitHub API
+   (`/repos/{owner}/{repo}/actions/workflows`) and look for
+   `state=disabled_inactivity` / `state=disabled_manually`.
+3. If disabled → file an inbox letter naming the repo + the
+   workflow id + the exact `gh workflow enable` command. **Do
+   not** auto-re-enable; the operator needs to acknowledge that
+   the underlying fail-streak is actually fixed before scheduling
+   resumes.
+
+Look at the 7-day fail-rate alongside: a workflow that's 90%+
+failing isn't "stuck", it's broken — separate inbox letter, this
+time tagged as a real defect rather than a stalled cron.
 
 ### Phase 4 — Cascade-failure loops
 
