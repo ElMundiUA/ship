@@ -576,7 +576,7 @@ async def get_next_task(
                 # with the previous (often empty) body. Empty body
                 # on a non-anchor ticket is suspicious — sleep 3s and
                 # try once more before deciding it's really empty.
-                for attempt in range(2):
+                for attempt in range(3):
                     try:
                         snapshot = await snapshot_fn(
                             TicketRef(
@@ -595,8 +595,8 @@ async def get_next_task(
                     body = (snapshot or {}).get("description") or ""
                     if snapshot and (snapshot.get("title") or "") and len(body) >= 50:
                         break
-                    if attempt == 0:
-                        await _asyncio.sleep(3)
+                    if attempt < 2:
+                        await _asyncio.sleep(5)
             if snapshot is None:
                 rows = []
             else:
@@ -3443,7 +3443,12 @@ async def finish_agent_run(
             key=f"ticket:{payload.ticket_ref}",
         )
         if payload.stage_next:
-            await _asyncio.sleep(15)
+            # 30s settle (was 15s — askslayer/PAC-22 dev_implementation
+            # 2026-05-15 21:08 still saw an empty snapshot 25s after
+            # planning's set_description committed to Linear primary;
+            # the replica lag is longer than expected). 30s keeps us
+            # under the previous 5-min poller cadence by 10×.
+            await _asyncio.sleep(30)
         await maybe_dispatch(
             session,
             workspace_id=workspace_id,
