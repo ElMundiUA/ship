@@ -215,7 +215,7 @@ async def _reseed_one(
         settings=settings,
         client=client,
     )
-    print(f"    PR opened: {pr.html_url}")
+    print(f"    PR opened: {pr.pr_url}")
 
     # 4. Bump DB.
     repo.installed_bundle_version = BUNDLE_VERSION
@@ -231,8 +231,8 @@ async def _reseed_one(
                 "trigger": "platform_admin_reseed_script",
                 "bundle_version": BUNDLE_VERSION,
                 "previous_bundle_version": repo.installed_bundle_version,
-                "pr_url": pr.html_url,
-                "pr_number": pr.number,
+                "pr_url": pr.pr_url,
+                "pr_number": pr.pr_number,
             },
         )
     )

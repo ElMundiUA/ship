@@ -540,16 +540,49 @@ async def get_next_task(
     # log so an operator can debug, then return ``ticket=None`` so the
     # cron noops cleanly.
     try:
-        rows = await resolved.gateway.list_tickets(state=state, limit=10)
-        # ELS-124: when the dispatcher pinned a specific ticket, drop
-        # everything else BEFORE the gates run so the gates don't
-        # silently reject our pin behind the operator's back. Keep
-        # the original order otherwise — gates depend on it.
+        # ELS-124 pin: when the backend dispatcher already picked a
+        # ticket (Linear state transition triggered the run, dispatcher
+        # resolved fsm_stage from labels, fired ``workflow_dispatch``
+        # with that ticket_ref), trust it. ``list_tickets`` runs the
+        # full FSM-stage gate filter — "ticket doesn't carry the
+        # ``stage:<own>`` label yet" — which is the right semantics
+        # for cron-mode picking but the wrong semantics for an
+        # explicit pin: a ticket that already carries
+        # ``stage:task_intake`` (legacy from the pre-E16 picker chain)
+        # is exactly the one the post-cutover dispatcher wants the
+        # planning bundle to re-run, and rejecting it strands the
+        # whole flow before any agent gets to invoke /finish.
+        # ``get_ticket_snapshot`` reads the ticket by id, skips every
+        # gate, and returns the same row shape ``list_tickets`` does
+        # so downstream orphan / overlay / priority checks still
+        # apply uniformly. Caught on askslayer/PAC-23 2026-05-15
+        # after E16/ELS-124 + bundle 0.36 reseed.
         if ticket_ref:
-            rows = [
-                row for row in rows
-                if str(row.get("id") or "") == ticket_ref
-            ]
+            snapshot_fn = getattr(resolved.gateway, "get_ticket_snapshot", None)
+            snapshot = None
+            if snapshot_fn is not None:
+                try:
+                    snapshot = await snapshot_fn(
+                        TicketRef(kind=resolved.kind, id=ticket_ref)
+                    )
+                except Exception:  # noqa: BLE001 — defensive
+                    snapshot = None
+            if snapshot is None:
+                rows = []
+            else:
+                rows = [
+                    {
+                        "id": snapshot.get("ticket_ref") or ticket_ref,
+                        "title": snapshot.get("title"),
+                        "body": snapshot.get("description"),
+                        "url": snapshot.get("url"),
+                        "labels": snapshot.get("labels") or [],
+                        "state": snapshot.get("state"),
+                        "project_id": snapshot.get("project_id"),
+                    }
+                ]
+        else:
+            rows = await resolved.gateway.list_tickets(state=state, limit=10)
     except RuntimeError as exc:
         logger.exception(
             "tracker/next: list_tickets failed ws=%s state=%s err=%s",
