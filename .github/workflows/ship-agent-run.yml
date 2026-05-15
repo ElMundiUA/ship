@@ -1,0 +1,102 @@
+name: Ship · Agent run
+
+# E16/ELS-124 — single-action workflow fired by Ship's backend
+# dispatcher when a tracker event makes a ticket eligible for an
+# agent stage. Replaces the old ``ship-trigger-schedule.yml`` which
+# ran on a cron + picker loop. The picker logic now lives entirely
+# on the server: tracker_poller diffs Linear state every 5 min,
+# dispatcher applies per-ticket locks + per-workspace caps, then
+# fires this workflow with the exact ``(routine_id, ticket_ref)``
+# pair to run.
+#
+# Manual ``workflow_dispatch`` from the Actions UI stays supported
+# as a debug harness — operators can fire one specific ticket+
+# routine without waiting for the next poll tick.
+
+on:
+  workflow_dispatch:
+    inputs:
+      routine_id:
+        description: "Routine to run (e.g. planning, developer, validation, reviewer, decomposition)."
+        required: true
+        type: string
+      ticket_ref:
+        description: "Ticket the dispatcher chose to pin this run to (e.g. ELS-42)."
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  # Serialise per-ticket — the backend dispatcher's per-ticket lock
+  # is the primary guard, but a parallel manual dispatch on the same
+  # ticket would otherwise sneak past it.
+  group: ship-agent-run-${{ inputs.ticket_ref }}
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    # 30-min budget covers the bundle prompts (planning / validation /
+    # decomposition). A single specialist run inside a bundle is
+    # 4-7 min; full bundle ≈15-20 min on the long tail. Drop back to
+    # 45 if bundles regularly skirt the ceiling.
+    timeout-minutes: 30
+    steps:
+      - name: Checkout (full history for agent introspection + branch push)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install shipctl + agent CLIs
+        run: |
+          npm install -g @elmundi/ship-cli@latest
+          # All three runtimes installed unconditionally; per-tick
+          # ``shipctl run`` resolves the workspace's bound provider
+          # from ``/v1/workspaces/{ws}/agent-provider`` and only
+          # spawns one of them. Total install cost is small enough
+          # that branching by provider would only save seconds.
+          curl -fsS https://cursor.com/install | bash
+          npm install -g @anthropic-ai/claude-code @openai/codex
+          # Cursor agent installer drops binaries under ~/.local/bin
+          # but doesn't always touch PATH for non-interactive shells.
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.local/share/cursor-agent/versions" >> "$GITHUB_PATH"
+
+      - name: Configure git committer identity
+        run: |
+          git config --global user.email "ship-agent@elmundi.com"
+          git config --global user.name  "Ship Agent"
+
+      - name: Run agent for ticket
+        env:
+          SHIP_API_TOKEN: ${{ secrets.SHIP_API_TOKEN }}
+          SHIP_WORKSPACE_API_BASE: ${{ secrets.SHIP_API_BASE }}
+          SHIP_API_BASE: ${{ secrets.SHIP_API_BASE }}
+          SHIP_WORKSPACE_ID: ${{ secrets.SHIP_WORKSPACE_ID }}
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHIP_REPO: ${{ github.repository }}
+          SHIP_EVENT_NAME: ${{ github.event_name }}
+          SHIP_REF: ${{ github.ref }}
+          SHIP_SHA: ${{ github.sha }}
+          ROUTINE_ID: ${{ inputs.routine_id }}
+          TICKET_REF: ${{ inputs.ticket_ref }}
+        run: |
+          set -euo pipefail
+          echo "Ship: running routine '${ROUTINE_ID}' pinned to '${TICKET_REF}'"
+          shipctl run \
+            --routine "${ROUTINE_ID}" \
+            --ticket  "${TICKET_REF}" \
+            --trigger dispatcher \
+            --commit-and-pr
