@@ -241,6 +241,28 @@ async def user_from_claims(
         or claims.get("https://ship.local/name")
     )
 
+    # Hot path — already-logged-in user. Look up by Auth0 ``sub`` FIRST,
+    # before any /userinfo round-trip. We already know the email from
+    # the DB row; calling /userinfo on every API request would just
+    # re-fetch the same value and burn Auth0 quota (we hit /userinfo
+    # 429 in prod on 2026-05-15 because access tokens for the custom
+    # API audience don't carry an ``email`` claim and the fallback
+    # below was firing per-request — fix is to skip it when sub
+    # already resolves a user).
+    user = (
+        await session.execute(select(User).where(User.external_subject == sub))
+    ).scalar_one_or_none()
+    if user is not None:
+        if email and user.email != email:
+            user.email = email
+        if name and user.display_name != name:
+            user.display_name = str(name)[:200]
+        return user
+
+    # Cold path — first request from this Auth0 user (no row bound to
+    # this ``sub`` yet). Fall back to /userinfo if the access token
+    # lacked an ``email`` claim, so the WOW onboarding works without
+    # forcing a custom Auth0 Action.
     if not email and raw_token:
         issuer = str(claims.get("iss") or "")
         if issuer:
@@ -251,18 +273,6 @@ async def user_from_claims(
                     email = str(ui_email).strip().lower()
                 if not name:
                     name = userinfo.get("name") or userinfo.get("nickname")
-
-    user = (
-        await session.execute(select(User).where(User.external_subject == sub))
-    ).scalar_one_or_none()
-    if user is not None:
-        if email and user.email != email:
-            # Email changed in IdP — keep our row's identity stable but
-            # update the displayable address. Audit log catches the change.
-            user.email = email
-        if name and user.display_name != name:
-            user.display_name = str(name)[:200]
-        return user
 
     if not email:
         # Email is missing — mark user as "email-pending" using a sentinel.
