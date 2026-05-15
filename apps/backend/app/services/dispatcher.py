@@ -740,10 +740,18 @@ async def maybe_dispatch_workspace_bundle(
             WORKFLOW_FILE,
             inputs={
                 "routine_id": bundle_id,
-                # Workspace-bundles have no ticket — the runner sees
-                # the empty string and skips the per-ticket
-                # ``get_next_task`` pin.
-                "ticket_ref": "",
+                # Workspace-bundles have no ticket, but ship-agent-run.yml
+                # declares ``ticket_ref`` as ``required: true`` and
+                # customer repos still carry that copy of the workflow.
+                # GitHub rejects an empty string for a required input
+                # (422 "Required input 'ticket_ref' not provided"), so
+                # pass the bundle id as a placeholder — the runner's
+                # workspace-scope branch (run.mjs ``isWorkspaceScope``)
+                # ignores ``ticket_ref`` and writes its own empty value
+                # into the synthetic task, and the GHA concurrency
+                # group ends up as ``ship-agent-run-<bundle>`` which
+                # also gives us per-bundle serialisation for free.
+                "ticket_ref": bundle_id,
             },
             settings=settings,
             client=client,
