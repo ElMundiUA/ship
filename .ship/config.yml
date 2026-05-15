@@ -23,35 +23,16 @@ process:
   primary: true
   gates: after_pr
   states:
-  - id: task_intake
-    name: Intake
+  - id: planning
+    name: Planning
     state: planning
     specialist:
-      id: intake
-      name: Intake
-    instructions: "Classify + produce the full impl-grade spec in one pass. Output sections\
-      \ depend on classification \u2014 features use Problem / Goal / Feature description\
-      \ / User stories / AC / Edge cases / Scope / Non-goals / Impacted components /\
-      \ Technical notes / Test plan / Risks; bugs use Summary / Steps / Expected / Actual\
-      \ / Environment / Severity / Scope / Suspect area / AC for fix. The legacy ``ba_requirements``\
-      \ stage was folded in here \u2014 same context-load was feeding two LLM calls\
-      \ in a row, producing overlapping output shapes."
-  - id: tech_arch_plan
-    name: Tech architecture
-    state: planning
-    specialist:
-      id: tech-architect
-      name: Tech architect
-    instructions: "Plan the architecture of the change \u2014 components touched, contracts,\
-      \ risk + rollback. Design only, no code."
-  - id: qa_arch_plan
-    name: Test architecture
-    state: planning
-    specialist:
-      id: qa-architect
-      name: QA architect
-    instructions: "Design the test coverage strategy \u2014 unit / integration / e2e\
-      \ split, fixtures, edge cases. Design only, no test code."
+      id: planning
+      name: Planning bundle
+    instructions: One run produces Brief + Architecture + Test plan. Classifies the
+      ticket (feature/bug/refactor/infra/improvement), writes the impl-grade spec, appends
+      the architecture plan, then the test plan. All four phases share one context load
+      so we don't pay for the same ticket-body fetch four times.
   - id: dev_implementation
     name: Implementation
     state: executing
@@ -60,22 +41,16 @@ process:
       name: Developer
     instructions: Implement the change against the architecture plan, run the relevant
       gates, open the PR.
-  - id: qa_manual
-    name: Manual QA
+  - id: validation
+    name: Validation
     state: executing
     specialist:
-      id: qa-engineer
-      name: QA engineer
-    instructions: Walk the manual test plan against the open PR; report defects without
-      fixing them.
-  - id: qa_automation
-    name: Test automation
-    state: executing
-    specialist:
-      id: qa-automation
-      name: QA automation
-    instructions: Add automated tests anchored to the architect's test plan so the regression
-      sticks.
+      id: validation
+      name: Validation bundle
+    instructions: "One run against the open PR. Phase 1 walks the test plan manually\
+      \ + probes for unlisted defects; Phase 2 adds the automated regression suite on\
+      \ the same branch. Defects in Phase 1 stop the bundle with outcome=blocked \u2014\
+      \ automation never bakes in broken behaviour."
   - id: code_review
     name: Code review
     state: reviewing
@@ -85,17 +60,11 @@ process:
     instructions: "Final agent-side review \u2014 comments only, never pushes commits,\
       \ never approves. Flags blockers before the human merger sees the PR."
   transitions:
-  - from: task_intake
-    to: tech_arch_plan
-  - from: tech_arch_plan
-    to: qa_arch_plan
-  - from: qa_arch_plan
+  - from: planning
     to: dev_implementation
   - from: dev_implementation
-    to: qa_manual
-  - from: qa_manual
-    to: qa_automation
-  - from: qa_automation
+    to: validation
+  - from: validation
     to: code_review
   routines:
     daily:
@@ -238,55 +207,17 @@ process:
       specialist: reviewer
       fsm_stage: code_review
       pipeline_priority: 70
-    wbs:
-      name: Decomposition WBS
+    decomposition:
+      name: Decomposition
       enabled: true
-      specialist: ba
-      fsm_stage: wbs
+      specialist: decomposition
+      fsm_stage: decomposition
       pipeline_priority: 10
       trigger:
         type: schedule
         cron: '*/30 * * * *'
         window: 30m
         catchup: latest
-      description: Customer cron polls planning anchors in stage:wbs and dispatches
-        BA to produce the WBS section.
-    architecture:
-      name: Decomposition Architecture
-      enabled: true
-      specialist: tech-architect
-      fsm_stage: architecture
-      pipeline_priority: 20
-      trigger:
-        type: schedule
-        cron: '*/30 * * * *'
-        window: 30m
-        catchup: latest
-      description: Customer cron polls anchors in stage:architecture and dispatches
-        Tech-architect.
-    test_architecture:
-      name: Decomposition Test architecture
-      enabled: true
-      specialist: qa-architect
-      fsm_stage: test_architecture
-      pipeline_priority: 30
-      trigger:
-        type: schedule
-        cron: '*/30 * * * *'
-        window: 30m
-        catchup: latest
-      description: Customer cron polls anchors in stage:test_architecture and dispatches
-        QA-architect.
-    tasks:
-      name: Decomposition Task slicing
-      enabled: true
-      specialist: developer
-      fsm_stage: tasks
-      pipeline_priority: 40
-      trigger:
-        type: schedule
-        cron: '*/30 * * * *'
-        window: 30m
-        catchup: latest
-      description: Customer cron polls anchors in stage:tasks and dispatches Developer
-        to slice the WBS into child tickets. On finish the project flips Drafts to Parked.
+      description: Customer cron polls planning anchors in stage:decomposition and dispatches
+        the bundle, which emits WBS + Architecture + Test architecture + child tickets
+        in one run. On finish the project flips Drafts to Parked.
