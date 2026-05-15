@@ -568,21 +568,35 @@ async def get_next_task(
             snapshot_fn = getattr(resolved.gateway, "get_ticket_snapshot", None)
             snapshot = None
             if snapshot_fn is not None:
-                try:
-                    snapshot = await snapshot_fn(
-                        TicketRef(
-                            kind=resolved.kind,
-                            workspace_hint=None,
-                            id=ticket_ref,
+                import asyncio as _asyncio
+                # Retry once on stale-replica read: when a finish
+                # handler's ``set_description`` mutation lands on
+                # Linear's primary at T but the read replica we're
+                # hitting hasn't caught up, the snapshot comes back
+                # with the previous (often empty) body. Empty body
+                # on a non-anchor ticket is suspicious — sleep 3s and
+                # try once more before deciding it's really empty.
+                for attempt in range(2):
+                    try:
+                        snapshot = await snapshot_fn(
+                            TicketRef(
+                                kind=resolved.kind,
+                                workspace_hint=None,
+                                id=ticket_ref,
+                            )
                         )
-                    )
-                except Exception as exc:  # noqa: BLE001 — defensive
-                    logger.warning(
-                        "tracker/next pin: snapshot failed ws=%s "
-                        "ticket=%s err=%s",
-                        workspace_id, ticket_ref, exc,
-                    )
-                    snapshot = None
+                    except Exception as exc:  # noqa: BLE001 — defensive
+                        logger.warning(
+                            "tracker/next pin: snapshot failed ws=%s "
+                            "ticket=%s attempt=%d err=%s",
+                            workspace_id, ticket_ref, attempt, exc,
+                        )
+                        snapshot = None
+                    body = (snapshot or {}).get("description") or ""
+                    if snapshot and (snapshot.get("title") or "") and len(body) >= 50:
+                        break
+                    if attempt == 0:
+                        await _asyncio.sleep(3)
             if snapshot is None:
                 rows = []
             else:
@@ -3405,7 +3419,19 @@ async def finish_agent_run(
     # the poller, but cascading inline skips the 5-min poll delay
     # between stages. ``maybe_dispatch`` respects the cascade-depth
     # guard so an FSM bug can't loop forever.
+    #
+    # 15s gap before firing the next stage's workflow_dispatch:
+    # Linear's GraphQL is eventually-consistent across read replicas
+    # — a ``set_description`` mutation that returned 200 to us takes
+    # a few seconds before it shows on a follow-up ``issue(id:…)``
+    # read. Without this delay the cascade-fired dev_implementation
+    # runs against a stale snapshot (empty title / body) and exits
+    # noop with ``ticket_ref: null``, exactly the symptom on
+    # askslayer/PAC-23 dev_implementation run 2026-05-15 20:10 UTC.
+    # 15s is empirically enough on Linear and keeps the operator
+    # latency well under the previous 5-min poller delay.
     if payload.ticket_ref:
+        import asyncio as _asyncio
         from backend.app.services.dispatcher import (
             maybe_dispatch,
             release_lock,
@@ -3416,6 +3442,8 @@ async def finish_agent_run(
             workspace_id=workspace_id,
             key=f"ticket:{payload.ticket_ref}",
         )
+        if payload.stage_next:
+            await _asyncio.sleep(15)
         await maybe_dispatch(
             session,
             workspace_id=workspace_id,
