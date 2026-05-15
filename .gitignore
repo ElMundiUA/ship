@@ -13,6 +13,13 @@ apps/console/.next/
 apps/console/tsconfig.tsbuildinfo
 apps/console/.dockerignore.bak
 output/playwright/
+e2e/test-results/
+test-results/
+# Eval runner — captured artifacts + judge verdicts are per-run, not source.
+# metrics.jsonl tracks score trends; commit it deliberately for baseline pinning.
+tools/eval/runs/
+tools/eval/results/
+tools/eval/metrics.jsonl
 .env
 .env.*
 !.env.example

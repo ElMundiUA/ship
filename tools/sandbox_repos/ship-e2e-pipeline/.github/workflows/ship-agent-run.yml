@@ -1,0 +1,81 @@
+name: Ship · Agent run
+
+# Mirror of apps/backend/app/resources/starter_workflows/ship-agent-run.yml
+# at the time of skeleton init. Ship's backend dispatcher fires this
+# workflow via workflow_dispatch when a tracker event makes a
+# ticket eligible for an agent stage. The starter template is the
+# canonical source; if it drifts, refresh this copy and re-push.
+
+on:
+  workflow_dispatch:
+    inputs:
+      routine_id:
+        description: "Routine to run (e.g. planning, developer, validation, reviewer, decomposition)."
+        required: true
+        type: string
+      ticket_ref:
+        description: "Ticket the dispatcher chose to pin this run to (e.g. PIPE-42)."
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: ship-agent-run-${{ inputs.ticket_ref }}
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout (full history for agent introspection + branch push)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install shipctl + agent CLIs
+        run: |
+          npm install -g @elmundi/ship-cli@latest
+          curl -fsS https://cursor.com/install | bash
+          npm install -g @anthropic-ai/claude-code @openai/codex
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.local/share/cursor-agent/versions" >> "$GITHUB_PATH"
+
+      - name: Configure git committer identity
+        run: |
+          git config --global user.email "ship-agent@elmundi.com"
+          git config --global user.name  "Ship Agent"
+
+      - name: Run agent for ticket
+        env:
+          SHIP_API_TOKEN: ${{ secrets.SHIP_API_TOKEN }}
+          SHIP_WORKSPACE_API_BASE: ${{ secrets.SHIP_API_BASE }}
+          SHIP_API_BASE: ${{ secrets.SHIP_API_BASE }}
+          SHIP_WORKSPACE_ID: ${{ secrets.SHIP_WORKSPACE_ID }}
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHIP_REPO: ${{ github.repository }}
+          SHIP_EVENT_NAME: ${{ github.event_name }}
+          SHIP_REF: ${{ github.ref }}
+          SHIP_SHA: ${{ github.sha }}
+          ROUTINE_ID: ${{ inputs.routine_id }}
+          TICKET_REF: ${{ inputs.ticket_ref }}
+        run: |
+          set -euo pipefail
+          echo "Ship: running routine '${ROUTINE_ID}' pinned to '${TICKET_REF}'"
+          shipctl run \
+            --routine "${ROUTINE_ID}" \
+            --ticket  "${TICKET_REF}" \
+            --trigger dispatcher \
+            --commit-and-pr

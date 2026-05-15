@@ -1,0 +1,119 @@
+# Ship pipeline e2e sandbox — bundle-form process config.
+#
+# E16/ELS-123 collapsed the old per-stage specialists into four
+# bundle agents (planning / decomposition / validation / self-heal).
+# Sandbox keeps just those + a minimal SDLC state graph so shipctl
+# `run --routine <bundle>` resolves to a real specialist that exists
+# in `apps/backend/app/resources/agent_roles/`.
+
+preset: default
+version: 2
+shipctl_min: 0.12.0
+repo: ElMundiUA/ship-e2e-pipeline
+
+api:
+  base_url: "https://ship.elmundi.com"
+  channel: stable
+  ttl_hours: 24
+  offline_ok: true
+
+stack:
+  tracker: none
+  ci: gh-actions
+  agents: []
+  language: multi
+
+agent:
+  default: {}
+  overrides: {}
+
+process:
+  id: development
+  name: Development Process
+  primary: true
+  gates: after_pr
+  states:
+    - id: planning
+      name: Planning
+      state: planning
+      specialist:
+        id: planning
+        name: Planning bundle
+      instructions: |
+        Planner bundle reads the PO Brief, writes BA Requirements +
+        Technical Architecture + QA Architecture sections, then
+        transitions the ticket to ``stage:dev_implementation``.
+    - id: dev_implementation
+      name: Implementation
+      state: executing
+      specialist:
+        id: developer
+        name: Developer
+      instructions: |
+        Implement the change against the planner's architecture
+        plan, open the PR, transition to ``stage:validation``.
+    - id: validation
+      name: Validation
+      state: executing
+      specialist:
+        id: validation
+        name: Validation bundle
+      instructions: |
+        Validation bundle reviews the open PR against the QA arch
+        criteria, posts a validation comment, transitions to
+        ``stage:code_review`` or back to ``stage:dev_implementation``.
+    - id: code_review
+      name: Code review
+      state: reviewing
+      specialist:
+        id: reviewer
+        name: Reviewer
+      instructions: |
+        Final agent-side review — comments only, never approves.
+  transitions:
+    - { from: planning,           to: dev_implementation }
+    - { from: dev_implementation, to: validation }
+    - { from: validation,         to: code_review }
+  routines:
+    planning:
+      name: Planning bundle
+      enabled: true
+      specialist: planning
+      fsm_stage: planning
+      pipeline_priority: 10
+      trigger: { type: dispatcher }
+    dev_implementation:
+      name: Dev implementation
+      enabled: true
+      specialist: developer
+      fsm_stage: dev_implementation
+      pipeline_priority: 20
+      trigger: { type: dispatcher }
+    validation:
+      name: Validation bundle
+      enabled: true
+      specialist: validation
+      fsm_stage: validation
+      pipeline_priority: 30
+      trigger: { type: dispatcher }
+    code_review:
+      name: Code review
+      enabled: true
+      specialist: reviewer
+      fsm_stage: code_review
+      pipeline_priority: 40
+      trigger: { type: dispatcher }
+    decomposition:
+      name: Decomposition bundle
+      enabled: true
+      specialist: decomposition
+      fsm_stage: decomposition
+      pipeline_priority: 5
+      trigger: { type: dispatcher }
+    self_heal:
+      name: Self-heal bundle
+      enabled: true
+      specialist: self-heal
+      fsm_stage: workspace_self_heal
+      pipeline_priority: 50
+      trigger: { type: dispatcher }
