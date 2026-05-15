@@ -2564,6 +2564,195 @@ async def post_find_or_create_project(
     )
 
 
+async def _perform_auto_merge(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    resolved: Any,
+    ticket_ref: str,
+    merge_method: str,
+    settings: Settings,
+) -> dict[str, Any]:
+    """Merge the PR linked to ``ticket_ref`` via GH App token.
+
+    Server-side privileged action that the auto-merger agent role
+    requests via ``payload.auto_merge_action="merge"``. Steps:
+
+    1. Read the ticket's snapshot from the tracker → look for a PR
+       URL in description / comments (matches the agent PR shape
+       ``github.com/<owner>/<repo>/pull/<n>``).
+    2. Resolve the workspace's GH installation for the PR's repo.
+    3. Mint an installation token, call
+       ``PUT /repos/{owner}/{repo}/pulls/{n}/merge`` with the
+       requested method (squash / merge / rebase, default squash).
+    4. Audit ``github.auto_merge.success`` or
+       ``github.auto_merge.failed`` with the upstream status. Return
+       ``{merged: bool, merge_sha?, reason?}`` for the finish-handler
+       to splice into ``actions``.
+
+    Never raises — auto-merger failures must be observable on the
+    ticket + inbox, not crash the whole finish call.
+    """
+    import re as _re
+    import httpx as _httpx
+    from backend.app.db.models.integrations import (
+        GitHubInstallation as _GHInstall,
+        WorkspaceRepo as _WSRepo,
+    )
+    from backend.app.integrations.gateway.tracker import TicketRef as _TR
+    from backend.app.integrations.github.app_auth import (
+        fetch_installation_token as _fetch_install_token,
+    )
+
+    pr_url: str | None = None
+    full_name: str | None = None
+    pr_number: int | None = None
+    try:
+        snap = await resolved.gateway.get_ticket_snapshot(
+            _TR(kind=resolved.kind, workspace_hint=None, id=ticket_ref)
+        )
+        haystack = " ".join(filter(None, [
+            (snap or {}).get("description") or "",
+            (snap or {}).get("url") or "",
+        ]))
+        m = _re.search(
+            r"https://github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)", haystack
+        )
+        if m:
+            full_name = f"{m.group(1)}/{m.group(2)}"
+            pr_number = int(m.group(3))
+            pr_url = m.group(0)
+    except Exception as exc:  # noqa: BLE001 — best-effort
+        logger.warning(
+            "auto_merge: ticket snapshot lookup failed ws=%s ticket=%s err=%s",
+            workspace_id, ticket_ref, exc,
+        )
+
+    if not (full_name and pr_number):
+        # Fall back to scanning ticket comments — many agents post the
+        # PR URL there instead of in the body.
+        try:
+            list_fn = getattr(resolved.gateway, "list_comments", None)
+            if list_fn is not None:
+                ref_obj = _TR(kind=resolved.kind, workspace_hint=None, id=ticket_ref)
+                comments = await list_fn(ref_obj)
+                for cm in (comments or []):
+                    body = getattr(cm, "body", "") or ""
+                    m = _re.search(
+                        r"https://github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)", body
+                    )
+                    if m:
+                        full_name = f"{m.group(1)}/{m.group(2)}"
+                        pr_number = int(m.group(3))
+                        pr_url = m.group(0)
+                        break
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                "auto_merge: comment scan failed ws=%s err=%s", workspace_id, exc,
+            )
+
+    if not (full_name and pr_number):
+        session.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                action="github.auto_merge.failed",
+                target_kind="ticket",
+                target_id=ticket_ref,
+                payload={"reason": "no_pr_url_found"},
+            )
+        )
+        return {"merged": False, "reason": "no_pr_url_found"}
+
+    repo_row = (
+        await session.execute(
+            sa_select(_WSRepo).where(
+                _WSRepo.workspace_id == workspace_id,
+                _WSRepo.full_name == full_name,
+            )
+        )
+    ).scalars().first()
+    install_row = None
+    if repo_row is not None and repo_row.installation_id is not None:
+        install_row = await session.get(_GHInstall, repo_row.installation_id)
+    if install_row is None or install_row.suspended_at is not None:
+        session.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                action="github.auto_merge.failed",
+                target_kind="ticket",
+                target_id=ticket_ref,
+                payload={
+                    "reason": "github_app_unavailable",
+                    "pr_url": pr_url,
+                },
+            )
+        )
+        return {"merged": False, "reason": "github_app_unavailable"}
+
+    method = merge_method if merge_method in ("squash", "merge", "rebase") else "squash"
+    async with _httpx.AsyncClient(timeout=_httpx.Timeout(30.0)) as client:
+        try:
+            token = await _fetch_install_token(
+                install_row.installation_id, settings=settings, client=client
+            )
+            r = await client.put(
+                f"https://api.github.com/repos/{full_name}/pulls/{pr_number}/merge",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/vnd.github+json",
+                },
+                json={"merge_method": method},
+            )
+        except Exception as exc:  # noqa: BLE001
+            session.add(
+                AuditLog(
+                    workspace_id=workspace_id,
+                    action="github.auto_merge.failed",
+                    target_kind="ticket",
+                    target_id=ticket_ref,
+                    payload={
+                        "reason": "gh_request_exception",
+                        "pr_url": pr_url,
+                        "error": str(exc)[:300],
+                    },
+                )
+            )
+            return {"merged": False, "reason": "gh_request_exception"}
+
+    if r.status_code == 200 and (r.json() or {}).get("merged"):
+        sha = str(r.json().get("sha") or "")
+        session.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                action="github.auto_merge.success",
+                target_kind="ticket",
+                target_id=ticket_ref,
+                payload={
+                    "pr_url": pr_url,
+                    "method": method,
+                    "merge_sha": sha,
+                },
+            )
+        )
+        return {"merged": True, "merge_sha": sha, "pr_url": pr_url}
+
+    session.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            action="github.auto_merge.failed",
+            target_kind="ticket",
+            target_id=ticket_ref,
+            payload={
+                "reason": "gh_rejected",
+                "pr_url": pr_url,
+                "upstream_status": r.status_code,
+                "error": r.text[:300],
+            },
+        )
+    )
+    return {"merged": False, "reason": f"gh_{r.status_code}"}
+
+
 async def _flip_drafts_row_to_parked(
     session: AsyncSession,
     workspace_id: uuid.UUID,
@@ -3020,6 +3209,45 @@ async def finish_agent_run(
                     from_state=payload.fsm_stage,
                 )
                 actions.append(f"tracker:transition:{payload.stage_next}")
+
+            # Auto-merger hook (post-E16 WAU). When the auto-merger
+            # bundle finishes with ``payload.auto_merge_action="merge"``,
+            # we (the server) call GitHub's PR-merge API ourselves so
+            # the runner never needs ``contents:write`` to main. The
+            # agent's job is decision-making (7-signal gate); the
+            # server's job is the privileged action. Stalls (``stall``
+            # action) just record an audit row + inbox item via the
+            # ``outcome=needs_clarification`` branch the agent picks
+            # instead — no new path here.
+            extra_payload = payload.payload or {}
+            auto_merge_action = (
+                str(extra_payload.get("auto_merge_action") or "")
+                if isinstance(extra_payload, dict) else ""
+            )
+            if (
+                payload.fsm_stage == "auto_merge"
+                and auto_merge_action == "merge"
+                and not is_workspace_bundle
+            ):
+                merge_result = await _perform_auto_merge(
+                    session,
+                    workspace_id=workspace_id,
+                    resolved=resolved,
+                    ticket_ref=payload.ticket_ref,
+                    merge_method=str(
+                        extra_payload.get("merge_method") or "squash"
+                    ),
+                    settings=settings,
+                )
+                if merge_result.get("merged"):
+                    actions.append("github:pr_merged")
+                    actions.append(
+                        f"github:merge_sha:{merge_result['merge_sha'][:7]}"
+                    )
+                else:
+                    actions.append(
+                        f"github:auto_merge_failed:{merge_result.get('reason','unknown')}"
+                    )
 
             # Decomposition completion hook (ELS-75 + ELS-81). When
             # the planning anchor reaches the terminal stage, flip

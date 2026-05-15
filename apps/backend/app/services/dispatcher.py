@@ -62,6 +62,7 @@ _STAGE_TO_ROUTINE: dict[str, str] = {
     "dev_implementation": "developer",
     "validation": "validation",
     "code_review": "reviewer",
+    "auto_merge": "auto-merger",
     "decomposition": "decomposition",
     # Pre-E16 legacy stages absorbed into bundles.
     "task_intake": "planning",

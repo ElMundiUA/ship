@@ -5,6 +5,30 @@ import { initCommand } from "../lib/commands/init.mjs";
 import { doctorCommand } from "../lib/commands/doctor.mjs";
 import { getCliVersion } from "../lib/version.mjs";
 
+// Diagnostic handlers — Node 20 default behaviour for an unhandled
+// promise rejection is to print a warning + leave the await alive,
+// which then hangs the top-level await below and the process exits
+// with code 13 ("Unfinished Top-Level Await") with NO stack trace
+// in the GHA log. That's exactly the askslayer/PAC-23 planning
+// run on 2026-05-15: agent finished cleanly, sidecar written, then
+// run.mjs awaited postAgentFinish (or the readline close on the
+// claude subprocess stdout) and never returned. Force these to
+// crash loudly with a stack instead of silently exiting 13.
+process.on("unhandledRejection", (reason) => {
+  const msg = reason instanceof Error
+    ? `${reason.message}\n${reason.stack ?? ""}`
+    : String(reason);
+  console.error(`[shipctl] unhandled promise rejection:\n${msg}`);
+  process.exit(2);
+});
+process.on("uncaughtException", (err) => {
+  const msg = err instanceof Error
+    ? `${err.message}\n${err.stack ?? ""}`
+    : String(err);
+  console.error(`[shipctl] uncaught exception:\n${msg}`);
+  process.exit(2);
+});
+
 const raw = process.argv.slice(2);
 
 /* `--version` / `-v` / `version` short-circuit before normal arg parsing —

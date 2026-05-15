@@ -345,7 +345,24 @@ def default_development_process_config(
                 "instructions": (
                     "Final agent-side review — comments only, never "
                     "pushes commits, never approves. Flags blockers "
-                    "before the human merger sees the PR."
+                    "before the auto-merger sees the PR."
+                ),
+            },
+            {
+                "id": "auto_merge",
+                "name": "Auto-merge",
+                "state": "reviewing",
+                "specialist": {
+                    "id": "auto-merger",
+                    "name": "Auto-merger",
+                },
+                "instructions": (
+                    "Reads the reviewer's verdict + CI status + scope "
+                    "of changes. If green and low-risk, merges the PR. "
+                    "If any signal is yellow/red, writes a clarification "
+                    "inbox item and stalls the ticket until a human "
+                    "takes over. The 'WAU effect' bundle — turns the "
+                    "rest of the pipeline into a true autonomous loop."
                 ),
             },
         ],
@@ -353,6 +370,7 @@ def default_development_process_config(
             {"from": "planning", "to": "dev_implementation"},
             {"from": "dev_implementation", "to": "validation"},
             {"from": "validation", "to": "code_review"},
+            {"from": "code_review", "to": "auto_merge"},
         ],
         "routines": dict(routines or {}),
     }
