@@ -25,6 +25,7 @@ migration.
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from dataclasses import dataclass
 from typing import Final
@@ -39,10 +40,12 @@ from backend.app.db.models.integrations import (
     WorkspaceRepo,
 )
 from backend.app.db.models.tenancy import AuditLog, Workspace
+from backend.app.integrations.gateway.tracker import TicketRef
 from backend.app.integrations.github.workflows import (
     WorkflowDispatchError,
     dispatch_workflow,
 )
+from backend.app.services import tracker_resolver as tracker_resolver_module
 
 
 # Stage label (Linear's ``stage:<id>``) → routine id. The dispatcher
@@ -350,18 +353,34 @@ async def _count_recent_dispatches(
 
 
 async def _pick_dispatch_repo(
-    session: AsyncSession, *, workspace_id: uuid.UUID
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    project_name_hint: str | None = None,
 ) -> tuple[WorkspaceRepo, GitHubInstallation] | None:
     """Pick one activated repo in ``workspace_id`` to dispatch to.
 
-    Today's heuristic: the oldest activated repo wins (deterministic,
-    matches the order operators see in the dashboard). The runtime
-    inside the workflow re-reads the ticket from Linear and figures
-    out what to do; the dispatch target is mostly a runner-host
-    choice. ELS-123 may refine this to follow the ticket's
-    ``project.repo`` link once we wire decomposition.
+    Preference order:
+
+    1. **Project name match** — when ``project_name_hint`` is provided
+       (the Linear project the ticket lives in), pick a repo whose
+       ``full_name`` contains a slug-shaped token from the project
+       name. E.g. project ``"Переписывание visitor-back на Golang"``
+       matches ``askslayer/visitor-back``. This is the "follow the
+       ticket's repo" rule callers used to have to read from a
+       per-project binding row — keeping it heuristic for now
+       sidesteps a schema migration while still routing PAC tickets
+       to the visitor-back repo where the agent secrets actually
+       live (askslayer 2026-05-15: visitor-mob was getting every
+       dispatch because it was oldest-activated, but ANTHROPIC_API_KEY
+       only lived on visitor-back).
+    2. **Oldest activated** — original deterministic fallback. The
+       runtime inside the workflow re-reads the ticket from Linear
+       so the dispatch target is mostly a runner-host choice; this
+       falls through when no hint is supplied (workspace bundles,
+       legacy callers) or no repo name matches.
     """
-    row = (
+    rows = (
         await session.execute(
             select(WorkspaceRepo, GitHubInstallation)
             .join(
@@ -373,12 +392,23 @@ async def _pick_dispatch_repo(
                 WorkspaceRepo.activated_at.is_not(None),
             )
             .order_by(WorkspaceRepo.activated_at.asc())
-            .limit(1)
         )
-    ).first()
-    if row is None:
+    ).all()
+    if not rows:
         return None
-    return row[0], row[1]
+    if project_name_hint:
+        # Tokenize on whitespace / punctuation, keep slug-shaped chunks
+        # (at least 4 chars) so common Russian / English connecting
+        # words don't accidentally match short repo names.
+        tokens = [
+            t.lower() for t in re.split(r"[^A-Za-z0-9_-]+", project_name_hint)
+            if len(t) >= 4
+        ]
+        for r in rows:
+            name = r[0].full_name.lower()
+            if any(t in name for t in tokens):
+                return r[0], r[1]
+    return rows[0][0], rows[0][1]
 
 
 # ---------------------------------------------------------------------------
@@ -565,8 +595,49 @@ async def maybe_dispatch(
             lock_key=lock_key,
         )
 
-    # 5. Repo + install pair to dispatch against.
-    target = await _pick_dispatch_repo(session, workspace_id=workspace_id)
+    # 5. Repo + install pair to dispatch against. Resolve the
+    # ticket's Linear project name (best-effort) so the picker can
+    # prefer a repo whose ``full_name`` matches — askslayer/PAC-23
+    # lives under project "Переписывание visitor-back на Golang"
+    # and needs to dispatch on ``askslayer/visitor-back`` (where the
+    # ANTHROPIC / CURSOR / OPENAI secrets actually live), not on
+    # ``visitor-mob`` (oldest-activated default).
+    project_name_hint: str | None = None
+    try:
+        resolved_tracker = await tracker_resolver_module.resolve_for_workspace(
+            session=session, settings=settings, workspace_id=workspace_id
+        )
+        snapshot_fn = (
+            getattr(resolved_tracker.gateway, "get_ticket_snapshot", None)
+            if resolved_tracker is not None
+            else None
+        )
+        if snapshot_fn is not None:
+            ticket = TicketRef(
+                kind=resolved_tracker.kind,
+                workspace_hint=None,
+                id=ticket_ref,
+            )
+            snap = await snapshot_fn(ticket)
+            if snap and snap.get("project_id"):
+                proj_id = str(snap["project_id"])
+                get_project_fn = getattr(
+                    resolved_tracker.gateway, "get_project", None
+                )
+                if get_project_fn is not None:
+                    proj = await get_project_fn(proj_id)
+                    if isinstance(proj, dict):
+                        project_name_hint = proj.get("name") or None
+    except Exception as exc:  # noqa: BLE001 — best-effort hint
+        log.debug(
+            "dispatcher: project_name_hint lookup failed ticket=%s err=%s",
+            ticket_ref, exc,
+        )
+    target = await _pick_dispatch_repo(
+        session,
+        workspace_id=workspace_id,
+        project_name_hint=project_name_hint,
+    )
     if target is None:
         await release_lock(
             session, workspace_id=workspace_id, key=lock_key
