@@ -167,7 +167,30 @@ async function _runCommandImpl(ctx, rest) {
   } else {
     resolved = resolveExecutable(config, args.routine);
     if (!resolved) {
-      die(EXIT_USAGE, `unknown routine '${args.routine}' in .ship/config.yml`);
+      // E16 cutover fallback. The backend dispatcher fires
+      // ``shipctl run --routine <bundle>`` for the new bundle slugs
+      // (``planning`` / ``developer`` / ``validation`` / ``reviewer``
+      // / ``decomposition`` / workspace ``self-heal`` / ``daily-digest``
+      // / ``weekly-audit``), but a customer repo whose ``.ship/config.yml``
+      // was generated before E16 only knows the pre-cutover routines
+      // (``intake`` / ``tech_arch_plan`` / etc.) under ``process.routines``.
+      // Rather than refusing and stranding the dispatch, we treat the
+      // unknown id as a specialist slug — same shape as if the caller
+      // had passed ``--specialist <id>``. The server-side agent-role
+      // resolver decides whether the slug is real; the runner gets
+      // the same execution path either way.
+      resolved = {
+        kind: "specialist",
+        id: args.routine,
+        source: { specialist: args.routine },
+        executable: {
+          id: args.routine,
+          type: "specialist",
+          kind: "pipeline_pick",
+          specialist: args.routine,
+          prompt: null,
+        },
+      };
     }
   }
 
