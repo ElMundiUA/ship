@@ -595,6 +595,17 @@ async def _apply_pull_request_event(
             to_state="Done",
             close_kind="merge",
         )
+        # Release the per-project WIP lock so the next non-anchor
+        # ticket in the same Linear project can fire. The
+        # dispatcher's ``project:<id>`` lock survives across the
+        # ticket's full lifecycle (planning → dev → validation →
+        # reviewer) and the PR-merge webhook is its canonical
+        # release signal.
+        await _release_project_lock_for_merged_pr(
+            session,
+            workspace_id=repo_row.workspace_id,
+            pr_title=title,
+        )
 
     # Same pattern for "closed without merge" — operator abandoned the
     # work, so the linked ticket lands in ``Canceled`` rather than
@@ -803,6 +814,81 @@ async def _transition_linked_tickets_on_merge(
             ticket_ref,
             pr_number,
             workspace_id,
+        )
+
+
+async def _release_project_lock_for_merged_pr(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    pr_title: str,
+) -> None:
+    """Free the ``project:<linear_project_id>`` lock when a PR merges.
+
+    The dispatcher holds a per-project WIP gate so only one non-anchor
+    ticket is in flight in a Linear project at a time. The release
+    signal is the canonical "work is done" event — a human (or the
+    future auto-merger bundle) clicking Merge on the PR that carries
+    the ticket id in its title. Parse the ticket id, look the project
+    up via the bound tracker, delete the lock row. Best-effort: a
+    missing ticket id or tracker hiccup just leaves the TTL to expire.
+    """
+    refs = _TICKET_REF_PR_TITLE_RE.findall(pr_title)
+    if not refs:
+        return
+    ticket_ref = refs[0]
+    try:
+        from backend.app.core.config import get_settings as _gs
+        from backend.app.integrations.gateway.tracker import TicketRef as _TR
+        from backend.app.services.tracker_resolver import (
+            resolve_for_workspace as _resolve,
+        )
+
+        resolved = await _resolve(
+            session=session, settings=_gs(), workspace_id=workspace_id
+        )
+        if resolved is None:
+            return
+        snap_fn = getattr(resolved.gateway, "get_ticket_snapshot", None)
+        if snap_fn is None:
+            return
+        snap = await snap_fn(_TR(kind=resolved.kind, workspace_hint=None, id=ticket_ref))
+        if not snap or not snap.get("project_id"):
+            return
+        project_id = str(snap["project_id"])
+    except Exception as exc:  # noqa: BLE001 — best-effort
+        logger.debug(
+            "project_lock release lookup failed ws=%s pr_title=%s err=%s",
+            workspace_id, pr_title, exc,
+        )
+        return
+
+    from sqlalchemy import text as _text
+    deleted = (
+        await session.execute(
+            _text(
+                "DELETE FROM agent_dispatch_locks "
+                "WHERE workspace_id = :ws AND key = :k RETURNING 1"
+            ),
+            {"ws": workspace_id, "k": f"project:{project_id}"},
+        )
+    ).all()
+    if deleted:
+        logger.info(
+            "pr_merge → released project lock ws=%s ticket=%s project=%s",
+            workspace_id, ticket_ref, project_id,
+        )
+        session.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                action="dispatch.project_lock_released",
+                target_kind="ticket",
+                target_id=ticket_ref,
+                payload={
+                    "via": "pr_merged",
+                    "project_id": project_id,
+                },
+            )
         )
 
 
