@@ -127,6 +127,9 @@ jobs:
         run: npm test
 
   # ---- shipctl CLI tests (node --test) ----------------------------------
+  # packages/cli has no package-lock.json (CLI ships as a single
+  # tarball; deps are pinned by ranges in package.json + tested via
+  # the source tree). No setup-node cache for the same reason.
   cli-tests:
     name: node --test (packages/cli)
     runs-on: ubuntu-latest
@@ -136,11 +139,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: npm
-          cache-dependency-path: packages/cli/package-lock.json
       - name: Install cli deps
         working-directory: packages/cli
-        run: npm ci || npm install
+        run: npm install
       - name: node --test
         working-directory: packages/cli
         run: npm test

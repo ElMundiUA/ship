@@ -56,7 +56,7 @@ function ctxOrThrow(): AuthCtx {
 
 
 function annotate(
-  testInfo: { annotations: Array<{ type: string; description: string }> },
+  testInfo: { annotations: Array<{ type: string; description?: string }> },
   analysis: ToolTrajectoryAnalysis,
 ): void {
   // Tool fires + outcomes go into the report as annotations so an
@@ -91,7 +91,7 @@ function annotate(
  * tries something different. Anything else is colour, not red.
  */
 function noteToolFamily(
-  testInfo: { annotations: Array<{ type: string; description: string }> },
+  testInfo: { annotations: Array<{ type: string; description?: string }> },
   analysis: ToolTrajectoryAnalysis,
   family: ReadonlySet<string>,
   label: string,

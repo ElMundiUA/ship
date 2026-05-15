@@ -40,7 +40,7 @@ function ctxOrThrow(): AuthCtx {
 
 
 function annotate(
-  testInfo: { annotations: Array<{ type: string; description: string }> },
+  testInfo: { annotations: Array<{ type: string; description?: string }> },
   analysis: ToolTrajectoryAnalysis,
 ): void {
   const ran = analysis.invocations
@@ -69,7 +69,7 @@ function assertNoRetryAfterFailure(analysis: ToolTrajectoryAnalysis): void {
 
 
 function expectAnyOf(
-  testInfo: { annotations: Array<{ type: string; description: string }> },
+  testInfo: { annotations: Array<{ type: string; description?: string }> },
   analysis: ToolTrajectoryAnalysis,
   expected: ReadonlySet<string>,
   label: string,

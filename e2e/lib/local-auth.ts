@@ -28,17 +28,25 @@ export interface LocalAuthCredentials {
 
 
 export interface LocalStorageState {
+  // Match Playwright's ``BrowserContextOptions.storageState`` cookie
+  // shape exactly — ``expires`` + ``sameSite`` are required there,
+  // not optional. Defaulting them inside ``buildLocalStorageState``
+  // keeps callers terse without breaking the assignment-compat check
+  // when the result is fed back into ``browser.newContext``.
   cookies: Array<{
     name: string;
     value: string;
     domain: string;
     path: string;
-    expires?: number;
+    expires: number;
     httpOnly: boolean;
     secure: boolean;
-    sameSite?: "Strict" | "Lax" | "None";
+    sameSite: "Strict" | "Lax" | "None";
   }>;
-  origins: Array<{ origin: string; localStorage: unknown[] }>;
+  origins: Array<{
+    origin: string;
+    localStorage: Array<{ name: string; value: string }>;
+  }>;
 }
 
 
@@ -88,8 +96,11 @@ export async function buildLocalStorageState(
     expires_at: string;
   };
   const url = new URL(consoleBase);
+  // -1 is Playwright's "session cookie" sentinel — same intent as
+  // ``undefined`` for the operator-facing semantics but a real
+  // number, which is what BrowserContextOptions.storageState requires.
   const expires =
-    Math.floor(new Date(body.expires_at).getTime() / 1000) || undefined;
+    Math.floor(new Date(body.expires_at).getTime() / 1000) || -1;
   return {
     cookies: [
       {
