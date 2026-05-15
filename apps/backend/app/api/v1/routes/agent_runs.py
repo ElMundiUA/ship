@@ -563,9 +563,18 @@ async def get_next_task(
             if snapshot_fn is not None:
                 try:
                     snapshot = await snapshot_fn(
-                        TicketRef(kind=resolved.kind, id=ticket_ref)
+                        TicketRef(
+                            kind=resolved.kind,
+                            workspace_hint=None,
+                            id=ticket_ref,
+                        )
                     )
-                except Exception:  # noqa: BLE001 — defensive
+                except Exception as exc:  # noqa: BLE001 — defensive
+                    logger.warning(
+                        "tracker/next pin: snapshot failed ws=%s "
+                        "ticket=%s err=%s",
+                        workspace_id, ticket_ref, exc,
+                    )
                     snapshot = None
             if snapshot is None:
                 rows = []
