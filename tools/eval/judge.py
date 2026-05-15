@@ -72,6 +72,8 @@ ROUTINE_TO_RUBRIC: dict[str, str] = {
     "validation": "validation.md",
     "self_heal": "self-heal.md",
     "self-heal": "self-heal.md",
+    "devops": "devops.md",
+    "devops_implementation": "devops.md",
 }
 
 

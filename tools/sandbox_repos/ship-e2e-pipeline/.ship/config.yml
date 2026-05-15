@@ -70,10 +70,26 @@ process:
         name: Reviewer
       instructions: |
         Final agent-side review — comments only, never approves.
+    - id: devops_implementation
+      name: DevOps implementation
+      state: executing
+      specialist:
+        id: devops
+        name: DevOps
+      instructions: |
+        Infra / CI / observability / deploy changes. Same finish
+        protocol as Developer (PR + rollback section + observability
+        hook), but never auto-merges (``gh_pr_merge`` denied), never
+        touches ``infra/k8s/overlays/prod/*`` without paired staging
+        edit, never commits real secrets. Transitions to
+        ``stage:validation`` so the standard PR review chain still
+        runs over the infra diff.
   transitions:
-    - { from: planning,           to: dev_implementation }
-    - { from: dev_implementation, to: validation }
-    - { from: validation,         to: code_review }
+    - { from: planning,                to: dev_implementation }
+    - { from: planning,                to: devops_implementation }
+    - { from: dev_implementation,      to: validation }
+    - { from: devops_implementation,   to: validation }
+    - { from: validation,              to: code_review }
   routines:
     planning:
       name: Planning bundle
@@ -110,6 +126,18 @@ process:
       fsm_stage: decomposition
       pipeline_priority: 5
       trigger: { type: dispatcher }
+    devops:
+      name: DevOps bundle
+      enabled: true
+      specialist: devops
+      fsm_stage: devops_implementation
+      pipeline_priority: 25
+      trigger: { type: dispatcher }
+      description: |
+        Infra / CI / observability / deploy changes. Tickets labelled
+        ``stage:devops_implementation`` flow through this routine
+        instead of the generic developer bundle so blast-radius +
+        rollback + secret-hygiene checks fire correctly.
     self_heal:
       name: Self-heal bundle
       enabled: true
