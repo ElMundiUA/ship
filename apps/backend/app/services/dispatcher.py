@@ -857,6 +857,10 @@ async def maybe_dispatch(
                 "workflow_file": WORKFLOW_FILE,
                 "routine_id": routine_id,
                 "fsm_stage": fsm_stage,
+                # Stash project_id so /tracker/next can fall back to
+                # it when synthesising a row from audit on a stale
+                # tracker replica (orphan gate needs project_id).
+                "project_id": project_id,
             },
         )
     )

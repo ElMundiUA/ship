@@ -654,17 +654,44 @@ async def get_next_task(
                     audit_title = None
                     if audit_title_row is not None and isinstance(audit_title_row.payload, dict):
                         audit_title = audit_title_row.payload.get("title")
-                    rows = [
-                        {
-                            "id": ticket_ref,
-                            "title": audit_title or ticket_ref,
-                            "body": audit_description,
-                            "url": (snapshot or {}).get("url"),
-                            "labels": (snapshot or {}).get("labels") or [],
-                            "state": (snapshot or {}).get("state"),
-                            "project_id": (snapshot or {}).get("project_id"),
-                        }
-                    ]
+                    # Best-effort project_id recovery: prefer the
+                    # snapshot's value, fall back to whichever
+                    # ``agent_run.dispatch`` audit fired most recently
+                    # for this ticket (the dispatcher writes
+                    # project_id into its payload via the same
+                    # tracker snapshot, so we benefit from however
+                    # fresh THAT lookup was).
+                    snap_project_id = (snapshot or {}).get("project_id")
+                    synth_project_id: str | None = snap_project_id
+                    if synth_project_id is None:
+                        last_dispatch_row = (
+                            await session.execute(
+                                select(AuditLog)
+                                .where(
+                                    AuditLog.workspace_id == workspace_id,
+                                    AuditLog.action == "agent_run.dispatch",
+                                    AuditLog.payload["ticket_ref"].astext == ticket_ref,
+                                )
+                                .order_by(_sa_desc(AuditLog.created_at))
+                                .limit(1)
+                            )
+                        ).scalars().first()
+                        if last_dispatch_row and isinstance(last_dispatch_row.payload, dict):
+                            synth_project_id = last_dispatch_row.payload.get("project_id")
+                    row = {
+                        "id": ticket_ref,
+                        "title": audit_title or ticket_ref,
+                        "body": audit_description,
+                        "url": (snapshot or {}).get("url"),
+                        "labels": (snapshot or {}).get("labels") or [],
+                        "state": (snapshot or {}).get("state"),
+                    }
+                    # Only include project_id when we actually have one
+                    # — otherwise the orphan gate sees a present-but-
+                    # NULL key and filters the row out.
+                    if synth_project_id:
+                        row["project_id"] = synth_project_id
+                    rows = [row]
                 elif snapshot is None:
                     rows = []
                 else:
