@@ -598,35 +598,27 @@ async def get_next_task(
             snapshot_fn = getattr(resolved.gateway, "get_ticket_snapshot", None)
             snapshot = None
             if snapshot_fn is not None:
-                import asyncio as _asyncio
-                # Retry once on stale-replica read: when a finish
-                # handler's ``set_description`` mutation lands on
-                # Linear's primary at T but the read replica we're
-                # hitting hasn't caught up, the snapshot comes back
-                # with the previous (often empty) body. Empty body
-                # on a non-anchor ticket is suspicious — sleep 3s and
-                # try once more before deciding it's really empty.
-                for attempt in range(3):
-                    try:
-                        snapshot = await snapshot_fn(
-                            TicketRef(
-                                kind=resolved.kind,
-                                workspace_hint=None,
-                                id=ticket_ref,
-                            )
+                # Single snapshot attempt — the audit-overlay below
+                # is the authoritative path for "did the prior stage
+                # write a description?", so we don't burn 15s of
+                # sleep waiting for the tracker replica. The runner's
+                # /tracker/next is on a tight latency budget (one
+                # cron tick may time out if we sleep too long).
+                try:
+                    snapshot = await snapshot_fn(
+                        TicketRef(
+                            kind=resolved.kind,
+                            workspace_hint=None,
+                            id=ticket_ref,
                         )
-                    except Exception as exc:  # noqa: BLE001 — defensive
-                        logger.warning(
-                            "tracker/next pin: snapshot failed ws=%s "
-                            "ticket=%s attempt=%d err=%s",
-                            workspace_id, ticket_ref, attempt, exc,
-                        )
-                        snapshot = None
-                    body = (snapshot or {}).get("description") or ""
-                    if snapshot and (snapshot.get("title") or "") and len(body) >= 50:
-                        break
-                    if attempt < 2:
-                        await _asyncio.sleep(5)
+                    )
+                except Exception as exc:  # noqa: BLE001 — defensive
+                    logger.warning(
+                        "tracker/next pin: snapshot failed ws=%s "
+                        "ticket=%s err=%s",
+                        workspace_id, ticket_ref, exc,
+                    )
+                    snapshot = None
             # Fallback synthesis: when the tracker replica returned
             # NULL or an empty issue but we have a recent audit
             # finish for the same ticket_ref, synthesise the row
