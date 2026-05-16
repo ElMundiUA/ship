@@ -696,17 +696,41 @@ async def get_next_task(
                 # ``set_description`` mutation yet).
                 if audit_description and len(audit_description) > len(snap_body):
                     snap_body = audit_description
-                rows = [
-                    {
-                        "id": snapshot.get("ticket_ref") or ticket_ref,
-                        "title": snapshot.get("title"),
-                        "body": snap_body,
-                        "url": snapshot.get("url"),
-                        "labels": snapshot.get("labels") or [],
-                        "state": snapshot.get("state"),
-                        "project_id": snapshot.get("project_id"),
-                    }
-                ]
+                # project_id: prefer snapshot's, fall back to the last
+                # dispatch's payload (the cascade dispatcher recorded
+                # it from a fresher tracker read). Omit the key
+                # entirely when both are None so the orphan gate
+                # (which trips on present-but-null project_id) lets
+                # the row through. Without this fallback Linear's
+                # replica lag on the project ref drops the row even
+                # when our last dispatch knew the project.
+                snap_pid = snapshot.get("project_id")
+                if not snap_pid:
+                    last_dispatch_row = (
+                        await session.execute(
+                            select(AuditLog)
+                            .where(
+                                AuditLog.workspace_id == workspace_id,
+                                AuditLog.action == "agent_run.dispatch",
+                                AuditLog.payload["ticket_ref"].astext == ticket_ref,
+                            )
+                            .order_by(_sa_desc(AuditLog.created_at))
+                            .limit(1)
+                        )
+                    ).scalars().first()
+                    if last_dispatch_row and isinstance(last_dispatch_row.payload, dict):
+                        snap_pid = last_dispatch_row.payload.get("project_id")
+                row = {
+                    "id": snapshot.get("ticket_ref") or ticket_ref,
+                    "title": snapshot.get("title"),
+                    "body": snap_body,
+                    "url": snapshot.get("url"),
+                    "labels": snapshot.get("labels") or [],
+                    "state": snapshot.get("state"),
+                }
+                if snap_pid:
+                    row["project_id"] = snap_pid
+                rows = [row]
         else:
             rows = await resolved.gateway.list_tickets(state=state, limit=10)
     except RuntimeError as exc:
