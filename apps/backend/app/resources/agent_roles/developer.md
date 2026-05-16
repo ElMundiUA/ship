@@ -1,5 +1,6 @@
 ---
 name: Developer
+fsm_stage: dev_implementation
 ---
 
 # Role: Developer ({{ISSUE}})

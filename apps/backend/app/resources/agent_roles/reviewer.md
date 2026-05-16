@@ -1,5 +1,6 @@
 ---
 name: Reviewer
+fsm_stage: code_review
 denied_tools:
   - git_commit
   - git_push
