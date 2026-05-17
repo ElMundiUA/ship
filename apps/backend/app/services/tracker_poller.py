@@ -93,6 +93,7 @@ query ShipTrackerPoll($filter: IssueFilter, $after: String) {
       state { name }
       labels { nodes { name } }
       updatedAt
+      createdAt
       # Recent comments — used to detect operator answers on tickets
       # carrying ``needs:clarification``. Sorted by Linear's default
       # (createdAt DESC by default on the connection). 20 is enough
@@ -550,6 +551,19 @@ async def _poll_installation(
 
     issues = await _fetch_updated_issues(
         token=token, team_id=team_id, since_iso=cursor_iso, client=client
+    )
+    # Deterministic dispatch order on mass-update batches: when the
+    # operator flips a project parked→active, all child tickets'
+    # ``updatedAt`` lands within milliseconds, and Linear's batch
+    # order is whatever GraphQL returns (effectively undefined for
+    # tied timestamps). Sort by ``createdAt`` so PAC-32 fires
+    # before PAC-33 — matches the operator's intuition for a
+    # sequence of sub-tasks (e.g. Hetzner setup: SSH → Docker →
+    # DNS → repos → start). Caught on askslayer/PAC-32..36
+    # 2026-05-17. Tickets without ``createdAt`` sort last.
+    issues = sorted(
+        issues,
+        key=lambda i: (i.get("createdAt") or "￿", i.get("identifier") or ""),
     )
 
     events = 0

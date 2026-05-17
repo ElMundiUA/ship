@@ -360,7 +360,7 @@ class LinearTracker:
             $first: Int!,
             $filter: IssueFilter
         ) {
-          issues(first: $first, orderBy: updatedAt, filter: $filter) {
+          issues(first: $first, orderBy: createdAt, filter: $filter) {
             nodes {
               id
               identifier
@@ -371,6 +371,13 @@ class LinearTracker:
           }
         }
         """
+        # ``orderBy: createdAt`` — moves match Linear's identifier
+        # order (PAC-32 before PAC-33 etc), which is the natural
+        # "work this set in sequence" reading. Used to be
+        # ``updatedAt`` which was meaningless for ordering a fresh
+        # mass-move on a project flip parked→active. Caught on
+        # askslayer/PAC-32..36 2026-05-17 (Hetzner setup sub-tasks
+        # with implicit step ordering).
         issue_filter: dict[str, Any] = {
             "and": [
                 {"project": {"id": {"eq": project_id}}},
