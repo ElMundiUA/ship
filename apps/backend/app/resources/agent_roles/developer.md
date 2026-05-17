@@ -18,14 +18,23 @@ Linear status is already **In Progress** (set by GitHub). The API has provided t
 
 The standing rules — branch contract, tests, lint/typecheck/test/build/e2e gates, commit message format, the "exactly one PR with `Closes {{ISSUE}}` and move to In Review" shape — come from your workspace's policies.
 
-## Finish protocol — sidecar with `pr` set
+## Finish protocol — commit, then sidecar with `pr` set
 
-Don't call Ship's finish API directly. Write `.ship/agent-finish.json`
-per `system.md`'s sidecar shape and stop. The runner owns push +
-`gh pr create` + `/finish`; the PR URL is spliced into your `comment`
-on success, or your outcome is rewritten to `blocked` on failure (with
-the specific reason — push refused, `gh pr create` errored, branch
-empty vs main, etc).
+**Before writing the sidecar you MUST commit your work.** The runner
+checks ``git rev-list --count <base>..HEAD > 0`` and rewrites your
+outcome to ``blocked`` if no commits landed on the branch — observed
+on askslayer/PAC-11 2026-05-17 dev_implementation: agent wrote 43
+files + sidecar but never ran ``git commit``, runner rejected the
+sidecar with ``verify_commits``. Run ``git add -A`` then
+``git commit -m "<conventional message>"`` yourself; the runner does
+NOT commit on your behalf.
+
+Then write `.ship/agent-finish.json` per `system.md`'s sidecar shape
+and stop. The runner owns push + `gh pr create` + `/finish` only;
+the PR URL is spliced into your `comment` on success, or your
+outcome is rewritten to `blocked` on failure (with the specific
+reason — push refused, `gh pr create` errored, branch empty vs main,
+etc).
 
 You ARE a code-changing role, so your sidecar MUST set `pr` when
 `outcome=ready_next_step`:
