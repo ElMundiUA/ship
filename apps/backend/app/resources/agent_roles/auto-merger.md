@@ -111,13 +111,81 @@ a human.
 
 ### 6. Test coverage of the diff
 
-- 🟢 every changed `*.{ts,py,go,mjs}` source file has a matching test
-  file modified in the same PR (heuristic: same basename + `.test.*` or
-  `_test.{py,go}` or `.spec.{ts,mjs}`).
-- 🟡 ≥80% of changed source files have a matching test diff.
-- 🔴 <80% coverage of the diff or the validation bundle's manual phase
-  reported defects (look for `outcome=blocked` from the validation
-  step in the ticket's audit comments).
+Goal: catch business-logic gaps without blocking the chain on
+presentation-layer churn where unit tests would be theatre.
+Caught on Ship-on-Ship/ELS-7 2026-05-17: a 6-file dashboard
+period-selector PR (mostly `.tsx` pages + one shared service)
+got bounced three iterations because every TSX without a paired
+spec scored RED — gold-plating the project for zero added safety.
+Discriminate by path.
+
+**Bucket changed files first:**
+
+A. **EXCLUDE (don't count toward coverage at all):**
+   - styling: `**/*.css`, `**/*.scss`, `**/*.module.css`,
+     `**/*.less`
+   - configs: `**/*.json`, `**/*.yaml`, `**/*.yml`, `**/*.toml`,
+     `**/*.ini`, `**/.env*`
+   - docs: `**/*.md`, `**/*.mdx`, `**/*.rst`, `**/*.txt`
+   - migrations (Signal 5 is the real gate): `**/migrations/**`,
+     `**/alembic/versions/**`
+   - barrel files: `**/index.ts`, `**/index.tsx` when >80% of
+     non-blank lines are `export *` / `export { ... } from`
+   - lock files: `**/package-lock.json`, `**/uv.lock`,
+     `**/poetry.lock`, `**/go.sum`
+   - generated: `**/generated/**`, `**/*.generated.*`
+   - assets: `**/*.svg`, `**/*.png`, `**/*.jpg`, `**/*.ico`,
+     `**/*.woff*`
+   - CI/infra glue: `.github/**`, `infra/**/*.{yaml,yml}`,
+     `**/Dockerfile`, `**/Makefile`
+   - role/policy resources: `apps/backend/app/resources/**/*.md`
+
+B. **PRESENTATION (gap = YELLOW, never RED):**
+   - Next.js pages: `**/app/**/page.tsx`, `**/app/**/layout.tsx`,
+     `**/app/**/error.tsx`, `**/app/**/loading.tsx`,
+     `**/app/**/not-found.tsx`
+   - React components without logic branches: `**/components/**/*.tsx`,
+     `**/ui/**/*.tsx` — unit tests on these usually assert
+     "renders DOM" tautologies; e2e is the right gate, which
+     CI runs separately
+   - Storybook stories: `**/*.stories.{ts,tsx}`
+
+C. **BUSINESS LOGIC (gap = RED):**
+   - backend services: `apps/backend/app/services/**/*.py`
+     (services own state mutation + integration boundaries)
+   - backend routes: `apps/backend/app/api/**/*.py` excluding
+     pure schema files (`*_schemas.py`)
+   - frontend helpers / libs: `apps/console/src/lib/**/*.{ts,tsx}`
+     (data shaping, validation, API clients)
+   - CLI commands: `packages/cli/lib/commands/**/*.mjs`
+   - shared packages: `packages/**/lib/**/*.{ts,mjs,py}`
+   - integrations: `apps/backend/app/integrations/**/*.py`
+
+**Score:**
+
+- 🟢 every file in bucket C has a paired test diff in the same PR
+  (heuristic: same basename + `.test.*` / `_test.{py,go}` /
+  `.spec.{ts,mjs}`), AND no `outcome=blocked` from validation in
+  the ticket's audit comments.
+- 🟡 ≥1 file in bucket C lacks a paired test, OR every B-bucket
+  file lacks a test. This is "coverage is thin but the change
+  isn't structurally unsafe" — pass it through, log the gap in
+  the merge comment so the operator sees what's queued for a
+  follow-up coverage PR.
+- 🔴 ≥1 bucket-C file lacks a paired test **AND** the absent test
+  would catch a code-change that isn't a one-liner (rename,
+  signature change, new function with logic). When in doubt
+  between yellow and red on C-bucket gaps, prefer yellow —
+  bouncing a real PR for cosmetic coverage costs more trust than
+  letting a thin test through. Also RED if validation explicitly
+  blocked (look for `outcome=blocked` from the validation step in
+  the ticket's audit comments) — that's a different signal class
+  (defects, not coverage gaps).
+
+**Note your bucketing in the merge comment**: "12 changed files —
+9 in PRESENTATION bucket B (no test required), 3 in business
+logic bucket C, 3/3 have paired test diffs → green." That makes
+the decision auditable.
 
 ### 7. Conflict with concurrent in-flight PRs
 
