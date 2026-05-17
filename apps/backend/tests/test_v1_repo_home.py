@@ -256,3 +256,46 @@ async def test_repo_home_404_for_unknown_repo(v1_client, seed_workspace) -> None
         headers={"Authorization": f"Bearer {raw}"},
     )
     assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_repo_home_ops_window_widens_now_slice(
+    v1_client, seed_repo_home, db_session
+) -> None:
+    from sqlalchemy import select
+
+    from backend.app.db.models.lanes import Routine, RoutineRun
+
+    raw, workspace, repo = seed_repo_home
+    pipeline = (
+        await db_session.execute(
+            select(Routine).where(Routine.repo_id == repo.id).limit(1)
+        )
+    ).scalar_one()
+    now = datetime.now(timezone.utc)
+    db_session.add(
+        RoutineRun(
+            routine_id=pipeline.id,
+            workspace_id=workspace.id,
+            trigger="cron",
+            status="succeeded",
+            started_at=now - timedelta(days=3, hours=2),
+            finished_at=now - timedelta(days=3, hours=1),
+            created_at=now - timedelta(days=3, hours=2),
+        )
+    )
+    await db_session.flush()
+
+    narrow = await v1_client.get(
+        f"/v1/workspaces/{workspace.id}/repos/{repo.id}/home?window=24h",
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    wide = await v1_client.get(
+        f"/v1/workspaces/{workspace.id}/repos/{repo.id}/home?window=7d",
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    assert narrow.status_code == 200, narrow.text
+    assert wide.status_code == 200, wide.text
+    n_narrow = narrow.json()["now"]["runs_last_24h"]
+    n_wide = wide.json()["now"]["runs_last_24h"]
+    assert n_wide == n_narrow + 1

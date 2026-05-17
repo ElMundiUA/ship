@@ -40,6 +40,11 @@ from backend.app.db.models.pipelines import (
     WorkflowRun,
 )
 from backend.app.db.session import get_session
+from backend.app.services.ops_report_window import (
+    OpsReportWindow,
+    ops_report_cutoff,
+    repo_home_fetch_span_days,
+)
 from backend.app.services.seed_bundle import BUNDLE_VERSION
 
 
@@ -151,6 +156,10 @@ async def get_repo_home(
     workspace_id: uuid.UUID,
     repo_id: uuid.UUID,
     window_days: int = Query(default=30, ge=1, le=180),
+    window: OpsReportWindow = Query(
+        default="24h",
+        description="UTC period for Now-tab counters (independent of window_days).",
+    ),
     auth: AuthContext = Depends(get_current_auth),
     session: AsyncSession = Depends(get_session),
 ) -> RepoHomeReport:
@@ -178,8 +187,9 @@ async def get_repo_home(
         ).scalar_one_or_none()
 
     now = datetime.now(timezone.utc)
-    window_start = now - timedelta(days=window_days)
-    day_24h = now - timedelta(hours=24)
+    span_days = max(window_days, repo_home_fetch_span_days(window))
+    window_start = now - timedelta(days=span_days)
+    activity_cutoff = ops_report_cutoff(now, window)
 
     # Lanes: count of ``Pipeline`` rows for the repo. We split
     # ``enabled`` out so the UI can show "3 of 5 lanes wired".
@@ -208,7 +218,7 @@ async def get_repo_home(
         repo=repo,
         suspended_at=suspended_at,
         activity=activity,
-        day_24h=day_24h,
+        activity_cutoff=activity_cutoff,
         now=now,
         lanes_total=lanes_total,
         lanes_enabled=lanes_enabled,
@@ -437,7 +447,7 @@ def _build_now(
     repo: WorkspaceRepo,
     suspended_at: datetime | None,
     activity: list[_Activity],
-    day_24h: datetime,
+    activity_cutoff: datetime | None,
     now: datetime,
     lanes_total: int,
     lanes_enabled: int,
@@ -451,10 +461,14 @@ def _build_now(
         1 for a in activity if a.kind == "agent" and a.status == "running"
     )
 
-    in_24h = [a for a in activity if a.at >= day_24h]
-    runs_last_24h = len(in_24h)
-    successes_last_24h = sum(1 for a in in_24h if a.status == "succeeded")
-    failures_last_24h = sum(1 for a in in_24h if a.status == "failed")
+    in_window = [
+        a
+        for a in activity
+        if activity_cutoff is None or a.at >= activity_cutoff
+    ]
+    runs_last_24h = len(in_window)
+    successes_last_24h = sum(1 for a in in_window if a.status == "succeeded")
+    failures_last_24h = sum(1 for a in in_window if a.status == "failed")
 
     last_run_at: datetime | None = None
     last_success_at: datetime | None = None

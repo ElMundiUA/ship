@@ -2284,12 +2284,18 @@ export function getDashboard(
   );
 }
 
+export type OpsReportWindow = "24h" | "7d" | "30d" | "all";
+
 export function getOpsDashboard(
   workspaceId: string,
   token?: string,
+  opts?: { window?: OpsReportWindow },
 ): Promise<ApiOpsDashboard> {
+  const qs = new URLSearchParams();
+  qs.set("window", opts?.window ?? "24h");
+  const suffix = `?${qs.toString()}`;
   return apiFetch<ApiOpsDashboard>(
-    `/v1/workspaces/${encodeURIComponent(workspaceId)}/dashboard/ops`,
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/dashboard/ops${suffix}`,
     { token },
   );
 }
@@ -3725,13 +3731,18 @@ export interface ApiRepoHomeReport {
 export async function getRepoHome(
   workspaceId: string,
   repoId: string,
-  opts: { windowDays?: number; token?: string } = {},
+  opts: {
+    windowDays?: number;
+    window?: OpsReportWindow;
+    token?: string;
+  } = {},
 ): Promise<ApiRepoHomeReport> {
   const params = new URLSearchParams();
   if (opts.windowDays !== undefined) {
     params.set("window_days", String(opts.windowDays));
   }
-  const suffix = params.toString() ? `?${params.toString()}` : "";
+  params.set("window", opts.window ?? "24h");
+  const suffix = `?${params.toString()}`;
   return apiFetch<ApiRepoHomeReport>(
     `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/home${suffix}`,
     { token: opts.token },
