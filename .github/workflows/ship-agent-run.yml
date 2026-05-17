@@ -21,8 +21,14 @@ on:
         required: true
         type: string
       ticket_ref:
-        description: "Ticket the dispatcher chose to pin this run to (e.g. ELS-42)."
-        required: true
+        # Workspace-bundle dispatches (self-heal / daily-digest /
+        # weekly-audit) have no ticket. The backend still passes the
+        # bundle id as a placeholder for older copies of this workflow
+        # that have ``required: true`` baked in, but new repos /
+        # reseeded repos don't need a value.
+        description: "Ticket the dispatcher pins this run to (e.g. ELS-42). Empty for workspace bundles."
+        required: false
+        default: ""
         type: string
 
 permissions:
