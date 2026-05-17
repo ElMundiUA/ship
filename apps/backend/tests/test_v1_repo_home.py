@@ -110,7 +110,7 @@ async def seed_repo_home(db_session, seed_workspace):
         ]
     )
 
-    # --- Workflow run: one GitHub-observed success yesterday. Unique
+    # --- Workflow run: one GitHub-observed success ~36h ago. Unique
     # kind so we can assert the 3-source merge.
     db_session.add(
         WorkflowRun(
@@ -123,7 +123,9 @@ async def seed_repo_home(db_session, seed_workspace):
             status="completed",
             conclusion="success",
             html_url="https://github.com/rh/app/actions/runs/777",
-            created_at=now - timedelta(days=1),
+            # Keep clearly outside ops ``24h`` (``timedelta(days=1)``) so
+            # handlers that call ``datetime.now()`` again cannot straddle the cutoff.
+            created_at=now - timedelta(hours=36),
         )
     )
 
@@ -298,7 +300,10 @@ async def test_repo_home_ops_window_widens_now_slice(
     assert wide.status_code == 200, wide.text
     n_narrow = narrow.json()["now"]["runs_last_24h"]
     n_wide = wide.json()["now"]["runs_last_24h"]
-    assert n_wide == n_narrow + 1
+    # Baseline seed keeps the GitHub workflow ~36h ago (outside ``24h`` but
+    # inside ``7d``); the extra pipeline run is three days back. Widening
+    # the Now window should pick up both.
+    assert n_wide == n_narrow + 2
 
 
 @pytest.mark.asyncio
