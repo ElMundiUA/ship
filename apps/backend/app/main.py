@@ -165,6 +165,27 @@ async def lifespan(_app: FastAPI):
         logging.getLogger("ship.tracker_poll").exception(
             "tracker poller failed to start; API stays up"
         )
+    # FSM auto-reprovision on startup. When SHIP_FSM_STAGES grows
+    # (a new stage like ``auto_merge`` lands in code), existing
+    # workspaces' Linear ``label_id_by_stage`` is missing that
+    # stage's label id — ``transition()`` silently skips the
+    # breadcrumb and the chain wedges. Idempotent walk +
+    # ``provision_team`` backfills the missing labels on every
+    # boot. Fire-and-forget so a slow Linear API on one workspace
+    # doesn't delay the lifespan.
+    try:
+        from backend.app.services.fsm_self_heal import (
+            auto_reprovision_on_startup,
+        )
+
+        asyncio.create_task(
+            auto_reprovision_on_startup(),
+            name="ship.fsm_self_heal.reprovision",
+        )
+    except Exception:
+        logging.getLogger("ship.fsm_self_heal").exception(
+            "FSM auto-reprovision failed to start; API stays up"
+        )
     try:
         yield
     finally:

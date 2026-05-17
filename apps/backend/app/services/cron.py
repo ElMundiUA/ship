@@ -107,6 +107,15 @@ class CronLockId(IntEnum):
     WORKSPACE_DAILY_DIGEST = 1013
     WORKSPACE_WEEKLY_AUDIT = 1014
     WORKSPACE_SELF_HEAL = 1015
+    # FSM backstop scan (askslayer/PAC-32..36 2026-05-17). Event-
+    # driven dispatch via tracker_poller fires on state changes; if
+    # a maybe_dispatch was dropped (lock, refire-cap, transient
+    # error), the ticket sits idle until something else moves its
+    # state. This scan walks the Linear FSM filter per stage every
+    # 15 min and re-fires any ticket whose last dispatch is older
+    # than 20 min. Conservative cadence + idempotent dispatch (same
+    # lock as the poller's path) makes the overlap safe.
+    FSM_SCAN_BACKSTOP = 1016
 
 
 # ---------------------------------------------------------------------------

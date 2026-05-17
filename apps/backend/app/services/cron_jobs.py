@@ -624,5 +624,28 @@ def register_all() -> None:
 
     register_workspace_ticks()
 
+    # FSM self-heal backstop (askslayer/PAC-32..36 2026-05-17).
+    # Event-driven dispatch via tracker_poller fires only on state
+    # changes; a maybe_dispatch dropped on the floor (lock,
+    # refire-cap, transient API 5xx) silently strands the ticket
+    # until something else moves it. Every 15 minutes this cron
+    # walks each workspace's Linear FSM filter and re-fires any
+    # ticket without a recent dispatch.
+    register_cron(
+        fn=_fsm_self_heal_scan_tick,
+        cron_expr="*/15 * * * *",  # every 15 min
+        job_id="fsm_self_heal_scan",
+    )
+
+
+@cron_with_lock(lock=CronLockId.FSM_SCAN_BACKSTOP, name="fsm_self_heal_scan")
+async def _fsm_self_heal_scan_tick() -> None:
+    """Periodic backstop — re-fire dispatch on tickets the
+    event-driven path missed. See :mod:`fsm_self_heal` for the
+    detailed contract."""
+    from backend.app.services.fsm_self_heal import scan_eligible_tickets
+
+    await scan_eligible_tickets()
+
 
 __all__ = ["register_all"]
