@@ -667,8 +667,29 @@ async function _runCommandImpl(ctx, rest) {
         process.exit(EXIT_AGENT_FAIL);
       }
 
+      // Mint the Ship App installation token BEFORE push. The
+      // default ``${{ secrets.GITHUB_TOKEN }}`` that ``actions/
+      // checkout`` configures has ``contents: write`` but cannot push
+      // changes to ``.github/workflows/**`` — that's a GitHub-level
+      // safety on the workflow token, not a permissions config we
+      // can fix in YAML. The Ship App's installation token, on the
+      // other hand, carries ``workflows: write`` (declared on the App
+      // itself) and is allowed to push workflow files. We pass it
+      // into ``pushBranch`` so the runner can land an agent commit
+      // that touches CI plumbing without operator hand-rolled
+      // configuration.
+      const ghToken = await fetchInstallationToken({
+        apiBase,
+        apiToken,
+        workspaceId,
+        githubRepo: env.githubRepo,
+      });
+      step("mint_pr_token", ghToken ? "ok" : "fallback_env", {
+        source: ghToken ? "ship_app" : "github_actions",
+      });
+
       try {
-        pushed = pushBranch({ branchName });
+        pushed = pushBranch({ branchName, ghToken, githubRepo: env.githubRepo });
         step("push_branch", "ok", { branch: branchName });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -686,16 +707,6 @@ async function _runCommandImpl(ctx, rest) {
         });
         process.exit(EXIT_AGENT_FAIL);
       }
-
-      const ghToken = await fetchInstallationToken({
-        apiBase,
-        apiToken,
-        workspaceId,
-        githubRepo: env.githubRepo,
-      });
-      step("mint_pr_token", ghToken ? "ok" : "fallback_env", {
-        source: ghToken ? "ship_app" : "github_actions",
-      });
 
       try {
         prUrl = openPullRequest({
@@ -924,8 +935,53 @@ function hasNewCommits(baseBranch) {
 }
 
 
-function pushBranch({ branchName }) {
-  git(["push", "-u", "origin", branchName]);
+function pushBranch({ branchName, ghToken, githubRepo }) {
+  // When the Ship App installation token is available, push through
+  // it directly so workflow-file changes (``.github/workflows/**``)
+  // survive. The default ``${{ secrets.GITHUB_TOKEN }}`` that
+  // ``actions/checkout`` configures into the credential helper
+  // carries ``contents: write`` but is denied on workflow file
+  // updates: ``refusing to allow a GitHub App to create or update
+  // workflow ... without `workflows` permission`` — and that
+  // permission can't be granted to the workflow token, only to the
+  // App itself. The Ship App's installation token has
+  // ``workflows: write`` declared on the App and is the right
+  // identity for the push.
+  //
+  // We embed the token into a one-shot URL passed straight to
+  // ``git push`` (bypassing the persisted ``origin`` remote +
+  // credential helper that ``actions/checkout`` set up) so:
+  //   - the token never lands in ``.git/config`` on disk;
+  //   - there's no ordering hazard with the credential helper —
+  //     ``git push <url>`` ignores the remote's auth entirely;
+  //   - we don't need to undo any state on failure.
+  // ``x-access-token`` is GitHub's documented username for App
+  // installation tokens on HTTPS Git endpoints; the token itself
+  // goes in the password slot.
+  if (ghToken && githubRepo) {
+    const repo = String(githubRepo).trim();
+    const remoteUrl = `https://x-access-token:${ghToken}@github.com/${repo}.git`;
+    // ``actions/checkout`` writes a per-URL ``http.extraheader`` into
+    // ``.git/config`` with the workflow token; when we push via an
+    // explicit URL, git STILL sends that header (URL-prefix match),
+    // and GitHub then refuses the workflow-file write under the
+    // workflow token's identity, ignoring the App token in the URL.
+    // Strip the header for this push so the App-token credentials
+    // win. ``--unset-all`` no-ops cleanly if the header isn't set.
+    spawnSync(
+      "git",
+      [
+        "config",
+        "--local",
+        "--unset-all",
+        "http.https://github.com/.extraheader",
+      ],
+      { stdio: "ignore" },
+    );
+    git(["push", remoteUrl, `${branchName}:${branchName}`]);
+  } else {
+    git(["push", "-u", "origin", branchName]);
+  }
   return branchName;
 }
 
