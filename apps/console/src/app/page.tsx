@@ -33,6 +33,10 @@ import {
   toAppShellWorkspaces,
   withWorkspaceQuery,
 } from "@/lib/workspace-scope";
+import {
+  parseDashboardOpsWindow,
+  type DashboardOpsWindow,
+} from "@/lib/ops-reporting-window";
 
 export const dynamic = "force-dynamic";
 
@@ -84,6 +88,7 @@ export default async function CloudHomePage({
   }
 
   const skipWizard = params.skipWizard === "1";
+  const opsWindow = parseDashboardOpsWindow(params.window);
 
   let list: ApiWorkspace[];
   try {
@@ -109,7 +114,7 @@ export default async function CloudHomePage({
     );
   }
 
-  const result = await loadLiveContext(token, list, wsParam);
+  const result = await loadLiveContext(token, list, wsParam, opsWindow);
   if (result === "unauthorized") redirect("/login?next=%2F&reason=session_expired");
   if (result === "down") return renderDownState();
 
@@ -125,6 +130,7 @@ type LiveContext = {
   allWorkspaces: ApiWorkspace[];
   data: ApiOpsDashboard;
   repos: ApiActivatedRepo[];
+  opsWindow: DashboardOpsWindow;
   /** Inbox preview for "What needs you" — top items + counts. Best-effort:
    *  if the call fails we degrade to empty arrays so the rest of the
    *  dashboard still renders. */
@@ -165,12 +171,13 @@ async function loadLiveContext(
   token: string,
   list: ApiWorkspace[],
   wsParam: string | undefined,
+  opsWindow: DashboardOpsWindow,
 ): Promise<LiveContext | "unauthorized" | "down"> {
   const workspace = pickWorkspace(list, wsParam);
   try {
     const [data, repos, inboxItems, inboxCounts, priorities, liveSystem] =
       await Promise.all([
-        getOpsDashboard(workspace.id, token),
+        getOpsDashboard(workspace.id, token, opsWindow),
         listActivatedRepos(workspace.id, token).catch(
           () => [] as ApiActivatedRepo[],
         ),
@@ -192,6 +199,7 @@ async function loadLiveContext(
       allWorkspaces: list,
       data,
       repos,
+      opsWindow,
       inboxItems,
       inboxCounts,
       priorities,
@@ -228,6 +236,7 @@ function renderWorkspaceHome(ctx: LiveContext) {
         repos={ctx.repos}
         workspaceId={workspace.id}
         multiWs={multi}
+        opsWindow={ctx.opsWindow}
         inboxItems={ctx.inboxItems}
         inboxCounts={ctx.inboxCounts}
         priorities={ctx.priorities}

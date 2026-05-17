@@ -35,6 +35,7 @@ import type {
   InboxType,
 } from "@/lib/inbox-types";
 import type { RoutineScheduleV1 } from "@/lib/routine-schedule-spec";
+import type { DashboardOpsWindow } from "@/lib/ops-reporting-window";
 import { getSessionToken } from "./session";
 
 export class ApiUnavailableError extends Error {
@@ -2287,9 +2288,13 @@ export function getDashboard(
 export function getOpsDashboard(
   workspaceId: string,
   token?: string,
+  opsWindow: DashboardOpsWindow = "24h",
 ): Promise<ApiOpsDashboard> {
+  const q = new URLSearchParams({
+    window: opsWindow ?? "24h",
+  });
   return apiFetch<ApiOpsDashboard>(
-    `/v1/workspaces/${encodeURIComponent(workspaceId)}/dashboard/ops`,
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/dashboard/ops?${q.toString()}`,
     { token },
   );
 }
@@ -3725,12 +3730,17 @@ export interface ApiRepoHomeReport {
 export async function getRepoHome(
   workspaceId: string,
   repoId: string,
-  opts: { windowDays?: number; token?: string } = {},
+  opts: {
+    windowDays?: number;
+    opsWindow?: DashboardOpsWindow;
+    token?: string;
+  } = {},
 ): Promise<ApiRepoHomeReport> {
   const params = new URLSearchParams();
   if (opts.windowDays !== undefined) {
     params.set("window_days", String(opts.windowDays));
   }
+  params.set("window", opts.opsWindow ?? "24h");
   const suffix = params.toString() ? `?${params.toString()}` : "";
   return apiFetch<ApiRepoHomeReport>(
     `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/home${suffix}`,

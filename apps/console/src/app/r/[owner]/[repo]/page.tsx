@@ -26,6 +26,11 @@ import type {
 } from "@/lib/api/client";
 import { resolveRepoContext, type RepoContext } from "@/lib/repo-context";
 import { slugFromParams, type RepoRouteParams } from "@/lib/repo-slug";
+import {
+  formatOpsWindowBadge,
+  parseDashboardOpsWindow,
+  type DashboardOpsWindow,
+} from "@/lib/ops-reporting-window";
 import { toAppShellWorkspaces, withWorkspaceQuery } from "@/lib/workspace-scope";
 
 /**
@@ -48,6 +53,29 @@ export const dynamic = "force-dynamic";
 type Search = Record<string, string | string[] | undefined>;
 type Tab = "now" | "trends";
 
+function firstSearchParam(
+  search: Search,
+  key: string,
+): string | undefined {
+  const v = search[key];
+  const s = Array.isArray(v) ? v[0] : v;
+  return typeof s === "string" && s.length > 0 ? s : undefined;
+}
+
+function repoHomeHref(
+  base: string,
+  search: Search,
+  opts: { tab: Tab; opsWindow: DashboardOpsWindow },
+): string {
+  const p = new URLSearchParams();
+  const ws = firstSearchParam(search, "ws");
+  if (ws) p.set("ws", ws);
+  p.set("window", opts.opsWindow);
+  if (opts.tab === "trends") p.set("tab", "trends");
+  const qs = p.toString();
+  return qs ? `${base}?${qs}` : base;
+}
+
 function parseTab(raw: string | string[] | undefined): Tab {
   const v = Array.isArray(raw) ? raw[0] : raw;
   return v === "trends" ? "trends" : "now";
@@ -64,9 +92,10 @@ export default async function RepoHomePage({
   const slug = slugFromParams(resolved);
   if (!slug) notFound();
   const tab = parseTab(search.tab);
+  const opsWindow = parseDashboardOpsWindow(search.window);
 
   if (!isApiConfigured()) {
-    return renderMock(slug, tab);
+    return renderMock(slug, tab, opsWindow);
   }
 
   const token = await getSessionToken();
@@ -85,7 +114,10 @@ export default async function RepoHomePage({
   const ctx = result.ctx;
   let report: ApiRepoHomeReport | null = null;
   try {
-    report = await getRepoHome(ctx.workspace.id, ctx.repo.id, { token });
+    report = await getRepoHome(ctx.workspace.id, ctx.repo.id, {
+      token,
+      opsWindow,
+    });
   } catch (err) {
     if (err instanceof ApiHttpError && err.status === 401) {
       redirect(`/login?next=${encodeURIComponent(`/r/${slug}`)}`);
@@ -95,10 +127,16 @@ export default async function RepoHomePage({
     report = null;
   }
 
-  return renderRepoHome(ctx, report, tab);
+  return renderRepoHome(ctx, report, tab, opsWindow, search);
 }
 
-function renderRepoHome(ctx: RepoContext, report: ApiRepoHomeReport | null, tab: Tab) {
+function renderRepoHome(
+  ctx: RepoContext,
+  report: ApiRepoHomeReport | null,
+  tab: Tab,
+  opsWindow: DashboardOpsWindow,
+  search: Search,
+) {
   const { workspace, allWorkspaces, repo, repos } = ctx;
   const base = `/r/${repo.full_name}`;
   const multi = allWorkspaces.length > 1;
@@ -130,18 +168,26 @@ function renderRepoHome(ctx: RepoContext, report: ApiRepoHomeReport | null, tab:
         </>
       }
     >
-      <RepoHomeBody repo={repo} base={base} report={report} tab={tab} />
+      <RepoHomeBody
+        repo={repo}
+        base={base}
+        search={search}
+        report={report}
+        tab={tab}
+        opsWindow={opsWindow}
+      />
     </AppShell>
   );
 }
 
-function renderMock(slug: string, tab: Tab) {
+function renderMock(slug: string, tab: Tab, opsWindow: DashboardOpsWindow) {
   const base = `/r/${slug}`;
   const ownerRepo = slug;
   return (
     <AppShell title={ownerRepo} kicker="repo · mock">
       <ApiUnavailable scope="repo" details="SHIP_API_URL not set" />
       <RepoHomeBody
+        search={{}}
         repo={
           {
             id: "mock",
@@ -161,6 +207,7 @@ function renderMock(slug: string, tab: Tab) {
         base={base}
         report={null}
         tab={tab}
+        opsWindow={opsWindow}
       />
     </AppShell>
   );
@@ -186,17 +233,46 @@ function renderDownState(slug: string) {
 function RepoHomeBody({
   repo,
   base,
+  search,
   report,
   tab,
+  opsWindow,
 }: {
   repo: ApiActivatedRepo;
   base: string;
+  search: Search;
   report: ApiRepoHomeReport | null;
   tab: Tab;
+  opsWindow: DashboardOpsWindow;
 }) {
   return (
     <>
-      <HomeTabs base={base} tab={tab} disabled={report === null} />
+      {report !== null ? (
+        <div className="mb-4 space-y-2">
+          <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-white/45">
+            Now rollup (UTC · {formatOpsWindowBadge(opsWindow)})
+          </p>
+          <OpsWindowSegments
+            base={base}
+            search={search}
+            tab={tab}
+            opsWindow={opsWindow}
+          />
+          <p className="text-[11px] text-white/40">
+            Trends uses the histogram span ({report.window_days} UTC days),
+            independent of the Now window.
+          </p>
+        </div>
+      ) : null}
+
+      <HomeTabs
+        base={base}
+        tab={tab}
+        disabled={report === null}
+        search={search}
+        opsWindow={opsWindow}
+        trendsDaysHint={report?.window_days ?? 30}
+      />
 
       {report === null ? (
         <Card>
@@ -206,7 +282,7 @@ function RepoHomeBody({
           />
         </Card>
       ) : tab === "now" ? (
-        <NowTab report={report} />
+        <NowTab report={report} opsWindow={opsWindow} />
       ) : (
         <TrendsTab report={report} />
       )}
@@ -216,18 +292,75 @@ function RepoHomeBody({
   );
 }
 
+function OpsWindowSegments({
+  base,
+  search,
+  tab,
+  opsWindow,
+}: {
+  base: string;
+  search: Search;
+  tab: Tab;
+  opsWindow: DashboardOpsWindow;
+}) {
+  const choices: DashboardOpsWindow[] = ["24h", "7d", "30d", "all"];
+  return (
+    <nav
+      aria-label="Now reporting window"
+      className="inline-flex rounded-full border border-white/10 bg-white/[0.03] p-1 text-[11px] font-semibold"
+    >
+      {choices.map((w) => {
+        const active = w === opsWindow;
+        const href =
+          tab === "trends"
+            ? repoHomeHref(base, search, { tab: "trends", opsWindow: w })
+            : repoHomeHref(base, search, { tab: "now", opsWindow: w });
+        return (
+          <Link
+            key={w}
+            prefetch={false}
+            href={href}
+            aria-current={active ? "page" : undefined}
+            className={
+              active
+                ? "rounded-full bg-white/15 px-3 py-1 text-white"
+                : "rounded-full px-3 py-1 text-white/55 transition hover:text-white"
+            }
+          >
+            {formatOpsWindowBadge(w)}
+          </Link>
+        );
+      })}
+    </nav>
+  );
+}
+
 function HomeTabs({
   base,
   tab,
   disabled,
+  search,
+  opsWindow,
+  trendsDaysHint,
 }: {
   base: string;
   tab: Tab;
   disabled: boolean;
+  search: Search;
+  opsWindow: DashboardOpsWindow;
+  trendsDaysHint: number;
 }) {
   const tabs: { key: Tab; label: string; hint: string }[] = [
-    { key: "now", label: "Now", hint: "Live state + last 24h" },
-    { key: "trends", label: "Trends", hint: "30-day histogram + per-lane" },
+    {
+      key: "now",
+      label: "Now",
+      hint: `Live state · rollup ${formatOpsWindowBadge(opsWindow)} (UTC)`,
+    },
+    {
+      key: "trends",
+      label: "Trends",
+      hint: `${trendsDaysHint}d histogram (UTC buckets)`,
+    },
   ];
   return (
     <nav
@@ -236,7 +369,10 @@ function HomeTabs({
     >
       {tabs.map((t) => {
         const active = tab === t.key;
-        const href = t.key === "now" ? base : `${base}?tab=${t.key}`;
+        const href = repoHomeHref(base, search, {
+          tab: t.key,
+          opsWindow,
+        });
         return (
           <Link
             key={t.key}
@@ -261,7 +397,13 @@ function HomeTabs({
 // Now tab
 // ---------------------------------------------------------------------------
 
-function NowTab({ report }: { report: ApiRepoHomeReport }) {
+function NowTab({
+  report,
+  opsWindow,
+}: {
+  report: ApiRepoHomeReport;
+  opsWindow: DashboardOpsWindow;
+}) {
   const n = report.now;
   const successRate =
     n.runs_last_24h > 0
@@ -287,7 +429,7 @@ function NowTab({ report }: { report: ApiRepoHomeReport }) {
           }
         />
         <StatTile
-          label="Last 24h"
+          label={`Last ${formatOpsWindowBadge(opsWindow)}`}
           value={String(n.runs_last_24h)}
           hint={
             successRate === null

@@ -21,7 +21,7 @@ import uuid
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -29,6 +29,11 @@ from sqlalchemy import and_, case, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.api.v1.deps import AuthContext, get_current_auth
+from backend.app.api.v1.ops_reporting_window import (
+    OpsReportingWindow,
+    ops_reporting_cutoff,
+    repo_activity_fetch_start,
+)
 from backend.app.api.v1.routes.workspaces import (
     ROLES_READ,
     _require_membership,
@@ -151,6 +156,13 @@ async def get_repo_home(
     workspace_id: uuid.UUID,
     repo_id: uuid.UUID,
     window_days: int = Query(default=30, ge=1, le=180),
+    window: Annotated[
+        OpsReportingWindow,
+        Query(
+            description="UTC rolling horizon for Now-tab counters; "
+            "Trends histogram still follows window_days.",
+        ),
+    ] = "24h",
     auth: AuthContext = Depends(get_current_auth),
     session: AsyncSession = Depends(get_session),
 ) -> RepoHomeReport:
@@ -178,8 +190,10 @@ async def get_repo_home(
         ).scalar_one_or_none()
 
     now = datetime.now(timezone.utc)
-    window_start = now - timedelta(days=window_days)
-    day_24h = now - timedelta(hours=24)
+    activity_cutoff = ops_reporting_cutoff(now, window)
+    window_start = repo_activity_fetch_start(
+        now=now, window=window, window_days=window_days
+    )
 
     # Lanes: count of ``Pipeline`` rows for the repo. We split
     # ``enabled`` out so the UI can show "3 of 5 lanes wired".
@@ -208,8 +222,7 @@ async def get_repo_home(
         repo=repo,
         suspended_at=suspended_at,
         activity=activity,
-        day_24h=day_24h,
-        now=now,
+        activity_cutoff=activity_cutoff,
         lanes_total=lanes_total,
         lanes_enabled=lanes_enabled,
     )
@@ -437,8 +450,7 @@ def _build_now(
     repo: WorkspaceRepo,
     suspended_at: datetime | None,
     activity: list[_Activity],
-    day_24h: datetime,
-    now: datetime,
+    activity_cutoff: datetime | None,
     lanes_total: int,
     lanes_enabled: int,
 ) -> RepoHomeNow:
@@ -451,10 +463,14 @@ def _build_now(
         1 for a in activity if a.kind == "agent" and a.status == "running"
     )
 
-    in_24h = [a for a in activity if a.at >= day_24h]
-    runs_last_24h = len(in_24h)
-    successes_last_24h = sum(1 for a in in_24h if a.status == "succeeded")
-    failures_last_24h = sum(1 for a in in_24h if a.status == "failed")
+    in_window = (
+        activity
+        if activity_cutoff is None
+        else [a for a in activity if a.at >= activity_cutoff]
+    )
+    runs_last_24h = len(in_window)
+    successes_last_24h = sum(1 for a in in_window if a.status == "succeeded")
+    failures_last_24h = sum(1 for a in in_window if a.status == "failed")
 
     last_run_at: datetime | None = None
     last_success_at: datetime | None = None

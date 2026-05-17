@@ -41,6 +41,11 @@ import {
 } from "@/lib/api/session-cache.server";
 import { getResolvedWorkspaceId } from "@/lib/workspace-resolve.server";
 import { pickWorkspace } from "@/lib/workspace-scope";
+import {
+  formatOpsWindowBadge,
+  parseDashboardOpsWindow,
+  type DashboardOpsWindow,
+} from "@/lib/ops-reporting-window";
 
 export const dynamic = "force-dynamic";
 
@@ -53,6 +58,7 @@ type Mode =
       workspaceId: string;
       multiWs: boolean;
       windowDays: WindowDays;
+      opsWindow: DashboardOpsWindow;
       dora: ApiDoraResponse;
       liveSystem: ApiLiveSystem | null;
       summary: ApiOpsDashboard | null;
@@ -66,6 +72,7 @@ function parseWindow(raw: string | string[] | undefined): WindowDays {
 
 async function load(
   windowDays: WindowDays,
+  opsWindow: DashboardOpsWindow,
   searchParams: Record<string, string | string[] | undefined>,
 ): Promise<Mode> {
   const token = await getCachedSessionToken();
@@ -97,7 +104,7 @@ async function load(
   // shouldn't block the DORA grid which is the headline content.
   const [liveSystem, summary] = await Promise.all([
     getLiveSystem(workspace.id, token).catch(() => null),
-    getOpsDashboard(workspace.id, token).catch(() => null),
+    getOpsDashboard(workspace.id, token, opsWindow).catch(() => null),
   ]);
 
   return {
@@ -105,6 +112,7 @@ async function load(
     workspaceId: workspace.id,
     multiWs: ws.length > 1,
     windowDays,
+    opsWindow,
     dora,
     liveSystem,
     summary,
@@ -120,8 +128,11 @@ export default async function AnalyticsPage({
     string,
     string | string[] | undefined
   >;
-  const windowDays = parseWindow(params.days);
-  const data = await load(windowDays, params);
+  const data = await load(
+    parseWindow(params.days),
+    parseDashboardOpsWindow(params.window),
+    params,
+  );
 
   if (data.source === "down") {
     return (
@@ -134,7 +145,8 @@ export default async function AnalyticsPage({
     );
   }
 
-  const { workspaceId, multiWs, dora, liveSystem, summary } = data;
+  const { workspaceId, multiWs, windowDays, opsWindow, dora, liveSystem, summary } =
+    data;
   const wsScope = multiWs ? `?ws=${encodeURIComponent(workspaceId)}` : "";
 
   return (
@@ -142,7 +154,13 @@ export default async function AnalyticsPage({
       <PageHeader
         kicker="data"
         title="Analytics"
-        actions={<WindowPicker current={windowDays} workspaceScope={wsScope} />}
+        actions={
+          <WindowPicker
+            current={windowDays}
+            workspaceScope={wsScope}
+            opsWindow={opsWindow}
+          />
+        }
       />
       <PageBody>
         <div className="mx-auto max-w-6xl space-y-12">
@@ -163,7 +181,7 @@ export default async function AnalyticsPage({
           )}
 
           {summary !== null && summary.shipped.items.length > 0 && (
-            <RecentMerges summary={summary} />
+            <RecentMerges summary={summary} opsWindow={opsWindow} />
           )}
         </div>
       </PageBody>
@@ -282,23 +300,46 @@ function DoraCard({
 
 
 // ---------------------------------------------------------------------------
-// Window picker — 30 / 90 / 180 days
+// Window picker — DORA histogram window (`days`). Preserves ops `window`
+// from `/` links so merges match the horizon the operator expects.
 // ---------------------------------------------------------------------------
+
+
+function analyticsDaysHref(
+  workspaceScope: string,
+  days: WindowDays,
+  opsWindow: DashboardOpsWindow,
+): string {
+  const parts: string[] = [];
+  const wsSlice = workspaceScope.startsWith("?")
+    ? workspaceScope.slice(1)
+    : "";
+  if (wsSlice.length > 0) {
+    parts.push(wsSlice);
+  }
+  parts.push(`days=${encodeURIComponent(String(days))}`);
+  parts.push(`window=${encodeURIComponent(opsWindow)}`);
+  return `/analytics?${parts.join("&")}`;
+}
 
 
 function WindowPicker({
   current,
   workspaceScope,
+  opsWindow,
 }: {
   current: WindowDays;
   workspaceScope: string;
+  opsWindow: DashboardOpsWindow;
 }) {
   return (
-    <nav className="flex items-baseline gap-3 text-xs">
+    <nav className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-xs">
+      <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-white/35">
+        DORA
+      </span>
       {ALLOWED_WINDOWS.map((d, idx) => {
         const active = d === current;
-        const sep = workspaceScope ? "&" : "?";
-        const href = `/analytics${workspaceScope}${sep}days=${d}`;
+        const href = analyticsDaysHref(workspaceScope, d, opsWindow);
         return (
           <span key={d} className="flex items-baseline">
             <Link
@@ -329,13 +370,19 @@ function WindowPicker({
 // ---------------------------------------------------------------------------
 
 
-function RecentMerges({ summary }: { summary: ApiOpsDashboard }) {
+function RecentMerges({
+  summary,
+  opsWindow,
+}: {
+  summary: ApiOpsDashboard;
+  opsWindow: DashboardOpsWindow;
+}) {
   const items = summary.shipped.items.slice(0, 12);
   return (
     <section className="space-y-3">
       <header className="flex items-baseline justify-between">
         <h2 className="text-[10px] font-bold uppercase tracking-[0.22em] text-white/45">
-          Recent · last 24h
+          Recent merges · UTC {formatOpsWindowBadge(opsWindow)}
         </h2>
         <p className="text-[11px] text-white/40">
           {summary.shipped.features_shipped_count} features ·{" "}

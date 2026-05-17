@@ -294,7 +294,7 @@ async def test_ops_dashboard_prioritizes_blockers_and_shipped_24h(
             repo_id=repo.id,
             external_id=99,
             repo_full_name=repo.full_name,
-            name="CI",
+            name="Ship · CI",
             event="pull_request",
             status="completed",
             conclusion="failure",
@@ -328,3 +328,126 @@ async def test_ops_dashboard_prioritizes_blockers_and_shipped_24h(
     assert body["system_status"]["failing_pipelines_count"] == 1
     assert body["system_status"]["broken_automations_count"] == 2
     assert body["shipped"]["fixes_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_ops_dashboard_rejects_unknown_window_query(
+    v1_client, db_session, seed_workspace
+) -> None:
+    user, raw, workspace = seed_workspace
+    response = await v1_client.get(
+        f"/v1/workspaces/{workspace.id}/dashboard/ops?window=z99",
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    assert response.status_code == 422, response.text
+
+
+@pytest.mark.asyncio
+async def test_ops_dashboard_ship_workflow_failure_respects_horizon_and_prefix(
+    v1_client, db_session, seed_workspace
+) -> None:
+    """Non-Ship workflow names are excluded; ``window=all`` retains old failures."""
+    from backend.app.db.models.integrations import (
+        GitHubInstallation,
+        WorkspaceRepo,
+    )
+    from backend.app.db.models.pipelines import WorkflowRun
+
+    user, raw, workspace = seed_workspace
+
+    install = GitHubInstallation(
+        workspace_id=workspace.id,
+        installation_id=42,
+        account_id=1,
+        account_login="acme",
+        account_type="Organization",
+        installed_at=datetime.now(timezone.utc),
+    )
+    db_session.add(install)
+    await db_session.flush()
+    repo = WorkspaceRepo(
+        workspace_id=workspace.id,
+        installation_id=install.id,
+        provider="github",
+        external_id=3001,
+        full_name="acme/beta",
+        default_branch="main",
+        private=False,
+        html_url="https://github.com/acme/beta",
+        activated_at=datetime.now(timezone.utc),
+    )
+    db_session.add(repo)
+    await db_session.flush()
+
+    now = datetime.now(timezone.utc)
+
+    db_session.add(
+        WorkflowRun(
+            workspace_id=workspace.id,
+            repo_id=repo.id,
+            external_id=901,
+            repo_full_name=repo.full_name,
+            name="upstream / Tests",
+            event="push",
+            status="completed",
+            conclusion="failure",
+            html_url="https://github.com/acme/beta/actions/runs/901",
+            started_at=now - timedelta(days=40),
+            finished_at=now - timedelta(days=40),
+            created_at=now - timedelta(days=40),
+        )
+    )
+    ship_old = WorkflowRun(
+        workspace_id=workspace.id,
+        repo_id=repo.id,
+        external_id=902,
+        repo_full_name=repo.full_name,
+        name="Ship · nightly",
+        event="schedule",
+        status="completed",
+        conclusion="failure",
+        html_url="https://github.com/acme/beta/actions/runs/902",
+        started_at=now - timedelta(days=40),
+        finished_at=now - timedelta(days=40),
+        created_at=now - timedelta(days=40),
+    )
+    ship_recent = WorkflowRun(
+        workspace_id=workspace.id,
+        repo_id=repo.id,
+        external_id=903,
+        repo_full_name=repo.full_name,
+        name="Ship · nightly",
+        event="schedule",
+        status="completed",
+        conclusion="failure",
+        html_url="https://github.com/acme/beta/actions/runs/903",
+        started_at=now - timedelta(days=5),
+        finished_at=now - timedelta(days=5),
+        created_at=now - timedelta(days=5),
+    )
+    db_session.add_all([ship_old, ship_recent])
+    await db_session.flush()
+
+    r_default = await v1_client.get(
+        f"/v1/workspaces/{workspace.id}/dashboard/ops",
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    assert r_default.status_code == 200
+    body = r_default.json()
+    assert body["automation_health"]["failures_count"] == 0
+
+    r_7d = await v1_client.get(
+        f"/v1/workspaces/{workspace.id}/dashboard/ops?window=7d",
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    assert r_7d.status_code == 200
+    b7 = r_7d.json()
+    assert b7["automation_health"]["failures_count"] == 1
+
+    r_all = await v1_client.get(
+        f"/v1/workspaces/{workspace.id}/dashboard/ops?window=all",
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    assert r_all.status_code == 200
+    ball = r_all.json()
+    assert ball["automation_health"]["failures_count"] == 2

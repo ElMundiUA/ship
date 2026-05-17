@@ -256,3 +256,33 @@ async def test_repo_home_404_for_unknown_repo(v1_client, seed_workspace) -> None
         headers={"Authorization": f"Bearer {raw}"},
     )
     assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_repo_home_window_query_accepts_rollups(
+    v1_client, seed_repo_home,
+) -> None:
+    raw, workspace, repo = seed_repo_home
+    ok = await v1_client.get(
+        (
+            f"/v1/workspaces/{workspace.id}/repos/{repo.id}/home"
+            "?window=7d&window_days=14"
+        ),
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    assert ok.status_code == 200, ok.text
+
+
+@pytest.mark.asyncio
+async def test_repo_home_unknown_window_returns_422(
+    v1_client, seed_repo_home,
+) -> None:
+    raw, workspace, repo = seed_repo_home
+    bad = await v1_client.get(
+        (
+            f"/v1/workspaces/{workspace.id}/repos/{repo.id}/home"
+            "?window=weekly"
+        ),
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    assert bad.status_code == 422

@@ -17,6 +17,11 @@ import type {
   InboxListResponse,
   InboxType,
 } from "@/lib/inbox-types";
+import {
+  DASHBOARD_OPS_WINDOWS,
+  formatOpsWindowBadge,
+  type DashboardOpsWindow,
+} from "@/lib/ops-reporting-window";
 
 /**
  * Workspace home — editorial layout (post-PR-D1 simplification).
@@ -47,17 +52,72 @@ export type WorkspaceHomeProps = {
   repos: ApiActivatedRepo[];
   workspaceId: string;
   multiWs?: boolean;
+  opsWindow: DashboardOpsWindow;
   inboxItems: InboxListResponse | null;
   inboxCounts: InboxCountsResponse | null;
   priorities: ApiPrioritiesResponse | null;
   liveSystem: ApiLiveSystem | null;
 };
 
+function workspaceHomeHref(
+  multiWs: boolean,
+  workspaceId: string,
+  w: DashboardOpsWindow,
+): string {
+  const p = new URLSearchParams();
+  if (multiWs) p.set("ws", workspaceId);
+  p.set("window", w);
+  const qs = p.toString();
+  return qs ? `/?${qs}` : "/";
+}
+
+function WorkspaceOpsHorizonPicker({
+  current,
+  workspaceId,
+  multiWs,
+}: {
+  current: DashboardOpsWindow;
+  workspaceId: string;
+  multiWs: boolean;
+}) {
+  return (
+    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+      <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-white/45">
+        Ops rollup (UTC · {formatOpsWindowBadge(current)})
+      </p>
+      <nav
+        aria-label="Ops reporting window"
+        className="inline-flex rounded-full border border-white/10 bg-white/[0.03] p-1 text-[11px] font-semibold"
+      >
+        {DASHBOARD_OPS_WINDOWS.map((w) => {
+          const active = w === current;
+          return (
+            <Link
+              key={w}
+              href={workspaceHomeHref(multiWs, workspaceId, w)}
+              prefetch={false}
+              aria-current={active ? "page" : undefined}
+              className={
+                active
+                  ? "rounded-full bg-white/15 px-3 py-1 text-white"
+                  : "rounded-full px-3 py-1 text-white/55 transition hover:text-white"
+              }
+            >
+              {formatOpsWindowBadge(w)}
+            </Link>
+          );
+        })}
+      </nav>
+    </div>
+  );
+}
+
 export function WorkspaceHome({
   summary,
   repos,
   workspaceId,
   multiWs = false,
+  opsWindow,
   inboxItems,
   inboxCounts,
   priorities,
@@ -81,6 +141,11 @@ export function WorkspaceHome({
   return (
     <div className="mx-auto max-w-4xl">
       <div className="space-y-10">
+        <WorkspaceOpsHorizonPicker
+          current={opsWindow}
+          workspaceId={workspaceId}
+          multiWs={multiWs}
+        />
         {(reposNeedingUpdate.length > 0 || summary.blockers.length > 0) && (
           <StatusAlerts
             blockers={summary.blockers}
@@ -99,6 +164,7 @@ export function WorkspaceHome({
           shippedTotal={totalShipped}
           blockerCount={blockerCount}
           workspaceId={workspaceId}
+          opsWindow={opsWindow}
         />
 
         {priorities ? (
@@ -295,6 +361,7 @@ function NeedsYouSection({
   shippedTotal,
   blockerCount,
   workspaceId,
+  opsWindow,
 }: {
   decisions: InboxItem[];
   decisionsTotal: number;
@@ -302,6 +369,7 @@ function NeedsYouSection({
   shippedTotal: number;
   blockerCount: number;
   workspaceId: string;
+  opsWindow: DashboardOpsWindow;
 }) {
   // Lede subtitle — built from real fields only. Each clause renders
   // only when its number is meaningful, otherwise it's omitted.
@@ -330,7 +398,7 @@ function NeedsYouSection({
     subtitleParts.push(
       <span key="shipped">
         <span className="font-display font-bold text-aqua">{shippedTotal}</span>{" "}
-        shipped
+        shipped ({formatOpsWindowBadge(opsWindow)})
       </span>,
     );
   }
