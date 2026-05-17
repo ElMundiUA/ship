@@ -978,9 +978,17 @@ function pushBranch({ branchName, ghToken, githubRepo }) {
       ],
       { stdio: "ignore" },
     );
-    git(["push", remoteUrl, `${branchName}:${branchName}`]);
+    // ``--force`` because branch names are now deterministic per
+    // ticket (see ``makeBranchName``) — every dev re-run replaces
+    // the prior attempt's commits on the same branch, so the
+    // existing PR updates in place instead of spawning PR #N+1.
+    // Safe because: (1) ``prepareGitBranch`` always cuts from base
+    // before the agent works, so our HEAD never depends on remote
+    // history; (2) nobody else writes to this branch — it's
+    // owned by the agent for the duration of the run.
+    git(["push", "--force", remoteUrl, `${branchName}:${branchName}`]);
   } else {
-    git(["push", "-u", "origin", branchName]);
+    git(["push", "--force", "-u", "origin", branchName]);
   }
   return branchName;
 }
@@ -995,6 +1003,15 @@ function openPullRequest({ branchName, baseBranch, title, body, ghToken }) {
   // ``POST /repos/{repo_id}/installation-token``), use it as
   // ``GH_TOKEN`` for the spawn — the App token isn't subject to that
   // gate. ``gh`` picks up ``GH_TOKEN`` from env.
+  //
+  // With deterministic branch names (``cursor/ship-<role>-<ticket>``
+  // — see ``makeBranchName``), every re-run pushes to the SAME
+  // branch with ``--force``. The first run opens a new PR; later
+  // runs hit "a pull request for branch X already exists" — fall
+  // back to ``gh pr edit`` to refresh the title/body of the
+  // existing PR. GitHub auto-tracks the new HEAD via the branch ref,
+  // so commits are already on the PR after force-push; only the
+  // metadata (title + body) needs the explicit update.
   const probe = spawnSync("gh", ["--version"], { stdio: "ignore" });
   if (probe.status !== 0) return null;
   const env = ghToken ? { ...process.env, GH_TOKEN: ghToken } : process.env;
@@ -1014,6 +1031,45 @@ function openPullRequest({ branchName, baseBranch, title, body, ghToken }) {
     ],
     { encoding: "utf8", env },
   );
+  if (res.status === 0) {
+    return (res.stdout || "").trim();
+  }
+  const stderr = (res.stderr || "").trim();
+  // "a pull request for branch X into branch Y already exists"
+  if (/already exists/i.test(stderr) || /No commits between/i.test(stderr)) {
+    // PR exists — update its metadata to reflect the latest run.
+    // ``gh pr edit <branch>`` resolves the PR by head ref. We fetch
+    // the URL via ``gh pr view`` so the caller still gets a
+    // PR-URL return value for the comment-splice path.
+    const view = spawnSync(
+      "gh",
+      ["pr", "view", branchName, "--json", "url", "-q", ".url"],
+      { encoding: "utf8", env },
+    );
+    if (view.status === 0 && (view.stdout || "").trim()) {
+      const prUrl = (view.stdout || "").trim();
+      const edit = spawnSync(
+        "gh",
+        [
+          "pr",
+          "edit",
+          branchName,
+          "--title",
+          title,
+          "--body",
+          body,
+        ],
+        { encoding: "utf8", env },
+      );
+      if (edit.status !== 0) {
+        process.stderr.write(
+          `[ship] gh pr edit refused (exit=${edit.status}): ${(edit.stderr || "").trim()}\n`,
+        );
+        // Don't fail the run — old metadata is better than no PR.
+      }
+      return prUrl;
+    }
+  }
   if (res.status !== 0) {
     throw new Error(
       `gh pr create failed (exit=${res.status}) ${(res.stderr || "").trim()}`,
@@ -1700,7 +1756,6 @@ as a one-shot credential for this run.
 
 
 function makeBranchName(routine, ticketRef) {
-  const stamp = Date.now().toString(36);
   // Sanitize ``routine`` too — for pipeline-pick runs ``runHandle`` is
   // ``pipeline:<specialist>`` and the bare ``:`` is in git's reserved
   // character set, which Cursor's ``/v0/agents`` validator rejects
@@ -1709,11 +1764,24 @@ function makeBranchName(routine, ticketRef) {
   // ], \\, .., @{, //), end with '/', '.lock', or '.', or be named
   // 'HEAD'."). Same regex as the ticketRef path.
   const safeRoutine = String(routine).replace(/[^a-zA-Z0-9_-]/g, "-");
+  // One branch per ticket: drop the timestamp suffix so re-runs of
+  // the same role on the same ticket overwrite a single branch +
+  // update a single PR, instead of spawning a fresh branch (and a
+  // fresh PR) every iteration. Caught on askslayer/PAC-11
+  // 2026-05-17: dev re-ran to fix validation defects, generated a
+  // new branch with a new timestamp, opened PR #28 alongside the
+  // still-open PR #27 — validation then refused to QA because two
+  // open PRs violated the workspace's one-ticket-one-PR rule.
+  // Deterministic name + force-push semantics in pushBranch means
+  // the existing PR updates in place; old commits are replaced by
+  // the agent's new work.
   if (ticketRef) {
     const safe = String(ticketRef).replace(/[^a-zA-Z0-9_-]/g, "-");
-    return `cursor/ship-${safeRoutine}-${safe}-${stamp}`;
+    return `cursor/ship-${safeRoutine}-${safe}`;
   }
-  return `cursor/ship-${safeRoutine}-${stamp}`;
+  // No ticket (workspace-bundle / context-free runs) — keep a
+  // timestamp so concurrent context-free runs don't collide.
+  return `cursor/ship-${safeRoutine}-${Date.now().toString(36)}`;
 }
 
 
