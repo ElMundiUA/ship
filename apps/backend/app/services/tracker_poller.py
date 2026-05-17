@@ -296,6 +296,28 @@ async def _clear_clarification_and_dispatch(
         "(ws=%s, re-cascading stage=%s)",
         ticket_ref, workspace_id, latest_stage,
     )
+    # Reset marker — the refire-cap counter walks audit rows
+    # newest-first and treats this row as a "fresh start" (same
+    # role as ``outcome=ready_next_step``) so a real bounce →
+    # clarify → human answer → retry cycle isn't capped by the
+    # prior ``needs_clarification`` finishes. Without this marker
+    # the counter sees consecutive non-ready-next-step rows
+    # (clarif + clarif + bounce = 3) and refire-caps the NEXT
+    # legitimate retry attempt.
+    session.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=None,
+            actor_token_id=None,
+            action="agent_run.clarification_resolved",
+            target_kind="ticket",
+            target_id=ticket_ref,
+            payload={
+                "fsm_stage": latest_stage,
+                "trigger": "tracker_poll_comment_scan",
+            },
+        )
+    )
     # Write a synthetic transition event + hand off to dispatcher.
     # ``old_state=new_state`` (no state change), but the
     # ``fsm_stage`` carries the routine the dispatcher should fire.

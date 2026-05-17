@@ -1129,14 +1129,24 @@ async def _recent_finish_count_for_stage(
     honest across a deploy boundary.
     """
     cutoff = datetime.now(timezone.utc) - window
-    # Pull all finishes for this (ws, stage, ticket) in the window,
-    # newest first; walk until we hit a ready_next_step and only count
-    # the blocked stretch before it.
+    # Pull both ``agent_run.finish`` rows AND
+    # ``agent_run.clarification_resolved`` markers for this (ws,
+    # stage, ticket) within the window, newest first. Walk until we
+    # hit either an ``outcome=ready_next_step`` finish OR a
+    # clarification-resolved marker — both reset the counter. Only
+    # the consecutive blocked / needs_clarification finishes BEFORE
+    # that reset count.
     stmt = (
-        select(AuditLog.payload["outcome"].astext, AuditLog.id)
+        select(
+            AuditLog.action,
+            AuditLog.payload["outcome"].astext,
+            AuditLog.id,
+        )
         .where(
             AuditLog.workspace_id == workspace_id,
-            AuditLog.action == "agent_run.finish",
+            AuditLog.action.in_(
+                ("agent_run.finish", "agent_run.clarification_resolved")
+            ),
             AuditLog.created_at >= cutoff,
             (
                 (AuditLog.target_id == ticket_ref)
@@ -1148,7 +1158,13 @@ async def _recent_finish_count_for_stage(
     )
     rows = (await session.execute(stmt)).all()
     consecutive_blocked = 0
-    for outcome, _ in rows:
+    for action, outcome, _ in rows:
+        # Either a successful finish or an operator-answered
+        # clarification resets the counter — both mean "the chain
+        # made forward progress; the stretch of blocked attempts
+        # before this point is no longer the current loop".
+        if action == "agent_run.clarification_resolved":
+            break
         if outcome == "ready_next_step":
             break
         consecutive_blocked += 1
