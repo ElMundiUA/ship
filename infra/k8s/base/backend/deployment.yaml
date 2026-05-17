@@ -7,6 +7,23 @@ metadata:
     app.kubernetes.io/component: api
 spec:
   replicas: 1
+  # ``maxSurge: 0`` forces the rolling update to evict an old replica
+  # before scheduling a new one — never exceeds the configured
+  # replica count. Without this, the default ``maxSurge: 25%`` adds
+  # a 3rd pod during rollout, which the cluster (2× s-2vcpu-8gb-amd,
+  # ~3 usable CPU) can't always schedule once Neo4j / harborgang
+  # workloads are pinned. Rollouts kept timing out at the
+  # "1 out of 2 new replicas have been updated..." step, requiring
+  # a manual ``scale 2→1→2`` rescue every deploy.
+  #
+  # Cost: brief drop to 1 replica per pod swap (≤ 30s). Acceptable
+  # for closed-beta latency budgets; we'll re-introduce surge when
+  # the cluster grows.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: ship-server

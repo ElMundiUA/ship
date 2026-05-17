@@ -7,6 +7,13 @@ metadata:
     app.kubernetes.io/component: ui
 spec:
   replicas: 1
+  # ``maxSurge: 0`` — same rationale as ship-server: cluster CPU is
+  # tight, never spawn a 3rd pod during rolling update.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: ship-console
