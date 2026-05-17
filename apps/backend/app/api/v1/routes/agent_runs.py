@@ -2760,9 +2760,14 @@ async def _perform_auto_merge(
         fetch_installation_token as _fetch_install_token,
     )
 
-    pr_url: str | None = None
-    full_name: str | None = None
-    pr_number: int | None = None
+    # Collect ALL PR URL candidates from description + comments,
+    # then pick the most recent OPEN one. v0 took the first regex
+    # match anywhere → on Ship-on-Ship/ELS-7 2026-05-17 that was a
+    # closed PR #263 referenced in an old reviewer comment; GH
+    # rejected the merge with HTTP 405 ("not mergeable") even
+    # though PR #265 was the live one. We now resolve state
+    # before commit.
+    candidates: list[tuple[str, int]] = []
     try:
         snap = await resolved.gateway.get_ticket_snapshot(
             _TR(kind=resolved.kind, workspace_hint=None, id=ticket_ref)
@@ -2771,43 +2776,44 @@ async def _perform_auto_merge(
             (snap or {}).get("description") or "",
             (snap or {}).get("url") or "",
         ]))
-        m = _re.search(
+        for m in _re.finditer(
             r"https://github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)", haystack
-        )
-        if m:
-            full_name = f"{m.group(1)}/{m.group(2)}"
-            pr_number = int(m.group(3))
-            pr_url = m.group(0)
+        ):
+            candidates.append((f"{m.group(1)}/{m.group(2)}", int(m.group(3))))
     except Exception as exc:  # noqa: BLE001 — best-effort
         logger.warning(
             "auto_merge: ticket snapshot lookup failed ws=%s ticket=%s err=%s",
             workspace_id, ticket_ref, exc,
         )
 
-    if not (full_name and pr_number):
-        # Fall back to scanning ticket comments — many agents post the
-        # PR URL there instead of in the body.
-        try:
-            list_fn = getattr(resolved.gateway, "list_comments", None)
-            if list_fn is not None:
-                ref_obj = _TR(kind=resolved.kind, workspace_hint=None, id=ticket_ref)
-                comments = await list_fn(ref_obj)
-                for cm in (comments or []):
-                    body = getattr(cm, "body", "") or ""
-                    m = _re.search(
-                        r"https://github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)", body
-                    )
-                    if m:
-                        full_name = f"{m.group(1)}/{m.group(2)}"
-                        pr_number = int(m.group(3))
-                        pr_url = m.group(0)
-                        break
-        except Exception as exc:  # noqa: BLE001
-            logger.debug(
-                "auto_merge: comment scan failed ws=%s err=%s", workspace_id, exc,
+    try:
+        list_fn = getattr(resolved.gateway, "list_comments", None)
+        if list_fn is not None:
+            ref_obj = _TR(kind=resolved.kind, workspace_hint=None, id=ticket_ref)
+            comments = await list_fn(ref_obj)
+            # Walk newest-first so later candidates rank ahead of
+            # older ones in the dedup below.
+            for cm in reversed(comments or []):
+                body = getattr(cm, "body", "") or ""
+                for m in _re.finditer(
+                    r"https://github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)", body
+                ):
+                    candidates.append((f"{m.group(1)}/{m.group(2)}", int(m.group(3))))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(
+            "auto_merge: comment scan failed ws=%s err=%s", workspace_id, exc,
             )
 
-    if not (full_name and pr_number):
+    # Dedup candidate (repo, pr_number) pairs preserving order
+    # (most recent first per the comment walk above).
+    seen: set[tuple[str, int]] = set()
+    deduped: list[tuple[str, int]] = []
+    for fn, n in candidates:
+        if (fn, n) not in seen:
+            seen.add((fn, n))
+            deduped.append((fn, n))
+
+    if not deduped:
         session.add(
             AuditLog(
                 workspace_id=workspace_id,
@@ -2818,6 +2824,13 @@ async def _perform_auto_merge(
             )
         )
         return {"merged": False, "reason": "no_pr_url_found"}
+
+    # Pick the first candidate whose PR is OPEN on GitHub. Falls
+    # through to the first candidate if no GH App installation is
+    # available — the merge call further down will fail clearly,
+    # which is better than silently picking a stale PR.
+    full_name, pr_number = deduped[0]
+    pr_url = f"https://github.com/{full_name}/pull/{pr_number}"
 
     repo_row = (
         await session.execute(
@@ -2851,6 +2864,31 @@ async def _perform_auto_merge(
             token = await _fetch_install_token(
                 install_row.installation_id, settings=settings, client=client
             )
+            # Pick the most recent OPEN candidate. v0 attempted the
+            # first regex match in description/comments, which was
+            # often a stale closed PR — GH then 405's the merge.
+            # Walking the deduped list in order (newest-first from
+            # comments + description tail) and keeping the first
+            # ``state=open`` gives the live PR.
+            chosen_full_name = full_name
+            chosen_pr_number = pr_number
+            chosen_pr_url = pr_url
+            for cand_repo, cand_n in deduped:
+                cr = await client.get(
+                    f"https://api.github.com/repos/{cand_repo}/pulls/{cand_n}",
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "Accept": "application/vnd.github+json",
+                    },
+                )
+                if cr.status_code == 200 and (cr.json() or {}).get("state") == "open":
+                    chosen_full_name = cand_repo
+                    chosen_pr_number = cand_n
+                    chosen_pr_url = f"https://github.com/{cand_repo}/pull/{cand_n}"
+                    break
+            full_name = chosen_full_name
+            pr_number = chosen_pr_number
+            pr_url = chosen_pr_url
             r = await client.put(
                 f"https://api.github.com/repos/{full_name}/pulls/{pr_number}/merge",
                 headers={
@@ -3358,7 +3396,26 @@ async def finish_agent_run(
             is_workspace_bundle = isinstance(payload.fsm_stage, str) and (
                 payload.fsm_stage.startswith("workspace_")
             )
-            if payload.stage_next and not is_workspace_bundle:
+            # Hold off on the ``merged`` transition when auto-
+            # merger requested a real GitHub merge — the actual
+            # squash happens further down in
+            # ``_perform_auto_merge``, and the Linear move to Done
+            # must be conditional on its success. v0 transitioned
+            # first and called merge after, so a GH-rejected merge
+            # left Linear in Done with the PR still open. Caught
+            # on Ship-on-Ship/ELS-7 2026-05-17.
+            extra_payload_peek = payload.payload or {}
+            defer_merged_transition = (
+                payload.fsm_stage == "auto_merge"
+                and payload.stage_next == "merged"
+                and isinstance(extra_payload_peek, dict)
+                and str(extra_payload_peek.get("auto_merge_action") or "") == "merge"
+            )
+            if (
+                payload.stage_next
+                and not is_workspace_bundle
+                and not defer_merged_transition
+            ):
                 await resolved.gateway.transition(
                     ref,
                     to_state=payload.stage_next,
@@ -3400,10 +3457,38 @@ async def finish_agent_run(
                     actions.append(
                         f"github:merge_sha:{merge_result['merge_sha'][:7]}"
                     )
+                    # Now-and-only-now is it safe to move Linear to
+                    # ``merged`` (= Done). We deferred this transition
+                    # above so a GH-rejected merge wouldn't strand
+                    # the ticket in Done with the PR still open.
+                    if defer_merged_transition and payload.stage_next:
+                        try:
+                            await resolved.gateway.transition(
+                                ref,
+                                to_state=payload.stage_next,
+                                from_state=payload.fsm_stage,
+                            )
+                            actions.append(
+                                f"tracker:transition:{payload.stage_next}"
+                            )
+                        except Exception as exc:  # noqa: BLE001
+                            logger.warning(
+                                "agent_run.finish: post-merge transition "
+                                "failed ws=%s ticket=%s err=%s",
+                                workspace_id, payload.ticket_ref, exc,
+                            )
+                            actions.append(
+                                f"tracker:transition_failed:{payload.stage_next}"
+                            )
                 else:
                     actions.append(
                         f"github:auto_merge_failed:{merge_result.get('reason','unknown')}"
                     )
+                    # Merge attempt failed — leave Linear at
+                    # ``auto_merge``. ``defer_merged_transition`` kept
+                    # us from advancing prematurely; no further action
+                    # needed. Operator (or refire-cap eventually) will
+                    # trigger the next pass.
 
             # Decomposition completion hook (ELS-75 + ELS-81). When
             # the planning anchor reaches the terminal stage, flip
