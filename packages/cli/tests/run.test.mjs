@@ -58,16 +58,12 @@ test("shipctl run errors when no .ship/config.yml is found", () => {
   assert.match(r.stderr, /\.ship\/config\.yml not found/);
 });
 
-test("shipctl run errors on unknown routine", () => {
-  const dir = mktmp();
-  seedShipDir(
-    dir,
-    "version: 2\napi:\n  base_url: https://example.invalid\nprocess:\n  routines:\n    foo:\n      pattern: role-intake\n      trigger:\n        type: schedule\n        cron: '* * * * *'\n",
-  );
-  const r = runCtl(dir, ["run", "--routine", "bar"]);
-  assert.equal(r.status, 1);
-  assert.match(r.stderr, /unknown routine 'bar'/);
-});
+// "unknown routine 'bar'" test removed in ELS-124 cutover: the
+// ``process.routines`` map is gone, every ``--routine <slug>`` is
+// passed through to ``GET /v1/.../agent-roles/{slug}/resolve``
+// which decides whether the slug names a real role. There's no
+// local "known routines" set to validate against — the next test
+// covers the natural failure mode (API-creds missing).
 
 test("shipctl run requires SHIP_API_BASE+TOKEN+WORKSPACE_ID for agent-role resolve", () => {
   const dir = mktmp();
