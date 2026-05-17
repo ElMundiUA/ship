@@ -1,6 +1,6 @@
 {
   "name": "ship",
-  "version": "0.16.30",
+  "version": "0.16.31",
   "private": true,
   "description": "Ship framework — instruction-first docs, prompts, and reference implementations",
   "workspaces": [

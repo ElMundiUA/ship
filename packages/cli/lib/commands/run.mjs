@@ -917,7 +917,36 @@ function prepareGitBranch({ branchName, baseBranch }) {
   if (status) {
     throw new Error(`working tree dirty before agent run: ${status.split("\n")[0]}`);
   }
-  git(["checkout", "-B", branchName, baseBranch]);
+  // Continuation semantics: if the remote already has this branch
+  // (from a prior dev run that the chain bounced back), check it
+  // out so the agent builds ON the existing commits instead of
+  // starting from scratch. Caught on Ship-on-Ship/ELS-7 2026-05-17:
+  // dev's first run wrote 43 files + the feature, auto-merger
+  // bounced for an unrelated reason, dev's second run cut a fresh
+  // branch from main, agent only redid a small subset, force-push
+  // wiped the original work, PR diff went empty, GitHub auto-
+  // closed PR #263. Continuation prevents the "groundhog day" loop
+  // where every bounce restarts dev's clock.
+  //
+  // ``ls-remote`` over the existing origin (with credentials
+  // already injected by actions/checkout) is the cheapest probe.
+  // If the remote branch exists, fetch + check it out at the
+  // remote tip. Otherwise cut a fresh branch from base.
+  const remoteProbe = spawnSync(
+    "git",
+    ["ls-remote", "--exit-code", "origin", `refs/heads/${branchName}`],
+    { stdio: "ignore" },
+  );
+  if (remoteProbe.status === 0) {
+    // Branch exists on origin — fetch and use it as starting
+    // point. Force the local ref so we don't get diverged-history
+    // errors from a prior checkout. The agent's new commits land
+    // on top of the existing branch tip.
+    git(["fetch", "origin", `${branchName}:${branchName}`, "--force"]);
+    git(["checkout", branchName]);
+  } else {
+    git(["checkout", "-B", branchName, baseBranch]);
+  }
 }
 
 
