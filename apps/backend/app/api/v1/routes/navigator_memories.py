@@ -456,6 +456,12 @@ async def seed_navigator_memory_for_tests(
             infer=False,
         )
         if added:
+            # ``add`` mirrors through mem0 defaults; tests assert the
+            # API payload's confidence is what list returns.
+            row0 = await session.get(NavigatorMemory, added[0].id)
+            if row0 is not None:
+                row0.confidence = payload.confidence
+                await session.flush()
             return SandboxSeedOut(id=added[0].id)
     except Exception:  # noqa: BLE001
         # mem0 may be cooling down (Neon timeout) or unavailable
