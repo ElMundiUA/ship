@@ -118,11 +118,23 @@ query ShipTrackerPoll($filter: IssueFilter, $after: String) {
 _STAGE_LABEL_PREFIX = "stage:"
 
 
-def _extract_fsm_stage(labels: list[str]) -> str | None:
-    """Return the bare stage id from a Linear labels list, or ``None``."""
+def _extract_fsm_stage(labels: list[str], state: str | None = None) -> str | None:
+    """Return the bare stage id from a Linear labels list, or ``None``.
+
+    Default-entry fallback: a Linear-native ticket the operator
+    files directly often has **no** ``stage:*`` labels at all. If
+    the state is ``Todo``, treat that as the implicit entry into
+    the SDLC chain (``task_intake`` is the entry stage; the
+    dispatcher's _STAGE_TO_ROUTINE maps it to the planning bundle).
+    Caught on askslayer/PAC-32..36 2026-05-17: 5 fresh tickets in
+    Todo sat with ``dispatch.no_routine`` audit rows for 2+ hours
+    because the poller refused to invent a stage for them.
+    """
     for label in labels:
         if isinstance(label, str) and label.startswith(_STAGE_LABEL_PREFIX):
             return label[len(_STAGE_LABEL_PREFIX):].strip() or None
+    if state == "Todo":
+        return "task_intake"
     return None
 
 
@@ -553,7 +565,7 @@ async def _poll_installation(
             n.get("name") for n in label_nodes
             if isinstance(n, dict) and n.get("name")
         ]
-        fsm_stage = _extract_fsm_stage(labels)
+        fsm_stage = _extract_fsm_stage(labels, state=new_state)
         old_state = last_states.get(ref)
         if old_state != new_state:
             await _write_transition_event(
