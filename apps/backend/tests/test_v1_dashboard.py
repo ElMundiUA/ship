@@ -512,3 +512,73 @@ async def test_ops_dashboard_window_widens_failed_pipeline_cutoff(
     )
     assert wide.status_code == 200
     assert wide.json()["system_status"]["failing_pipelines_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_ops_dashboard_window_all_includes_old_ship_workflow_failure(
+    v1_client, db_session, seed_workspace
+) -> None:
+    """``window=all`` drops the rolling cutoff but keeps SQL limits."""
+    from backend.app.db.models.integrations import (
+        GitHubInstallation,
+        WorkspaceRepo,
+    )
+    from backend.app.db.models.pipelines import WorkflowRun
+
+    _, raw, workspace = seed_workspace
+    now = datetime.now(timezone.utc)
+    ancient = now - timedelta(days=40)
+    install = GitHubInstallation(
+        workspace_id=workspace.id,
+        installation_id=45,
+        account_id=1,
+        account_login="acme",
+        account_type="Organization",
+        installed_at=now,
+    )
+    db_session.add(install)
+    await db_session.flush()
+    repo = WorkspaceRepo(
+        workspace_id=workspace.id,
+        installation_id=install.id,
+        provider="github",
+        external_id=1004,
+        full_name="acme/timebox",
+        default_branch="main",
+        private=False,
+        html_url="https://github.com/acme/timebox",
+        activated_at=now,
+    )
+    db_session.add(repo)
+    await db_session.flush()
+    db_session.add(
+        WorkflowRun(
+            workspace_id=workspace.id,
+            repo_id=repo.id,
+            external_id=601,
+            repo_full_name=repo.full_name,
+            name="Ship · Gate",
+            event="workflow_dispatch",
+            status="completed",
+            conclusion="failure",
+            html_url="https://github.com/acme/timebox/actions/runs/601",
+            created_at=ancient,
+        )
+    )
+    await db_session.flush()
+
+    trimmed = await v1_client.get(
+        f"/v1/workspaces/{workspace.id}/dashboard/ops?window=24h",
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    assert trimmed.status_code == 200
+    assert trimmed.json()["automation_health"]["failures_count"] == 0
+
+    wide = await v1_client.get(
+        f"/v1/workspaces/{workspace.id}/dashboard/ops?window=all",
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    assert wide.status_code == 200
+    ah = wide.json()["automation_health"]
+    assert ah["failures_count"] >= 1
+    assert ah["manual_interventions_count"] == 0

@@ -299,3 +299,15 @@ async def test_repo_home_ops_window_widens_now_slice(
     n_narrow = narrow.json()["now"]["runs_last_24h"]
     n_wide = wide.json()["now"]["runs_last_24h"]
     assert n_wide == n_narrow + 1
+
+
+@pytest.mark.asyncio
+async def test_repo_home_invalid_window_is_422(
+    v1_client, seed_repo_home
+) -> None:
+    raw, workspace, repo = seed_repo_home
+    response = await v1_client.get(
+        f"/v1/workspaces/{workspace.id}/repos/{repo.id}/home?window=q1",
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    assert response.status_code == 422
