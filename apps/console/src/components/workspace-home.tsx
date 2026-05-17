@@ -17,6 +17,11 @@ import type {
   InboxListResponse,
   InboxType,
 } from "@/lib/inbox-types";
+import {
+  type OpsReportWindow,
+  opsReportWindowShortLabel,
+  OPS_REPORT_WINDOWS,
+} from "@/lib/ops-window";
 
 /**
  * Workspace home — editorial layout (post-PR-D1 simplification).
@@ -51,6 +56,8 @@ export type WorkspaceHomeProps = {
   inboxCounts: InboxCountsResponse | null;
   priorities: ApiPrioritiesResponse | null;
   liveSystem: ApiLiveSystem | null;
+  opsWindow: OpsReportWindow;
+  skipWizard: boolean;
 };
 
 export function WorkspaceHome({
@@ -62,6 +69,8 @@ export function WorkspaceHome({
   inboxCounts,
   priorities,
   liveSystem,
+  opsWindow,
+  skipWizard,
 }: WorkspaceHomeProps) {
   const reposNeedingUpdate = repos.filter(needsShipTemplateUpdate);
   const decisions = (inboxItems?.items ?? []).slice(0, 4);
@@ -77,10 +86,18 @@ export function WorkspaceHome({
   const inProgress = summary.work_in_progress.filter(
     (it) => it.status === "in_progress",
   ).length;
+  const periodKicker = opsReportWindowShortLabel(opsWindow);
 
   return (
     <div className="mx-auto max-w-4xl">
       <div className="space-y-10">
+        <OpsWindowSegment
+          workspaceId={workspaceId}
+          multiWs={multiWs}
+          current={opsWindow}
+          skipWizard={skipWizard}
+        />
+
         {(reposNeedingUpdate.length > 0 || summary.blockers.length > 0) && (
           <StatusAlerts
             blockers={summary.blockers}
@@ -99,6 +116,7 @@ export function WorkspaceHome({
           shippedTotal={totalShipped}
           blockerCount={blockerCount}
           workspaceId={workspaceId}
+          periodKicker={periodKicker}
         />
 
         {priorities ? (
@@ -116,6 +134,64 @@ export function WorkspaceHome({
           workspaceId={workspaceId}
         />
       </div>
+    </div>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// Ops period (workspace aggregates)
+// ---------------------------------------------------------------------------
+
+function OpsWindowSegment({
+  workspaceId,
+  multiWs,
+  current,
+  skipWizard,
+}: {
+  workspaceId: string;
+  multiWs: boolean;
+  current: OpsReportWindow;
+  skipWizard: boolean;
+}) {
+  const labels: Record<OpsReportWindow, string> = {
+    "24h": "24h",
+    "7d": "7d",
+    "30d": "30d",
+    all: "All",
+  };
+  return (
+    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+      <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-white/40">
+        Workspace ops · UTC window
+      </p>
+      <nav
+        className="inline-flex rounded-full border border-white/10 bg-white/[0.03] p-1 text-xs font-semibold"
+        aria-label="Ops dashboard period"
+      >
+        {OPS_REPORT_WINDOWS.map((w) => {
+          const active = w === current;
+          const p = new URLSearchParams();
+          p.set("window", w);
+          if (multiWs) p.set("ws", workspaceId);
+          if (skipWizard) p.set("skipWizard", "1");
+          const href = `/?${p.toString()}`;
+          return (
+            <Link
+              key={w}
+              href={href}
+              aria-current={active ? "page" : undefined}
+              className={
+                active
+                  ? "rounded-full bg-white/15 px-3 py-1.5 text-white"
+                  : "rounded-full px-3 py-1.5 text-white/60 transition hover:text-white"
+              }
+            >
+              {labels[w]}
+            </Link>
+          );
+        })}
+      </nav>
     </div>
   );
 }
@@ -295,6 +371,7 @@ function NeedsYouSection({
   shippedTotal,
   blockerCount,
   workspaceId,
+  periodKicker,
 }: {
   decisions: InboxItem[];
   decisionsTotal: number;
@@ -302,6 +379,7 @@ function NeedsYouSection({
   shippedTotal: number;
   blockerCount: number;
   workspaceId: string;
+  periodKicker: string;
 }) {
   // Lede subtitle — built from real fields only. Each clause renders
   // only when its number is meaningful, otherwise it's omitted.
@@ -330,7 +408,10 @@ function NeedsYouSection({
     subtitleParts.push(
       <span key="shipped">
         <span className="font-display font-bold text-aqua">{shippedTotal}</span>{" "}
-        shipped
+        shipped{" "}
+        <span className="font-mono text-[11px] font-semibold text-white/50">
+          ({periodKicker})
+        </span>
       </span>,
     );
   }

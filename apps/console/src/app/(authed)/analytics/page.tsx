@@ -36,6 +36,13 @@ import {
   type ApiOpsDashboard,
 } from "@/lib/api/client";
 import {
+  OPS_REPORT_WINDOWS,
+  opsReportWindowPhrase,
+  opsReportWindowShortLabel,
+  parseOpsReportWindow,
+  type OpsReportWindow,
+} from "@/lib/ops-window";
+import {
   getCachedSessionToken,
   getCachedWorkspaces,
 } from "@/lib/api/session-cache.server";
@@ -53,6 +60,7 @@ type Mode =
       workspaceId: string;
       multiWs: boolean;
       windowDays: WindowDays;
+      opsWindow: OpsReportWindow;
       dora: ApiDoraResponse;
       liveSystem: ApiLiveSystem | null;
       summary: ApiOpsDashboard | null;
@@ -66,6 +74,7 @@ function parseWindow(raw: string | string[] | undefined): WindowDays {
 
 async function load(
   windowDays: WindowDays,
+  opsWindow: OpsReportWindow,
   searchParams: Record<string, string | string[] | undefined>,
 ): Promise<Mode> {
   const token = await getCachedSessionToken();
@@ -97,7 +106,9 @@ async function load(
   // shouldn't block the DORA grid which is the headline content.
   const [liveSystem, summary] = await Promise.all([
     getLiveSystem(workspace.id, token).catch(() => null),
-    getOpsDashboard(workspace.id, token).catch(() => null),
+    getOpsDashboard(workspace.id, token, { window: opsWindow }).catch(
+      () => null,
+    ),
   ]);
 
   return {
@@ -105,6 +116,7 @@ async function load(
     workspaceId: workspace.id,
     multiWs: ws.length > 1,
     windowDays,
+    opsWindow,
     dora,
     liveSystem,
     summary,
@@ -121,7 +133,11 @@ export default async function AnalyticsPage({
     string | string[] | undefined
   >;
   const windowDays = parseWindow(params.days);
-  const data = await load(windowDays, params);
+  const data = await load(
+    windowDays,
+    parseOpsReportWindow(params.window),
+    params,
+  );
 
   if (data.source === "down") {
     return (
@@ -134,15 +150,29 @@ export default async function AnalyticsPage({
     );
   }
 
-  const { workspaceId, multiWs, dora, liveSystem, summary } = data;
-  const wsScope = multiWs ? `?ws=${encodeURIComponent(workspaceId)}` : "";
+  const { workspaceId, multiWs, dora, liveSystem, summary, opsWindow } = data;
 
   return (
     <>
       <PageHeader
         kicker="data"
         title="Analytics"
-        actions={<WindowPicker current={windowDays} workspaceScope={wsScope} />}
+        actions={
+          <div className="flex max-w-xl flex-col items-end gap-3 text-xs sm:flex-row sm:items-baseline sm:justify-end sm:gap-6">
+            <AnalyticsOpsWindowPicker
+              windowDays={windowDays}
+              workspaceId={workspaceId}
+              multiWs={multiWs}
+              opsWindow={opsWindow}
+            />
+            <WindowPicker
+              current={windowDays}
+              workspaceId={workspaceId}
+              multiWs={multiWs}
+              opsWindow={opsWindow}
+            />
+          </div>
+        }
       />
       <PageBody>
         <div className="mx-auto max-w-6xl space-y-12">
@@ -163,7 +193,7 @@ export default async function AnalyticsPage({
           )}
 
           {summary !== null && summary.shipped.items.length > 0 && (
-            <RecentMerges summary={summary} />
+            <RecentMerges summary={summary} opsWindow={opsWindow} />
           )}
         </div>
       </PageBody>
@@ -282,23 +312,81 @@ function DoraCard({
 
 
 // ---------------------------------------------------------------------------
+// Ops window (Recent block) + DORA histogram window
+// ---------------------------------------------------------------------------
+
+function AnalyticsOpsWindowPicker({
+  windowDays,
+  workspaceId,
+  multiWs,
+  opsWindow,
+}: {
+  windowDays: WindowDays;
+  workspaceId: string;
+  multiWs: boolean;
+  opsWindow: OpsReportWindow;
+}) {
+  return (
+    <nav
+      className="flex flex-wrap items-baseline gap-2"
+      aria-label="Ops dashboard period"
+    >
+      <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-white/35">
+        Ops
+      </span>
+      {OPS_REPORT_WINDOWS.map((w) => {
+        const active = w === opsWindow;
+        const p = new URLSearchParams();
+        if (multiWs) p.set("ws", workspaceId);
+        p.set("days", String(windowDays));
+        p.set("window", w);
+        const href = `/analytics?${p.toString()}`;
+        return (
+          <Link
+            key={w}
+            href={href}
+            aria-current={active ? "page" : undefined}
+            className={cn(
+              "font-mono text-[11px] transition",
+              active
+                ? "font-semibold text-white"
+                : "text-white/45 hover:text-white",
+            )}
+          >
+            {opsReportWindowShortLabel(w)}
+          </Link>
+        );
+      })}
+    </nav>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
 // Window picker — 30 / 90 / 180 days
 // ---------------------------------------------------------------------------
 
 
 function WindowPicker({
   current,
-  workspaceScope,
+  workspaceId,
+  multiWs,
+  opsWindow,
 }: {
   current: WindowDays;
-  workspaceScope: string;
+  workspaceId: string;
+  multiWs: boolean;
+  opsWindow: OpsReportWindow;
 }) {
   return (
     <nav className="flex items-baseline gap-3 text-xs">
       {ALLOWED_WINDOWS.map((d, idx) => {
         const active = d === current;
-        const sep = workspaceScope ? "&" : "?";
-        const href = `/analytics${workspaceScope}${sep}days=${d}`;
+        const p = new URLSearchParams();
+        if (multiWs) p.set("ws", workspaceId);
+        p.set("days", String(d));
+        p.set("window", opsWindow);
+        const href = `/analytics?${p.toString()}`;
         return (
           <span key={d} className="flex items-baseline">
             <Link
@@ -329,13 +417,19 @@ function WindowPicker({
 // ---------------------------------------------------------------------------
 
 
-function RecentMerges({ summary }: { summary: ApiOpsDashboard }) {
+function RecentMerges({
+  summary,
+  opsWindow,
+}: {
+  summary: ApiOpsDashboard;
+  opsWindow: OpsReportWindow;
+}) {
   const items = summary.shipped.items.slice(0, 12);
   return (
     <section className="space-y-3">
       <header className="flex items-baseline justify-between">
         <h2 className="text-[10px] font-bold uppercase tracking-[0.22em] text-white/45">
-          Recent · last 24h
+          Recent · {opsReportWindowPhrase(opsWindow)}
         </h2>
         <p className="text-[11px] text-white/40">
           {summary.shipped.features_shipped_count} features ·{" "}

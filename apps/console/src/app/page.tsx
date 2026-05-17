@@ -33,6 +33,10 @@ import {
   toAppShellWorkspaces,
   withWorkspaceQuery,
 } from "@/lib/workspace-scope";
+import {
+  type OpsReportWindow,
+  parseOpsReportWindow,
+} from "@/lib/ops-window";
 
 export const dynamic = "force-dynamic";
 
@@ -84,6 +88,7 @@ export default async function CloudHomePage({
   }
 
   const skipWizard = params.skipWizard === "1";
+  const opsWindow = parseOpsReportWindow(params.window);
 
   let list: ApiWorkspace[];
   try {
@@ -109,7 +114,7 @@ export default async function CloudHomePage({
     );
   }
 
-  const result = await loadLiveContext(token, list, wsParam);
+  const result = await loadLiveContext(token, list, wsParam, opsWindow);
   if (result === "unauthorized") redirect("/login?next=%2F&reason=session_expired");
   if (result === "down") return renderDownState();
 
@@ -117,7 +122,7 @@ export default async function CloudHomePage({
     return renderGreenfieldWelcome(result);
   }
 
-  return renderWorkspaceHome(result);
+  return renderWorkspaceHome(result, { opsWindow, skipWizard });
 }
 
 type LiveContext = {
@@ -165,12 +170,13 @@ async function loadLiveContext(
   token: string,
   list: ApiWorkspace[],
   wsParam: string | undefined,
+  opsWindow: OpsReportWindow,
 ): Promise<LiveContext | "unauthorized" | "down"> {
   const workspace = pickWorkspace(list, wsParam);
   try {
     const [data, repos, inboxItems, inboxCounts, priorities, liveSystem] =
       await Promise.all([
-        getOpsDashboard(workspace.id, token),
+        getOpsDashboard(workspace.id, token, { window: opsWindow }),
         listActivatedRepos(workspace.id, token).catch(
           () => [] as ApiActivatedRepo[],
         ),
@@ -204,9 +210,13 @@ async function loadLiveContext(
   }
 }
 
-function renderWorkspaceHome(ctx: LiveContext) {
+function renderWorkspaceHome(
+  ctx: LiveContext,
+  opts: { opsWindow: OpsReportWindow; skipWizard: boolean },
+) {
   const { workspace, data, allWorkspaces } = ctx;
   const multi = allWorkspaces.length > 1;
+  const { opsWindow, skipWizard } = opts;
   return (
     <AppShell
       title="Workspace home"
@@ -232,6 +242,8 @@ function renderWorkspaceHome(ctx: LiveContext) {
         inboxCounts={ctx.inboxCounts}
         priorities={ctx.priorities}
         liveSystem={ctx.liveSystem}
+        opsWindow={opsWindow}
+        skipWizard={skipWizard}
       />
     </AppShell>
   );

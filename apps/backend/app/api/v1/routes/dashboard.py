@@ -21,7 +21,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -48,6 +48,10 @@ from backend.app.services.dashboard_tracker_wip import (
     effective_tracker_for_repo,
     tracker_label,
     workspace_has_tracker_binding,
+)
+from backend.app.services.ops_report_window import (
+    OpsReportWindow,
+    ops_report_cutoff,
 )
 
 
@@ -391,6 +395,10 @@ async def _mirror_stuck_prs_to_inbox(
 @router.get("/ops", response_model=DashboardOpsOut)
 async def get_ops_dashboard(
     workspace_id: uuid.UUID,
+    window: OpsReportWindow = Query(
+        default="24h",
+        description="Rolling UTC window for time-bounded ops aggregates.",
+    ),
     auth: AuthContext = Depends(get_current_auth),
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
@@ -398,20 +406,22 @@ async def get_ops_dashboard(
     await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
 
     now = datetime.now(timezone.utc)
-    cutoff_24h = now - timedelta(days=1)
+    ops_cutoff = ops_report_cutoff(now, window)
     cutoff_wip = now - _OPS_WIP_WINDOW
     stuck_cutoff = now - _OPS_STUCK_PR_THRESHOLD
     stale_run_cutoff = now - _OPS_STALE_RUN_THRESHOLD
 
+    failed_pipeline_conds = [
+        RoutineRun.workspace_id == workspace_id,
+        RoutineRun.status == "failed",
+    ]
+    if ops_cutoff is not None:
+        failed_pipeline_conds.append(RoutineRun.created_at >= ops_cutoff)
     failed_pipeline_runs = (
         await session.execute(
             select(RoutineRun, Routine)
             .join(Routine, RoutineRun.routine_id == Routine.id)
-            .where(
-                RoutineRun.workspace_id == workspace_id,
-                RoutineRun.status == "failed",
-                RoutineRun.created_at >= cutoff_24h,
-            )
+            .where(*failed_pipeline_conds)
             .order_by(desc(RoutineRun.finished_at), desc(RoutineRun.created_at))
             .limit(25)
         )
@@ -429,16 +439,22 @@ async def get_ops_dashboard(
             .limit(10)
         )
     ).all()
+    # Failed workflows: only Ship-installed starter workflows
+    # (``name: Ship · …`` in customer YAML) so tiles match operator
+    # expectations — see companion issue on workflow scope.
+    failed_workflow_conds = [
+        WorkflowRun.workspace_id == workspace_id,
+        WorkflowRun.conclusion.in_(
+            ("failure", "timed_out", "action_required", "cancelled")
+        ),
+        WorkflowRun.name.like("Ship · %"),
+    ]
+    if ops_cutoff is not None:
+        failed_workflow_conds.append(WorkflowRun.created_at >= ops_cutoff)
     failed_workflow_runs = (
         await session.execute(
             select(WorkflowRun)
-            .where(
-                WorkflowRun.workspace_id == workspace_id,
-                WorkflowRun.conclusion.in_(
-                    ("failure", "timed_out", "action_required", "cancelled")
-                ),
-                WorkflowRun.created_at >= cutoff_24h,
-            )
+            .where(*failed_workflow_conds)
             .order_by(desc(WorkflowRun.finished_at), desc(WorkflowRun.created_at))
             .limit(25)
         )
@@ -465,25 +481,27 @@ async def get_ops_dashboard(
             .limit(100)
         )
     ).scalars().all()
+    recent_pipeline_conds = [RoutineRun.workspace_id == workspace_id]
+    if ops_cutoff is not None:
+        recent_pipeline_conds.append(RoutineRun.created_at >= ops_cutoff)
     recent_pipeline_runs = (
         await session.execute(
             select(RoutineRun)
-            .where(
-                RoutineRun.workspace_id == workspace_id,
-                RoutineRun.created_at >= cutoff_24h,
-            )
+            .where(*recent_pipeline_conds)
             .order_by(desc(RoutineRun.created_at))
             .limit(500)
         )
     ).scalars().all()
+    shipped_conds = [
+        PullRequest.workspace_id == workspace_id,
+        PullRequest.merged.is_(True),
+    ]
+    if ops_cutoff is not None:
+        shipped_conds.append(PullRequest.merged_at >= ops_cutoff)
     shipped_prs = (
         await session.execute(
             select(PullRequest)
-            .where(
-                PullRequest.workspace_id == workspace_id,
-                PullRequest.merged.is_(True),
-                PullRequest.merged_at >= cutoff_24h,
-            )
+            .where(*shipped_conds)
             .order_by(desc(PullRequest.merged_at))
             .limit(25)
         )
@@ -504,7 +522,9 @@ async def get_ops_dashboard(
     recent_interventions = [
         item
         for item in open_inbox_items
-        if _as_utc(item.created_at) >= cutoff_24h
+        if (
+            ops_cutoff is None or _as_utc(item.created_at) >= ops_cutoff
+        )
         and item.type in {"failure", "exception", "approval", "clarification"}
     ]
 
