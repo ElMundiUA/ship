@@ -1107,24 +1107,33 @@ async def _recent_finish_count_for_stage(
     ticket_ref: str,
     window: timedelta,
 ) -> int:
-    """Count ``agent_run.finish`` audit rows for one ``(workspace,
-    fsm_stage, ticket_ref)`` triple within ``window``.
+    """Count CONSECUTIVE blocked ``agent_run.finish`` rows for one
+    ``(workspace, fsm_stage, ticket_ref)`` triple within ``window``.
 
     The refire cap reads this before letting the picker hand a ticket
-    back to its routine. Any value greater than :data:`_REFIRE_CAP_LIMIT`
-    means the breadcrumb-add → "this role is done" idempotency has
-    silently broken somewhere downstream of the route — a bug we can't
-    enumerate ahead of time. Capping the re-pick is the only universal
-    answer.
+    back to its routine. Original v0 counted ALL finishes — but a real
+    "fix → re-validate" iteration spends budget alongside the
+    ``ready_next_step`` finish that already moved the ticket forward.
+    Caught on askslayer/PAC-11 2026-05-17: 1 success + 2 obsolete
+    blockeds = cap=3 hit on the very first legitimate retry. Wrong
+    semantics.
 
-    Counts rows with both ``target_id == ticket_ref`` (the canonical
-    shape from ``finish_agent_run``) and ``payload.ticket_ref == ticket_ref``
-    (the legacy shape from older route builds whose ``target_id`` was the
-    run_id). The union keeps the cap honest across a deploy boundary.
+    Correct semantics: count finishes **since the last
+    ``ready_next_step``**. Three blocked finishes in a row genuinely
+    means "this role can't get past whatever it's hitting — call a
+    human". A mix with a success in the middle means the ticket
+    progressed and we're on a fresh iteration.
+
+    Counts rows with both ``target_id == ticket_ref`` (canonical) and
+    ``payload.ticket_ref == ticket_ref`` (legacy) — keeps the cap
+    honest across a deploy boundary.
     """
     cutoff = datetime.now(timezone.utc) - window
+    # Pull all finishes for this (ws, stage, ticket) in the window,
+    # newest first; walk until we hit a ready_next_step and only count
+    # the blocked stretch before it.
     stmt = (
-        select(AuditLog.id)
+        select(AuditLog.payload["outcome"].astext, AuditLog.id)
         .where(
             AuditLog.workspace_id == workspace_id,
             AuditLog.action == "agent_run.finish",
@@ -1135,9 +1144,15 @@ async def _recent_finish_count_for_stage(
             ),
             AuditLog.payload["fsm_stage"].astext == fsm_stage,
         )
+        .order_by(AuditLog.created_at.desc())
     )
     rows = (await session.execute(stmt)).all()
-    return len(rows)
+    consecutive_blocked = 0
+    for outcome, _ in rows:
+        if outcome == "ready_next_step":
+            break
+        consecutive_blocked += 1
+    return consecutive_blocked
 
 
 async def _recent_audit_exists(

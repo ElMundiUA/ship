@@ -703,9 +703,44 @@ class LinearTracker:
                     to_state,
                     breadcrumb_stage,
                 )
+            # Backwards-cascade label cleanup (askslayer/PAC-11 2026-05-17).
+            # When a later role bounces the ticket back (e.g. validation
+            # finds defects → ``outcome=blocked, stage_next=
+            # dev_implementation``), the picker for the earlier role
+            # refuses to re-pick because ``stage:<earlier>`` is already
+            # on the ticket from its prior success. The breadcrumb chain
+            # is meant to grow forward; on a backwards cascade we have
+            # to retract the stages we're walking back through.
+            #
+            # Detect by FSM index: if ``to_state`` sits earlier in
+            # ``FSM_STAGE_ORDER`` than ``from_state``, strip labels for
+            # every stage in ``[to_state .. from_state)`` so the
+            # earlier-role picker matches again. ``from_state`` itself
+            # keeps its label because it just finished — we add it as
+            # the new breadcrumb below.
+            from backend.app.services.linear_provisioner import (
+                FSM_STAGE_ORDER,
+            )
+            removed_label_ids: list[str] = []
+            if from_state and from_state in FSM_STAGE_ORDER and to_state in FSM_STAGE_ORDER:
+                i_from = FSM_STAGE_ORDER.index(from_state)
+                i_to = FSM_STAGE_ORDER.index(to_state)
+                if i_to < i_from:
+                    for stage in FSM_STAGE_ORDER[i_to:i_from]:
+                        lid = self._label_id_by_stage.get(stage)
+                        if lid:
+                            removed_label_ids.append(lid)
             mutation_input: dict[str, Any] = {"stateId": target_state_id}
             if breadcrumb_label_id:
                 mutation_input["addedLabelIds"] = [breadcrumb_label_id]
+            if removed_label_ids:
+                mutation_input["removedLabelIds"] = removed_label_ids
+                logger.info(
+                    "LinearTracker.transition backwards-cascade detected "
+                    "from=%s to=%s; removing %d forward-stage label(s) "
+                    "so the earlier role can re-pick",
+                    from_state, to_state, len(removed_label_ids),
+                )
             await self._gql(
                 """mutation ShipFsmTransition($id: String!, $input: IssueUpdateInput!) {
                   issueUpdate(id: $id, input: $input) { success }
