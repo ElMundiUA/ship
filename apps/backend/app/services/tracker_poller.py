@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -92,6 +93,19 @@ query ShipTrackerPoll($filter: IssueFilter, $after: String) {
       state { name }
       labels { nodes { name } }
       updatedAt
+      # Recent comments — used to detect operator answers on tickets
+      # carrying ``needs:clarification``. Sorted by Linear's default
+      # (createdAt DESC by default on the connection). 20 is enough
+      # to cover the most-recent agent question + the answer; older
+      # threads don't affect the trigger decision.
+      comments(first: 20) {
+        nodes {
+          id
+          body
+          createdAt
+          user { displayName email }
+        }
+      }
     }
   }
 }
@@ -110,6 +124,157 @@ def _extract_fsm_stage(labels: list[str]) -> str | None:
         if isinstance(label, str) and label.startswith(_STAGE_LABEL_PREFIX):
             return label[len(_STAGE_LABEL_PREFIX):].strip() or None
     return None
+
+
+# Agent comments end with ``[Ship SDLC:role-<name>]`` per system.md
+# `outcome` rules. A comment that doesn't carry this marker is from
+# a human and counts as a "real answer" for clarification flow.
+_AGENT_COMMENT_MARKER_RE = re.compile(r"\[Ship\s+SDLC:role-[\w-]+\]")
+
+
+def _operator_answered_clarification(comments: list[dict]) -> bool:
+    """Decide whether the operator has replied to the last agent
+    clarification question.
+
+    Walks comments newest-first. The first marker-bearing comment
+    we hit is the agent's question (the one that asked). If we see
+    a non-marker comment BEFORE the agent comment in time
+    (i.e. AFTER it in the newest-first walk's prefix), the operator
+    has answered. Returns ``True`` if a fresh operator comment
+    exists since the last agent question.
+    """
+    # Sort newest-first defensively (Linear returns newest-first
+    # by default on this connection, but the contract isn't
+    # documented in the GraphQL schema we use).
+    rows = sorted(
+        (c for c in comments if isinstance(c, dict) and c.get("createdAt")),
+        key=lambda c: c["createdAt"],
+        reverse=True,
+    )
+    for c in rows:
+        body = c.get("body") or ""
+        if _AGENT_COMMENT_MARKER_RE.search(body):
+            # Hit the latest agent comment without finding an
+            # operator one above it → operator hasn't replied.
+            return False
+        # Non-agent comment newer than the latest agent comment.
+        return True
+    return False
+
+
+async def _clear_clarification_and_dispatch(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    ticket_ref: str,
+    token: str,
+    team_id_for_labels: str | None,
+    labels: list[str],
+    client: httpx.AsyncClient | None,
+) -> None:
+    """Strip ``needs:clarification`` from the Linear ticket and emit
+    a synthetic ``tracker.event.received`` so the dispatcher
+    re-cascades the stage that asked.
+
+    The stage to re-cascade is the latest stage breadcrumb on the
+    ticket (e.g. ``stage:auto_merge`` → re-fire auto_merge), so the
+    same role that asked picks up the answer. We don't use the
+    label ``stage:<latest>``'s presence as a signal — picker
+    semantics for the same stage need the label REMOVED, but here
+    we're using it just to know which routine to re-dispatch.
+    """
+    from backend.app.db.models.tenancy import Integration
+    from backend.app.integrations.linear.tracker_adapter import LinearTracker
+
+    # Pick the latest stage breadcrumb (auto_merge > code_review >
+    # validation > dev_implementation > planning). Walk
+    # ``FSM_STAGE_ORDER`` from the end so we re-fire the most
+    # recent role that was active.
+    from backend.app.services.linear_provisioner import FSM_STAGE_ORDER
+    latest_stage: str | None = None
+    for stage in reversed(FSM_STAGE_ORDER):
+        if f"stage:{stage}" in labels:
+            latest_stage = stage
+            break
+
+    # Load legacy config for the team_id + label map so we can
+    # remove the needs:clarification label.
+    legacy = (
+        await session.execute(
+            select(Integration)
+            .where(
+                Integration.workspace_id == workspace_id,
+                Integration.kind == "linear",
+                Integration.repo_id.is_(None),
+            )
+            .order_by(Integration.updated_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if legacy is None or not legacy.config:
+        log.warning(
+            "tracker_poll: no legacy linear config for ws=%s, can't "
+            "strip needs:clarification on ticket=%s",
+            workspace_id, ticket_ref,
+        )
+        return
+    cfg = legacy.config or {}
+    clar_label_id = (cfg.get("signal_label_ids") or {}).get(
+        "needs_clarification"
+    )
+    if not clar_label_id:
+        log.warning(
+            "tracker_poll: signal_label_ids.needs_clarification "
+            "missing for ws=%s, can't strip the label on %s",
+            workspace_id, ticket_ref,
+        )
+        return
+
+    tracker = LinearTracker(
+        token,
+        team_id=cfg.get("team_id"),
+        team_key=cfg.get("team_key"),
+        state_id_by_name=cfg.get("state_id_by_name") or {},
+        label_id_by_stage=cfg.get("label_id_by_stage") or {},
+        signal_label_ids=cfg.get("signal_label_ids") or {},
+    )
+    # Resolve the Linear issue UUID by identifier.
+    data = await tracker._gql(
+        "query($q:String!){ issue(id:$q){ id } }",
+        {"q": ticket_ref},
+    )
+    issue_id = ((data.get("issue") or {}).get("id"))
+    if not issue_id:
+        log.warning(
+            "tracker_poll: can't resolve issue UUID for %s; "
+            "clarification clear skipped",
+            ticket_ref,
+        )
+        return
+    await tracker._gql(
+        """mutation($id:String!,$input:IssueUpdateInput!){
+          issueUpdate(id:$id, input:$input){ success }
+        }""",
+        {"id": issue_id, "input": {"removedLabelIds": [clar_label_id]}},
+    )
+    log.info(
+        "tracker_poll: cleared needs:clarification on %s "
+        "(ws=%s, re-cascading stage=%s)",
+        ticket_ref, workspace_id, latest_stage,
+    )
+    # Write a synthetic transition event + hand off to dispatcher.
+    # ``old_state=new_state`` (no state change), but the
+    # ``fsm_stage`` carries the routine the dispatcher should fire.
+    await _write_transition_event(
+        session,
+        workspace_id=workspace_id,
+        ticket_ref=ticket_ref,
+        old_state=None,
+        new_state="In Progress",  # placeholder; dispatcher reads fsm_stage
+        updated_at=None,
+        fsm_stage=latest_stage,
+        client=client,
+    )
 
 
 async def _fetch_updated_issues(
@@ -382,6 +547,36 @@ async def _poll_installation(
             )
             events += 1
         last_states[ref] = new_state
+        # Clarification-answer detection: if the ticket carries
+        # ``needs:clarification`` AND there's a non-agent comment
+        # newer than the last agent comment, the operator has
+        # answered. Strip the label so the picker stops filtering
+        # the ticket out, and fire a synthetic ``tracker.event.
+        # received`` so the dispatcher re-cascades whichever stage
+        # asked the question. Without this the chain wedges until
+        # the operator manually removes the label.
+        if "needs:clarification" in labels:
+            comment_nodes = (
+                (issue.get("comments") or {}).get("nodes") or []
+            )
+            if _operator_answered_clarification(comment_nodes):
+                try:
+                    await _clear_clarification_and_dispatch(
+                        session,
+                        workspace_id=install.workspace_id,
+                        ticket_ref=ref,
+                        token=token,
+                        team_id_for_labels=None,
+                        labels=labels,
+                        client=client,
+                    )
+                    events += 1
+                except Exception as exc:  # noqa: BLE001 — best-effort
+                    log.warning(
+                        "tracker_poll: clarification clear failed "
+                        "ws=%s ref=%s err=%s",
+                        install.workspace_id, ref, exc,
+                    )
         if updated_at and (
             max_updated_at is None or updated_at > max_updated_at
         ):

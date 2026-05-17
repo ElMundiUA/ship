@@ -196,12 +196,16 @@ real fix → re-validate → re-review → re-merge cycle is allowed.
 
 ### STALL path (human-only red → wait)
 
+The comment MUST be **explicit questions**, not a status report
+(see `system.md` `outcome=needs_clarification` rules). Operator
+should know exactly what to answer.
+
 ```json
 {
   "outcome": "needs_clarification",
   "ticket_ref": "{{TICKET_REF}}",
   "process": "development",
-  "comment": "Auto-merger stalled — human merge decision needed.\n\nFailing signals:\n- migrations: `apps/backend/migrations/versions/0102_add_billing.py` touched\n\nSchema changes require explicit human approval per the protected-paths policy.\n\n[Ship SDLC:role-auto-merger]",
+  "comment": "Auto-merger paused — need a call before I can squash.\n\n**Q1.** Migration `apps/backend/migrations/versions/0102_add_billing.py` is in this PR. OK to apply on merge, or hold until staging dry-run?\nContext: schema changes are gated on explicit human approval (workspace policy). The migration looks reversible (additive column, default backfill) but I can't run it in staging from here.\nOptions: **yes-apply** / **hold-for-staging-first** / **revert-from-PR**.\n\nReply in this Linear thread or strip the `needs:clarification` label after answering — I'll re-pick next tick.\n\n[Ship SDLC:role-auto-merger]",
   "payload": {
     "auto_merge_action": "stall",
     "signals": {...as above},

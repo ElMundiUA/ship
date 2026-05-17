@@ -35,7 +35,15 @@ For each finding leave one PR-line comment with file:line + suggested fix. Ancho
 
 If you found no blockers, leave the anchor comment noting that and finish with `outcome=ready_next_step`, `stage_next=auto_merge`. Do **not** click approve — that's the human's or auto-merger's job; the auto-merger picks up from `auto_merge` and runs its 7-signal gate, then squashes via the GitHub API.
 
-If you found blockers, leave the anchor comment with the blocker list, request changes on the PR, and finish with `outcome=blocked` summarising what must change.
+If you found blockers, leave the anchor comment with the blocker
+list, request changes on the PR, and finish with `outcome=blocked`
+summarising what must change. **Phrase each blocker as an
+actionable directive** ("Change X to Y at file:line because Z"),
+not a status report. If you need a decision from the operator
+rather than just the developer, use `outcome=needs_clarification`
+and write **numbered explicit questions** per `system.md`
+`needs_clarification` rules — operator can't act on prose review
+notes.
 
 The standing rules — never push commits, never approve, one anchored review comment per pass (`reviewer` anchor) updated on subsequent passes, evidence per finding — come from your workspace's policies.
 

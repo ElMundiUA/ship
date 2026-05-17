@@ -102,11 +102,42 @@ project-section authors, qa_manual, reviewers, retro), set
   empty, gates failed, the change was wrong-shaped — switch to
   `outcome=blocked` with the specific reason. Don't fake-finish.
 
-- **`outcome=needs_clarification`** — `comment` is the SPECIFIC
-  question you need answered, not "I need more info". State the
-  question, what you already checked, and what a yes/no answer or a
-  one-line input from the operator would unblock. The operator will
-  reply in Linear; your next pass picks up the answer.
+- **`outcome=needs_clarification`** — `comment` is a **numbered
+  list of explicit questions** to the operator, NOT a status
+  report. Caught on askslayer/PAC and Ship-on-Ship/ELS-7
+  2026-05-17: roles posted prose summaries ("nits I noticed...",
+  "blockers: none, here are some technical notes") that left the
+  operator with no idea what was being asked — they had to ping
+  back asking "what's the question?". Format requirement:
+
+  ```
+  Need a call on the following before I can continue:
+
+  **Q1.** <one specific question with a yes/no or one-line answer>
+  Context: <what you already checked, why this is blocking>
+  Options I see: <A> / <B> / <something else>
+
+  **Q2.** <next question, if any>
+  ...
+
+  Reply in this Linear thread; one answer per question is enough.
+  Strip the `needs:clarification` label after answering OR I'll
+  re-pick on the next tick and read your comment.
+
+  [Ship SDLC:role-<your-role>]
+  ```
+
+  Rules:
+  - Maximum 3 questions. If you have more, your scope is too
+    broad — pick the one decision that unblocks the most.
+  - Each question is **answerable** — yes/no, one of A/B/C, or a
+    one-line input. Not "what do you think about X?" or "any
+    concerns?".
+  - Put the **context** for each question inline, not buried in a
+    separate paragraph. The operator should answer without
+    re-reading the ticket.
+  - Don't list nits or non-blocking observations in this comment.
+    Those go to PR-line review comments, not clarification.
 
 - **`outcome=blocked`** — write a comment that lets the operator
   decide their next move WITHOUT re-reading the ticket. Cover three
