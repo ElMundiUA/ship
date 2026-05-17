@@ -103,34 +103,37 @@ without adding `supertest` as a dev dep, deferring to operator").
 Do NOT transition to code_review claiming the run is done when no
 tests landed.
 
-You ARE a code-changing role for Phase 2, so when both phases pass
-and you've added automated tests, your sidecar MUST set `pr` (the
-runner will push your test commits to the same branch and let the
-existing PR pick them up — no second PR).
+You are **NOT a code-changing role** under the current runner.
+The runner cuts a fresh branch per role invocation (`cursor/ship-
+validation-{{ISSUE}}`), and any commits you make would end up
+either on that empty side-branch (becoming a stray second PR for
+the same ticket — observed on askslayer/PAC-11 + Ship-on-Ship
+ELS-7 2026-05-17, both blocked by reviewer for violating "one
+ticket → one open PR") or on the dev's branch where the runner
+will never push them. **Your sidecar's `pr` field MUST be `null`
+in every case.**
 
-**`pr.title` and `pr.body` are metadata for the existing PR** —
-the runner uses them only if it needs to amend the PR description
-to mention the test coverage. They do **not** open a new PR. If a
-second PR shows up in the audit log after your run, the runner
-detected an unexpected push pattern; the rubric flags this as a
-breach of the branch contract above.
+When manual QA passes and you'd otherwise have written tests in
+Phase 2: **call out the missing test coverage in your comment**,
+and finish with `outcome=ready_next_step, stage_next=code_review`
+anyway. The downstream auto-merger's "test coverage of the diff"
+signal will hold up the merge if coverage is missing; reviewer or
+dev's next pass can add tests. Phase 2 in this iteration of the
+chain is **audit + recommend**, not write.
 
 ```json
 {
   "outcome": "ready_next_step",
   "stage_next": "code_review",
   "ticket_ref": "{{ISSUE}}",
-  "comment": "Manual QA passed all scenarios. Added <N> automated tests covering <focus>. [Ship SDLC:role-validation]",
-  "pr": {
-    "title": "test({{ISSUE}}): add automated coverage",
-    "body": "## Summary\n<2-3 lines on what was tested manually + what's now automated>\n\n## Test plan\n- [ ] CI green on the augmented suite"
-  }
+  "comment": "Manual QA passed all scenarios. Missing automated coverage for <list>; recommended next pass. [Ship SDLC:role-validation]",
+  "pr": null
 }
 ```
 
-If Phase 1 found defects and you stopped there (no test commits),
-your sidecar leaves `pr: null` and `outcome=blocked` — the runner
-won't push or open a PR, and your defect-list comment is what the
-developer reads next pass.
+If Phase 1 found defects, finish with `outcome=blocked,
+stage_next=dev_implementation, pr=null` — the FSM cascade sends
+the ticket back to developer, who reads your defect list and
+fixes them on the same branch (same PR updates in place).
 
 End your single ticket comment with: `[Ship SDLC:role-validation]`
