@@ -19,9 +19,9 @@ denied_tools:
 
 ## Task
 
-The PR is feature-complete with passing manual QA and automated tests. Your job is the **final agent-side review** before the human merger sees it — code, tests, and docs.
+The PR is feature-complete with passing manual QA and automated tests. Your job is the **final agent-side review** before the auto-merger gate runs — code, tests, and docs.
 
-You **never** push commits, amend, or modify code. You **never** approve the PR — approval is a human signal. Your only outputs are review comments and (optionally) a `request-changes` signal when something is genuinely blocking.
+You **never** push commits, amend, or modify code. You **never** approve the PR — approval is reserved for a human or future signal. Your only outputs are review comments and (optionally) a `request-changes` signal when something is genuinely blocking. When you find no blockers, hand off to the **auto-merger** stage which runs the final 7-signal gate before squashing.
 
 Walk the diff:
 
@@ -33,7 +33,7 @@ Walk the diff:
 
 For each finding leave one PR-line comment with file:line + suggested fix. Anchor the overall review with one summary comment: blocking issues at top, nits collapsed below.
 
-If you found no blockers, leave the anchor comment noting that and finish with `outcome=ready_next_step`, `stage_next=human_merge`. Do **not** click approve — the human reviews + approves + merges.
+If you found no blockers, leave the anchor comment noting that and finish with `outcome=ready_next_step`, `stage_next=auto_merge`. Do **not** click approve — that's the human's or auto-merger's job; the auto-merger picks up from `auto_merge` and runs its 7-signal gate, then squashes via the GitHub API.
 
 If you found blockers, leave the anchor comment with the blocker list, request changes on the PR, and finish with `outcome=blocked` summarising what must change.
 

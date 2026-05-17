@@ -58,6 +58,7 @@ SHIP_FSM_STAGES: tuple[str, ...] = (
     "dev_implementation",
     "validation",
     "code_review",
+    "auto_merge",
     "self_heal",
     "decomposition",
     "planning_done",
@@ -88,6 +89,7 @@ FSM_STAGE_ORDER: tuple[str, ...] = (
     "dev_implementation",
     "validation",
     "code_review",
+    "auto_merge",
 )
 
 
@@ -131,9 +133,15 @@ FSM_TO_LINEAR_STATE: dict[str, str] = {
     "planning": "Todo",
     "dev_implementation": "In Progress",
     "validation": "In Progress",
-    # ``code_review`` is human-facing — agents transition INTO Review
-    # but the human picks up from there.
+    # ``code_review`` and ``auto_merge`` both run while the ticket
+    # sits in Linear's ``Review`` column. Reviewer leaves feedback
+    # (or rubber-stamps), auto-merger then runs its 7-signal gate
+    # and squashes via the GitHub API. ``merged`` (the terminal
+    # value of auto-merger's ``stage_next``) flips the ticket to
+    # Linear ``Done``.
     "code_review": "Review",
+    "auto_merge": "Review",
+    "merged": "Done",
     # Self-heal runs out-of-band against any open ticket; no specific
     # Linear state.
     "self_heal": "Todo",
