@@ -49,6 +49,14 @@ export async function runCursorAgent({
   // write/shell operations on a fresh runner without prior workspace
   // trust history. ``--workspace`` pins cwd explicitly so the agent
   // doesn't drift when the parent shell's cwd is mutated.
+  //
+  // ``--model`` defaults to ``auto`` so workspaces on Cursor's Free
+  // plan (where named models are gated — observed on askslayer
+  // 2026-05-17: "Named models unavailable Free plans can only use
+  // Auto. Switch to Auto or upgrade plans to continue.") still
+  // work. Operators on paid plans who want a specific model export
+  // ``CURSOR_MODEL`` as a workflow secret and we pass it through.
+  const model = (process.env.CURSOR_MODEL || env.CURSOR_MODEL || "auto").trim();
   const args = [
     "--print",
     "--force",
@@ -57,6 +65,8 @@ export async function runCursorAgent({
     workdir,
     "--output-format",
     "text",
+    "--model",
+    model,
     prompt,
   ];
 
