@@ -176,26 +176,47 @@ async def _clear_clarification_and_dispatch(
     a synthetic ``tracker.event.received`` so the dispatcher
     re-cascades the stage that asked.
 
-    The stage to re-cascade is the latest stage breadcrumb on the
-    ticket (e.g. ``stage:auto_merge`` → re-fire auto_merge), so the
-    same role that asked picks up the answer. We don't use the
-    label ``stage:<latest>``'s presence as a signal — picker
-    semantics for the same stage need the label REMOVED, but here
-    we're using it just to know which routine to re-dispatch.
+    Target stage = the ``fsm_stage`` from the latest
+    ``agent_run.finish`` with ``outcome=needs_clarification`` for
+    this ticket. NOT the latest stage breadcrumb on the ticket: a
+    role that stalls with ``needs_clarification`` never calls
+    ``transition()``, so its ``stage:<own>`` breadcrumb never
+    gets stamped. Reading breadcrumbs would pick the previous role
+    (the one whose transition DID land), not the actual asker.
+    Caught on ELS-7 2026-05-17: auto-merger stalled, user
+    answered, poller saw labels ``[code_review, dev_implementation,
+    validation]``, picked code_review, dispatched reviewer instead
+    of auto-merger.
     """
     from backend.app.db.models.tenancy import Integration
     from backend.app.integrations.linear.tracker_adapter import LinearTracker
 
-    # Pick the latest stage breadcrumb (auto_merge > code_review >
-    # validation > dev_implementation > planning). Walk
-    # ``FSM_STAGE_ORDER`` from the end so we re-fire the most
-    # recent role that was active.
-    from backend.app.services.linear_provisioner import FSM_STAGE_ORDER
+    latest_clar = (
+        await session.execute(
+            select(AuditLog)
+            .where(
+                AuditLog.workspace_id == workspace_id,
+                AuditLog.action == "agent_run.finish",
+                AuditLog.payload["ticket_ref"].astext == ticket_ref,
+                AuditLog.payload["outcome"].astext == "needs_clarification",
+            )
+            .order_by(AuditLog.created_at.desc())
+            .limit(1)
+        )
+    ).scalars().first()
     latest_stage: str | None = None
-    for stage in reversed(FSM_STAGE_ORDER):
-        if f"stage:{stage}" in labels:
-            latest_stage = stage
-            break
+    if latest_clar and isinstance(latest_clar.payload, dict):
+        latest_stage = latest_clar.payload.get("fsm_stage")
+    if not latest_stage:
+        # Fallback to breadcrumb walk if no recent
+        # needs_clarification finish — preserves old behavior for
+        # the legacy case where the label appeared without a Ship-
+        # side audit row.
+        from backend.app.services.linear_provisioner import FSM_STAGE_ORDER
+        for stage in reversed(FSM_STAGE_ORDER):
+            if f"stage:{stage}" in labels:
+                latest_stage = stage
+                break
 
     # Load legacy config for the team_id + label map so we can
     # remove the needs:clarification label.
