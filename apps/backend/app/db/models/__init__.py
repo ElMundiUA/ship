@@ -15,6 +15,7 @@ from backend.app.db.models.memory_adapters import (
 )
 from backend.app.db.models.navigator_memory import NavigatorMemory
 from backend.app.db.models.dashboard_priorities import WorkspaceProjectPriority
+from backend.app.db.models.planning_proposals import PlanningProposal
 from backend.app.db.models.agent_memory import (
     ArtifactFeedback,
     BucketArticleSource,
@@ -136,6 +137,7 @@ __all__ = [
     "RepoSecret",
     "RunEscalation",
     "TelegramChatLink",
+    "PlanningProposal",
     "TelegramThreadMap",
     "User",
     "Workspace",
