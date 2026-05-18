@@ -46,6 +46,7 @@ from datetime import datetime, timezone
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.app.core.sentry import record_stale_project_lock_breadcrumb
 from backend.app.db.models.tenancy import AuditLog
 from backend.app.db.session import get_sessionmaker
 
@@ -59,6 +60,15 @@ STALE_PROJECT_LOCK_AGE_MIN = 60
 # this, treat the chain as alive even if the lock itself is older
 # than the floor.
 ACTIVE_CHAIN_WINDOW_MIN = 30
+
+# Age threshold for Sentry breadcrumb (ELS-151 / A4). A lock that
+# crosses 90 min without explicit release means our happy-path
+# release hooks (finish handler, PR merge webhook, picker null path)
+# all missed it — operators should hear about it. Releases at or
+# above the 60-min sweep floor still happen; only the alert is
+# gated to 90 min so the routine self-heal noise doesn't drown the
+# signal.
+SENTRY_ALERT_AGE_MIN = 90
 
 
 async def sweep_dangling_project_locks(session: AsyncSession) -> int:
@@ -156,6 +166,7 @@ async def sweep_dangling_project_locks(session: AsyncSession) -> int:
             continue
 
         age_seconds = int((now - lock_row.claimed_at).total_seconds())
+        held_minutes = age_seconds // 60
         session.add(
             AuditLog(
                 workspace_id=lock_row.workspace_id,
@@ -180,6 +191,28 @@ async def sweep_dangling_project_locks(session: AsyncSession) -> int:
             "lock_sweep: released stale lock key=%s ws=%s ticket=%s age=%ds",
             lock_row.key, lock_row.workspace_id, owning_ticket_ref, age_seconds,
         )
+
+        if held_minutes >= SENTRY_ALERT_AGE_MIN:
+            # ELS-151 / A4: surface an alert only when the lock crossed
+            # the higher threshold — routine 60-min sweeps shouldn't
+            # spam Sentry. We don't have the Linear project name
+            # cheaply at this layer (would require a tracker resolve);
+            # the project_id in payload + breadcrumb is enough for
+            # an operator to click through.
+            project_id = lock_row.key[len("project:"):] if (
+                lock_row.key or ""
+            ).startswith("project:") else lock_row.key
+            record_stale_project_lock_breadcrumb(
+                project_id=project_id,
+                ticket_ref=owning_ticket_ref,
+                workspace_id=str(lock_row.workspace_id),
+                held_minutes=held_minutes,
+                owning_run_id=(
+                    str(owning_dispatch_id)
+                    if owning_dispatch_id is not None
+                    else None
+                ),
+            )
     return released
 
 
