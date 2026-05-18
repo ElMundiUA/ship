@@ -280,18 +280,20 @@ async def test_env_separation_warning_no_inbox_row(
 async def test_post_inbox_exception_skips_row(
     v1_client, seed_workspace, monkeypatch
 ) -> None:
-    from backend.app.core import sentry as sentry_mod
-
     crumbs: list[dict] = []
 
     def _crumb(**kwargs):
         crumbs.append(kwargs)
 
-    monkeypatch.setattr(sentry_mod, "record_inbox_exception_breadcrumb", _crumb)
+    monkeypatch.setattr(
+        agent_runs_routes,
+        "record_inbox_exception_breadcrumb",
+        _crumb,
+    )
 
     _, raw, ws = seed_workspace
     res = await v1_client.post(
-        f"/v1/workspaces/{ws.id}/agent-runs/inbox/items",
+        f"/v1/workspaces/{ws.id}/inbox/items",
         headers={"Authorization": f"Bearer {raw}"},
         json={
             "type": "exception",
