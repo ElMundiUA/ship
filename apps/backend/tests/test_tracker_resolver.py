@@ -20,6 +20,12 @@ from backend.app.integrations.jira.tracker_adapter import JiraTracker
 from backend.app.integrations.linear.tracker_adapter import LinearTracker
 from backend.app.services.tracker_resolver import resolve_for_workspace
 
+
+def _tracker_resolver_settings():
+    """CI sets SHIP_USE_MEMORY_ADAPTERS=true; resolver tests need real trackers."""
+    return get_settings().model_copy(update={"use_memory_adapters": False})
+
+
 _LEGACY_FSM_CONFIG = {
     "team_id": "team-legacy-uuid",
     "team_key": "LEG",
@@ -144,7 +150,7 @@ async def test_native_linear_wins_and_layers_legacy_fsm_config(
     ):
         resolved = await resolve_for_workspace(
             session=db_session,
-            settings=get_settings(),
+            settings=_tracker_resolver_settings(),
             workspace_id=workspace.id,
         )
 
@@ -173,7 +179,7 @@ async def test_legacy_linear_only(db_session, seed_workspace) -> None:
     ):
         resolved = await resolve_for_workspace(
             session=db_session,
-            settings=get_settings(),
+            settings=_tracker_resolver_settings(),
             workspace_id=workspace.id,
         )
 
@@ -195,7 +201,7 @@ async def test_native_jira(db_session, seed_workspace) -> None:
     ):
         resolved = await resolve_for_workspace(
             session=db_session,
-            settings=get_settings(),
+            settings=_tracker_resolver_settings(),
             workspace_id=workspace.id,
         )
 
@@ -214,9 +220,30 @@ async def test_returns_none_when_unbound(db_session, seed_workspace) -> None:
 
     resolved = await resolve_for_workspace(
         session=db_session,
-        settings=get_settings(),
+        settings=_tracker_resolver_settings(),
         workspace_id=workspace.id,
     )
+    assert resolved is None
+
+
+@pytest.mark.asyncio
+async def test_returns_none_when_decrypt_returns_empty(
+    db_session, seed_workspace
+) -> None:
+    _, _, workspace = seed_workspace
+    await _seed_native_linear(db_session, workspace.id)
+    await db_session.commit()
+
+    with patch(
+        "backend.app.security.encryption.decrypt",
+        return_value="",
+    ):
+        resolved = await resolve_for_workspace(
+            session=db_session,
+            settings=_tracker_resolver_settings(),
+            workspace_id=workspace.id,
+        )
+
     assert resolved is None
 
 
@@ -234,7 +261,7 @@ async def test_returns_none_when_native_credential_unreadable(
     ):
         resolved = await resolve_for_workspace(
             session=db_session,
-            settings=get_settings(),
+            settings=_tracker_resolver_settings(),
             workspace_id=workspace.id,
         )
 
@@ -254,7 +281,7 @@ async def test_native_wins_over_legacy_token(db_session, seed_workspace) -> None
     ):
         resolved = await resolve_for_workspace(
             session=db_session,
-            settings=get_settings(),
+            settings=_tracker_resolver_settings(),
             workspace_id=workspace.id,
         )
 
@@ -280,7 +307,7 @@ async def test_falls_through_to_legacy_when_native_has_no_credential(
     ):
         resolved = await resolve_for_workspace(
             session=db_session,
-            settings=get_settings(),
+            settings=_tracker_resolver_settings(),
             workspace_id=workspace.id,
         )
 
