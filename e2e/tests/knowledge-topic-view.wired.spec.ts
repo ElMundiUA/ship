@@ -157,10 +157,13 @@ test.describe("knowledge topic view (wired)", () => {
   }) => {
     const workspaceId = await shipResolveWorkspaceId(request);
     const topicTag = await resolveTopicTag(request, workspaceId);
-    test.skip(
-      !topicTag,
-      "No topic views in workspace — set E2E_KNOWLEDGE_TOPIC_TAG or wait for renderer",
-    );
+    if (!topicTag) {
+      test.skip(
+        true,
+        "No topic views in workspace — set E2E_KNOWLEDGE_TOPIC_TAG or wait for renderer",
+      );
+      return;
+    }
 
     const detail = await fetchTopicDetail(request, workspaceId, topicTag);
     await page.goto(`/knowledge/topics/${encodeURIComponent(topicTag)}`);
@@ -177,10 +180,13 @@ test.describe("knowledge topic view (wired)", () => {
   }) => {
     const workspaceId = await shipResolveWorkspaceId(request);
     const topicTag = await resolveTopicTag(request, workspaceId);
-    test.skip(
-      !topicTag,
-      "No topic views in workspace — set E2E_KNOWLEDGE_TOPIC_TAG or wait for renderer",
-    );
+    if (!topicTag) {
+      test.skip(
+        true,
+        "No topic views in workspace — set E2E_KNOWLEDGE_TOPIC_TAG or wait for renderer",
+      );
+      return;
+    }
 
     const detail = await fetchTopicDetail(request, workspaceId, topicTag);
 
