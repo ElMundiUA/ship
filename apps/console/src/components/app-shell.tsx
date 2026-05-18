@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { type ReactNode, Suspense, useEffect, useState } from "react";
 import { cn } from "@/lib/cn";
+import { EnvSeparationWarningModal } from "@/components/env-separation-warning-modal";
 import { NavigatorLauncher } from "@/components/navigator-launcher";
 
 /**
@@ -506,6 +507,9 @@ export function AppShellChrome({
           <main className="flex flex-col">{children}</main>
         </div>
       </div>
+      {workspace?.id ? (
+        <EnvSeparationWarningModal workspaceId={workspace.id} />
+      ) : null}
     </div>
   );
 }
