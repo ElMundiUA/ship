@@ -398,33 +398,38 @@ async def _emit_env_separation_warning(
     ).scalar_one_or_none()
     if existing is not None:
         return
+    from backend.app.services.inbox.headline import derive_headline
+
+    warn_title = (
+        f"Agents will auto-merge PRs in project {project_name!r}"
+    )[:300]
+    warn_summary = (
+        "Ship just started dispatching agent work on a ticket in "
+        f"project {project_name!r}. Tickets in the project run "
+        "one-at-a-time and the planned auto-merger bundle will "
+        "ship PRs into your default branch when the reviewer "
+        "is confident. **Strongly recommended before you let "
+        "this run unattended:**\n\n"
+        "1. Use a non-prod default branch (``develop`` / "
+        "``main`` with deploy gates downstream) and let the "
+        "agent open PRs against it — not directly into prod.\n"
+        "2. Make sure your DB / API base URL / payment keys "
+        "in this repo's GH Actions secrets are dev/staging, "
+        "not prod credentials.\n"
+        "3. Keep ``CODEOWNERS`` pointed at a human reviewer "
+        "for risky paths (auth, migrations, payments) so the "
+        "auto-merger can't skip required review.\n\n"
+        "Acknowledge this once and Ship won't warn again for "
+        "this project."
+    )
     session.add(
         InboxItem(
             workspace_id=workspace_id,
             repo_id=None,
             type="warning",
-            title=(
-                f"Agents will auto-merge PRs in project {project_name!r}"
-            )[:300],
-            summary=(
-                "Ship just started dispatching agent work on a ticket in "
-                f"project {project_name!r}. Tickets in the project run "
-                "one-at-a-time and the planned auto-merger bundle will "
-                "ship PRs into your default branch when the reviewer "
-                "is confident. **Strongly recommended before you let "
-                "this run unattended:**\n\n"
-                "1. Use a non-prod default branch (``develop`` / "
-                "``main`` with deploy gates downstream) and let the "
-                "agent open PRs against it — not directly into prod.\n"
-                "2. Make sure your DB / API base URL / payment keys "
-                "in this repo's GH Actions secrets are dev/staging, "
-                "not prod credentials.\n"
-                "3. Keep ``CODEOWNERS`` pointed at a human reviewer "
-                "for risky paths (auth, migrations, payments) so the "
-                "auto-merger can't skip required review.\n\n"
-                "Acknowledge this once and Ship won't warn again for "
-                "this project."
-            ),
+            title=warn_title,
+            headline=derive_headline(summary=warn_summary, title=warn_title),
+            summary=warn_summary,
             payload={
                 "project_id": project_id,
                 "project_name": project_name,

@@ -41,6 +41,8 @@ export async function POST(
   const form = await request.formData();
   const wsId = (form.get("ws") ?? "").toString();
   const actionRaw = (form.get("action") ?? "").toString();
+  const actionItemId = (form.get("action_item_id") ?? "").toString().trim();
+  const choiceRaw = (form.get("choice") ?? "").toString().trim();
   const answer = (form.get("answer") ?? "").toString().trim();
   const payloadJsonRaw = (form.get("payload_json") ?? "").toString().trim();
   // ``return_to`` lets callers (mailbox footer) bounce back to the
@@ -81,6 +83,14 @@ export async function POST(
     action,
     payload,
   };
+
+  if (actionItemId) {
+    if (choiceRaw !== "primary" && choiceRaw !== "secondary") {
+      return back(origin, id, "bad_input", returnTo);
+    }
+    body.action_item_id = actionItemId;
+    body.choice = choiceRaw;
+  }
 
   if (action === "answer") {
     if (!answer) return back(origin, id, "validation_failed", returnTo);

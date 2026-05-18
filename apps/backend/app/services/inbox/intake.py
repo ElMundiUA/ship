@@ -53,6 +53,7 @@ from backend.app.db.models.inbox import (
     InboxItemEvent,
     RunEscalation,
 )
+from backend.app.services.inbox.headline import derive_headline
 from backend.app.services.inbox.profiles import (
     EmitRule,
     INBOX_TYPES,
@@ -275,6 +276,13 @@ def _build_inbox_item(
     """
     payload = dict(finding.payload or {})
     payload["requires_approval"] = bool(finding.requires_approval)
+    title = _truncate(finding.title, _TITLE_MAX_LEN)
+    summary = _truncate(finding.summary or "", _SUMMARY_MAX_LEN) or None
+    explicit_headline = payload.get("headline")
+    if isinstance(explicit_headline, str):
+        headline_arg: str | None = explicit_headline
+    else:
+        headline_arg = None
     return InboxItem(
         workspace_id=workspace_id,
         repo_id=repo_id,
@@ -283,8 +291,13 @@ def _build_inbox_item(
         source_id=source_id,
         play_key=play_key,
         run_id=run_id,
-        title=_truncate(finding.title, _TITLE_MAX_LEN),
-        summary=_truncate(finding.summary or "", _SUMMARY_MAX_LEN) or None,
+        title=title,
+        headline=derive_headline(
+            headline=headline_arg,
+            summary=summary,
+            title=title,
+        ),
+        summary=summary,
         payload=payload,
         status="new",
         owner_user_id=resolved.user_id,

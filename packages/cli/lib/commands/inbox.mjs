@@ -13,6 +13,7 @@
  *     --title "Daily retro 2026-05-07"
  *     --body  "<markdown>" | --body-file path/to/digest.md | --body-file -
  *     [--summary "<short list-row blurb>"]
+ *     [--headline "<≤80 char list-row headline>"]
  *     [--workspace <id>]
  *     [--ticket-ref <id>]
  *     [--json]
@@ -65,7 +66,7 @@ function printInboxHelp() {
 
 SUBCOMMANDS
   shipctl inbox create --type <kind> --title <s> --body <md>
-                       [--summary <s>] [--ticket-ref <id>]
+                       [--summary <s>] [--headline <s>] [--ticket-ref <id>]
                        [--body-file <path|->] [--workspace <id>] [--json]
 
 TYPES
@@ -108,6 +109,7 @@ async function inboxCreateCommand(ctx, args) {
       title: opts.title,
       body,
       summary: opts.summary || null,
+      headline: opts.headline || null,
       ticket_ref: opts.ticketRef || null,
     },
   );
@@ -127,6 +129,7 @@ function parseCreateArgs(args) {
     body: null,
     bodyFile: null,
     summary: null,
+    headline: null,
     ticketRef: null,
     workspace: null,
     baseUrl: null,
@@ -138,6 +141,7 @@ function parseCreateArgs(args) {
       consumeStringFlag(copy, "--type", out, "type") ||
       consumeStringFlag(copy, "--title", out, "title") ||
       consumeStringFlag(copy, "--summary", out, "summary") ||
+      consumeStringFlag(copy, "--headline", out, "headline") ||
       consumeStringFlag(copy, "--ticket-ref", out, "ticketRef") ||
       consumeStringFlag(copy, "--workspace", out, "workspace") ||
       consumeStringFlag(copy, "--base-url", out, "baseUrl") ||

@@ -372,18 +372,22 @@ async def _synthesise_bucket(
     # handler (services/inbox/side_effects.py) reads
     # source_table='bucket_articles' + payload.kind='auto_routed_draft'
     # to decide between publish (accept) and archive (dismiss).
+    from backend.app.services.inbox.headline import derive_headline
+
     summary_excerpt = decision.body_md.strip().splitlines()
     summary = " ".join(summary_excerpt[:3])[:1000] if summary_excerpt else None
+    draft_title = (
+        f"Draft article: {decision.title}"
+        if decision.action == "new"
+        else f"Draft update: {decision.title}"
+    )[:300]
     session.add(
         InboxItem(
             workspace_id=workspace_id,
             repo_id=None,
             type="improvement",
-            title=(
-                f"Draft article: {decision.title}"
-                if decision.action == "new"
-                else f"Draft update: {decision.title}"
-            )[:300],
+            title=draft_title,
+            headline=derive_headline(summary=summary, title=draft_title),
             summary=summary,
             payload={
                 "kind": "auto_routed_draft",
@@ -541,13 +545,16 @@ async def _emit_archive_proposal(
         "source_note_count": len(pending),
         "source_note_ids": [str(n.id) for n in pending],
     }
+    archive_title = f"Stale article? {target.title}"[:300]
+    archive_summary = (decision.archive_reason or "")[:1000] or None
     session.add(
         InboxItem(
             workspace_id=workspace_id,
             repo_id=None,
             type="improvement",
-            title=f"Stale article? {target.title}"[:300],
-            summary=(decision.archive_reason or "")[:1000] or None,
+            title=archive_title,
+            headline=derive_headline(summary=archive_summary, title=archive_title),
+            summary=archive_summary,
             payload=payload,
             status="new",
             source_table="bucket_articles",

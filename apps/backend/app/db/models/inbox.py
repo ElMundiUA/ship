@@ -46,6 +46,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    event,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -344,6 +345,7 @@ class InboxItem(Base):
         nullable=True,
     )
     title: Mapped[str] = mapped_column(String(length=255), nullable=False)
+    headline: Mapped[str] = mapped_column(String(length=80), nullable=False)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     payload: Mapped[dict] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
@@ -402,7 +404,7 @@ class InboxItemEvent(Base):
 
     ``action`` is one of ``created`` / ``assigned`` /
     ``reassigned`` / ``snoozed`` / ``unsnoozed`` / ``resolved`` /
-    ``dismissed`` / ``commented``.
+    ``dismissed`` / ``commented`` / ``action_item_decided``.
     """
 
     __tablename__ = "inbox_item_events"
@@ -427,7 +429,8 @@ class InboxItemEvent(Base):
     )
     # user | system | agent
     actor_kind: Mapped[str] = mapped_column(String(length=16), nullable=False)
-    # created | assigned | reassigned | snoozed | unsnoozed | resolved | dismissed | commented
+    # created | assigned | reassigned | snoozed | unsnoozed | resolved |
+    # dismissed | commented | action_item_decided
     action: Mapped[str] = mapped_column(String(length=32), nullable=False)
     payload: Mapped[dict] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
@@ -439,6 +442,21 @@ class InboxItemEvent(Base):
 # ---------------------------------------------------------------------------
 # Run → Inbox linkage
 # ---------------------------------------------------------------------------
+
+
+@event.listens_for(InboxItem, "before_insert")
+def _inbox_item_ensure_headline(
+    _mapper: object, _connection: object, target: InboxItem
+) -> None:
+    """Backstop: derive ``headline`` when a caller omitted it (tests, legacy)."""
+    if target.headline:
+        return
+    from backend.app.services.inbox.headline import derive_headline
+
+    target.headline = derive_headline(
+        summary=target.summary,
+        title=target.title or "Inbox item",
+    )
 
 
 class RunEscalation(Base):

@@ -69,6 +69,7 @@ from backend.app.db.models.inbox import (
 )
 from backend.app.db.models.tenancy import AuditLog, User, WorkspaceMember
 from backend.app.db.session import get_session
+from backend.app.services.inbox.headline import derive_headline
 from backend.app.services.inbox.profiles import INBOX_TYPES
 from backend.app.services.inbox.routing import RoutingContext, resolve_handle
 from backend.app.services.inbox.side_effects import apply_side_effects
@@ -142,6 +143,7 @@ class InboxItemOut(BaseModel):
     type: str
     status: str
     title: str
+    headline: str
     summary: str | None
     intake_handle: str | None
     intake_reason: str | None
@@ -217,6 +219,8 @@ class InboxDispositionIn(BaseModel):
     ]
     resolution: str | None = None
     answer: str | None = None
+    action_item_id: str | None = None
+    choice: Literal["primary", "secondary"] | None = None
     payload: dict = Field(default_factory=dict)
 
 
@@ -300,6 +304,7 @@ def _to_item_out(item: InboxItem, owner: User | None) -> InboxItemOut:
         type=item.type,
         status=item.status,
         title=item.title,
+        headline=item.headline,
         summary=item.summary,
         intake_handle=item.intake_handle,
         intake_reason=item.intake_reason,
@@ -797,6 +802,224 @@ def _validate_disposition(action: str, item: InboxItem, payload: dict) -> str:
     return _ACTION_RESOLUTION[action]
 
 
+def _report_action_items(item: InboxItem) -> list[dict]:
+    """Normalized ``action_items`` list for report rows."""
+    if item.type != "report":
+        return []
+    raw = (item.payload or {}).get("action_items")
+    if not isinstance(raw, list):
+        return []
+    out: list[dict] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        item_id = entry.get("id")
+        if not isinstance(item_id, str) or not item_id.strip():
+            continue
+        out.append(entry)
+    return out
+
+
+def _action_item_decisions(payload: dict) -> dict[str, str]:
+    raw = payload.get("action_item_decisions")
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        str(k): str(v)
+        for k, v in raw.items()
+        if isinstance(k, str) and isinstance(v, str)
+    }
+
+
+def _pending_report_action_item_ids(item: InboxItem) -> set[str]:
+    items = _report_action_items(item)
+    if not items:
+        return set()
+    decided = _action_item_decisions(item.payload or {})
+    return {
+        str(entry["id"])
+        for entry in items
+        if str(entry["id"]) not in decided
+    }
+
+
+def _validate_report_bulk_disposition(action: str, item: InboxItem) -> None:
+    """Block acknowledge/dismiss while report action items are pending."""
+    pending = _pending_report_action_item_ids(item)
+    if not pending:
+        return
+    if action in ("resolve", "acknowledge"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "report has pending action items; decide each recommendation "
+                "before acknowledging"
+            ),
+        )
+    if action == "dismiss":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "report has pending action items; decide each recommendation "
+                "before dismissing"
+            ),
+        )
+
+
+def _lookup_action_item(item: InboxItem, action_item_id: str) -> dict:
+    for entry in _report_action_items(item):
+        if str(entry.get("id")) == action_item_id:
+            return entry
+    raise HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        detail=f"unknown action_item_id {action_item_id!r}",
+    )
+
+
+async def _apply_action_item_disposition(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    item: InboxItem,
+    auth: AuthContext,
+    action_item_id: str,
+    choice: Literal["primary", "secondary"],
+) -> InboxItemDetail:
+    """Record one report recommendation decision; auto-resolve when done."""
+    if item.type != "report":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="action_item_id is only valid for report items",
+        )
+    if item.status not in OPEN_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"action item disposition requires status in {list(OPEN_STATUSES)};"
+                f" item is currently {item.status!r}"
+            ),
+        )
+
+    action_items = _report_action_items(item)
+    if not action_items:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="item has no action_items",
+        )
+
+    entry = _lookup_action_item(item, action_item_id)
+    merged_payload = dict(item.payload or {})
+    decisions = _action_item_decisions(merged_payload)
+    if action_item_id in decisions:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"action_item_id {action_item_id!r} already decided",
+        )
+
+    label_key = "primary" if choice == "primary" else "secondary"
+    label = entry.get(label_key)
+    if not isinstance(label, str) or not label.strip():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"action item missing {label_key!r} label",
+        )
+
+    decisions[action_item_id] = choice
+    merged_payload["action_item_decisions"] = decisions
+    item.payload = merged_payload
+
+    session.add(
+        InboxItemEvent(
+            item_id=item.id,
+            actor_user_id=auth.user.id,
+            actor_kind="user",
+            action="action_item_decided",
+            payload={
+                "action_item_id": action_item_id,
+                "choice": choice,
+                "label": label,
+            },
+        )
+    )
+
+    pending = {
+        str(e["id"])
+        for e in action_items
+        if str(e["id"]) not in decisions
+    }
+    now = datetime.now(timezone.utc)
+    if not pending:
+        item.status = "resolved"
+        item.resolution = "acknowledged"
+        item.resolved_at = now
+        item.resolved_by_user_id = auth.user.id
+        session.add(
+            InboxItemEvent(
+                item_id=item.id,
+                actor_user_id=auth.user.id,
+                actor_kind="user",
+                action="resolved",
+                payload={
+                    "disposition": "resolve",
+                    "resolution": "acknowledged",
+                    "auto": True,
+                    "reason": "all_action_items_decided",
+                },
+            )
+        )
+        session.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                actor_user_id=auth.user.id,
+                actor_token_id=auth.token.id if auth.token else None,
+                action="inbox.disposition.resolve",
+                target_kind="inbox_item",
+                target_id=str(item.id),
+                payload={
+                    "type": item.type,
+                    "resolution": "acknowledged",
+                    "from_status": "new",
+                    "auto": True,
+                },
+            )
+        )
+        report = await apply_side_effects(
+            session,
+            item=item,
+            action="resolve",
+            payload={"resolution": "acknowledged"},
+            actor_user_id=auth.user.id,
+        )
+        logger.info(
+            "inbox action-item auto-resolve side-effects: writebacks=%d, "
+            "escalations_closed=%d, retry=%d, failures=%d",
+            len(report.legacy_writebacks),
+            len(report.escalations_closed),
+            len(report.retry_requests_recorded),
+            len(report.failures),
+        )
+    else:
+        session.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                actor_user_id=auth.user.id,
+                actor_token_id=auth.token.id if auth.token else None,
+                action="inbox.disposition.action_item",
+                target_kind="inbox_item",
+                target_id=str(item.id),
+                payload={
+                    "action_item_id": action_item_id,
+                    "choice": choice,
+                    "pending": len(pending),
+                },
+            )
+        )
+
+    await session.flush()
+    await session.refresh(item)
+    return await _build_detail(session, item)
+
+
 @router.post("/{item_id}/disposition", response_model=InboxItemDetail)
 async def post_disposition(
     workspace_id: uuid.UUID,
@@ -822,12 +1045,34 @@ async def post_disposition(
         session, workspace_id, auth.user.id, item
     )
 
+    if body.action_item_id is not None:
+        if body.choice is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="action_item_id requires choice ('primary' or 'secondary')",
+            )
+        return await _apply_action_item_disposition(
+            session,
+            workspace_id=workspace_id,
+            item=item,
+            auth=auth,
+            action_item_id=body.action_item_id,
+            choice=body.choice,
+        )
+
+    if body.choice is not None and body.action_item_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="choice requires action_item_id",
+        )
+
     payload = body.payload or {}
     if body.answer is not None:
         payload = {**payload, "answer": body.answer}
     if body.resolution is not None:
         payload = {**payload, "resolution": body.resolution}
 
+    _validate_report_bulk_disposition(body.action, item)
     resolution = _validate_disposition(body.action, item, payload)
     now = datetime.now(timezone.utc)
 

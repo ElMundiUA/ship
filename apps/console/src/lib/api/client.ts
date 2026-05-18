@@ -3288,6 +3288,8 @@ export function applyInboxDisposition(
     action: InboxDispositionAction;
     resolution?: string | null;
     answer?: string | null;
+    action_item_id?: string | null;
+    choice?: "primary" | "secondary" | null;
     payload?: Record<string, unknown>;
   },
   token?: string,

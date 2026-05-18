@@ -69,6 +69,7 @@ from backend.app.db.models.pipelines import PullRequest
 from backend.app.db.models.tenancy import AuditLog
 from backend.app.db.session import get_session
 from backend.app.integrations.gateway.tracker import TicketRef
+from backend.app.services.inbox.headline import derive_headline
 from backend.app.services.linear_provisioner import (
     OVERLAY_FREEZE_LABEL_PREFIXES,
 )
@@ -233,6 +234,7 @@ class InboxItemIn(BaseModel):
         "report",
     ] = "improvement"
     title: str = Field(min_length=1, max_length=300)
+    headline: str | None = Field(default=None, max_length=80)
     summary: str | None = Field(default=None, max_length=2000)
     # Markdown body for the preview pane. ≤32KB so a long retro
     # digest fits without paginating.
@@ -774,24 +776,28 @@ async def get_next_task(
                 # row in the operator inbox. The audit-row dedup
                 # gates this same-window check, so we don't re-issue
                 # blocker letters either.
+                tracker_title = (
+                    f"Tracker {resolved.kind} unreachable — agents stalled"
+                )[:300]
+                tracker_summary = (
+                    "The bound tracker adapter is rejecting calls "
+                    "(likely an OAuth token expiry / revocation). "
+                    "Re-authorize the workspace integration to "
+                    "restore agent picks. Subsequent stage picks "
+                    "in this hour are short-circuited to keep the "
+                    "audit log readable.\n\n"
+                    f"First error: {str(exc)[:400]}"
+                )[:2000]
                 session.add(
                     InboxItem(
                         workspace_id=workspace_id,
                         repo_id=None,
                         type="blocker",
-                        title=(
-                            f"Tracker {resolved.kind} unreachable — "
-                            f"agents stalled"
-                        )[:300],
-                        summary=(
-                            "The bound tracker adapter is rejecting calls "
-                            "(likely an OAuth token expiry / revocation). "
-                            "Re-authorize the workspace integration to "
-                            "restore agent picks. Subsequent stage picks "
-                            "in this hour are short-circuited to keep the "
-                            "audit log readable.\n\n"
-                            f"First error: {str(exc)[:400]}"
-                        )[:2000],
+                        title=tracker_title,
+                        headline=derive_headline(
+                            summary=tracker_summary, title=tracker_title
+                        ),
+                        summary=tracker_summary,
                         payload={
                             "tracker_kind": resolved.kind,
                             "fsm_stage": state,
@@ -977,31 +983,35 @@ async def get_next_task(
                         },
                     )
                 )
+                refire_title = (
+                    f"Refire cap hit on {ticket_ref} at {state} — routine paused"
+                )[:300]
+                refire_summary = (
+                    f"The {state} routine has finished against "
+                    f"{ticket_ref} {fire_count} times in the last "
+                    f"{int(_REFIRE_CAP_WINDOW.total_seconds() // 3600)}h. "
+                    "Agent tokens are being burnt without the "
+                    "ticket advancing — usually because the "
+                    "breadcrumb label that's supposed to exclude "
+                    "the ticket on the next pick isn't being "
+                    "added (provisioner gap, transition no-op, "
+                    "label rename). The picker is now refusing "
+                    "to hand this ticket back to the routine "
+                    f"until the {int(_REFIRE_CAP_WINDOW.total_seconds() // 3600)}h "
+                    "window elapses. Investigate the missing "
+                    "breadcrumb or move the ticket past this "
+                    "stage manually."
+                )[:2000]
                 session.add(
                     InboxItem(
                         workspace_id=workspace_id,
                         repo_id=None,
                         type="blocker",
-                        title=(
-                            f"Refire cap hit on {ticket_ref} at "
-                            f"{state} — routine paused"
-                        )[:300],
-                        summary=(
-                            f"The {state} routine has finished against "
-                            f"{ticket_ref} {fire_count} times in the last "
-                            f"{int(_REFIRE_CAP_WINDOW.total_seconds() // 3600)}h. "
-                            "Agent tokens are being burnt without the "
-                            "ticket advancing — usually because the "
-                            "breadcrumb label that's supposed to exclude "
-                            "the ticket on the next pick isn't being "
-                            "added (provisioner gap, transition no-op, "
-                            "label rename). The picker is now refusing "
-                            "to hand this ticket back to the routine "
-                            f"until the {int(_REFIRE_CAP_WINDOW.total_seconds() // 3600)}h "
-                            "window elapses. Investigate the missing "
-                            "breadcrumb or move the ticket past this "
-                            "stage manually."
-                        )[:2000],
+                        title=refire_title,
+                        headline=derive_headline(
+                            summary=refire_summary, title=refire_title
+                        ),
+                        summary=refire_summary,
                         payload={
                             "tracker_kind": resolved.kind,
                             "fsm_stage": state,
@@ -1581,16 +1591,19 @@ async def _record_orphan_skips(
                 },
             )
         )
+    orphan_title = f"Orphan tickets skipped at stage {fsm_stage}"[:300]
+    orphan_summary = (
+        f"{len(refs)} ticket(s) at FSM stage {fsm_stage!r} have no "
+        "tracker project attached and were skipped by the agent "
+        "picker. Re-home them under a project (or close)."
+    )[:2000]
     session.add(
         InboxItem(
             workspace_id=workspace_id,
             type="improvement",
-            title=f"Orphan tickets skipped at stage {fsm_stage}"[:300],
-            summary=(
-                f"{len(refs)} ticket(s) at FSM stage {fsm_stage!r} have no "
-                "tracker project attached and were skipped by the agent "
-                "picker. Re-home them under a project (or close)."
-            )[:2000],
+            title=orphan_title,
+            headline=derive_headline(summary=orphan_summary, title=orphan_title),
+            summary=orphan_summary,
             payload={
                 "kind": "orphan_skipped",
                 "tracker_kind": tracker_kind,
@@ -1967,12 +1980,18 @@ async def post_inbox_item(
     summary_text = payload.summary
     if summary_text is None and body_text:
         summary_text = body_text[:200]
+    summary_stored = (summary_text or "")[:2000] or None
     item = InboxItem(
         workspace_id=workspace_id,
         repo_id=None,
         type=payload.type,
         title=payload.title[:300],
-        summary=(summary_text or "")[:2000] or None,
+        headline=derive_headline(
+            headline=payload.headline,
+            summary=summary_stored,
+            title=payload.title[:300],
+        ),
+        summary=summary_stored,
         payload=item_payload,
         status="new",
         intake_handle=None,
@@ -3241,13 +3260,22 @@ async def finish_agent_run(
     # inbox item so the operator notices, but still record the run.
     if payload.outcome in {"ready_next_step", "needs_clarification", "out_of_scope"} \
             and resolved is None:
+        no_tracker_title = (
+            f"agent finished but no tracker bound ({payload.outcome})"
+        )[:300]
+        no_tracker_summary = (
+            payload.summary or payload.comment or ""
+        )[:2000] or None
         session.add(
             InboxItem(
                 workspace_id=workspace_id,
                 repo_id=None,
                 type="blocker",
-                title=f"agent finished but no tracker bound ({payload.outcome})"[:300],
-                summary=(payload.summary or payload.comment or "")[:2000] or None,
+                title=no_tracker_title,
+                headline=derive_headline(
+                    summary=no_tracker_summary, title=no_tracker_title
+                ),
+                summary=no_tracker_summary,
                 payload={
                     "run_id": payload.run_id,
                     "fsm_stage": payload.fsm_stage,
@@ -3637,13 +3665,16 @@ async def finish_agent_run(
         ticket_snapshot = await _try_ticket_snapshot(resolved.gateway, ref)
         # Mirror to inbox so the operator sees it without scanning the
         # tracker — the agent's question is the inbox row's summary.
+        clar_title = f"clarification: {payload.ticket_ref}"[:300]
+        clar_summary = (payload.summary or payload.comment or "")[:2000] or None
         session.add(
             InboxItem(
                 workspace_id=workspace_id,
                 repo_id=None,
                 type="clarification",
-                title=f"clarification: {payload.ticket_ref}"[:300],
-                summary=(payload.summary or payload.comment or "")[:2000] or None,
+                title=clar_title,
+                headline=derive_headline(summary=clar_summary, title=clar_title),
+                summary=clar_summary,
                 payload={
                     "run_id": payload.run_id,
                     "fsm_stage": payload.fsm_stage,
@@ -3673,13 +3704,18 @@ async def finish_agent_run(
         if payload.ticket_ref and resolved is not None:
             ref = _ticket_ref_from(resolved.kind, payload.ticket_ref)
             ticket_snapshot = await _try_ticket_snapshot(resolved.gateway, ref)
+        blocked_title = f"agent blocked: {payload.fsm_stage or 'run'}"[:300]
+        blocked_summary = (payload.summary or payload.comment or "")[:2000] or None
         session.add(
             InboxItem(
                 workspace_id=workspace_id,
                 repo_id=None,
                 type="blocker",
-                title=f"agent blocked: {payload.fsm_stage or 'run'}"[:300],
-                summary=(payload.summary or payload.comment or "")[:2000] or None,
+                title=blocked_title,
+                headline=derive_headline(
+                    summary=blocked_summary, title=blocked_title
+                ),
+                summary=blocked_summary,
                 payload={
                     "run_id": payload.run_id,
                     "fsm_stage": payload.fsm_stage,

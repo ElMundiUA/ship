@@ -20,6 +20,7 @@ from backend.app.db.models.inbox import (
     InboxItemEvent,
     InboxRoutingRule,
 )
+from backend.app.services.inbox.headline import derive_headline
 
 
 # ---------------------------------------------------------------------------
@@ -85,13 +86,16 @@ async def _make_item(
     snoozed_until: datetime | None = None,
     created_at: datetime | None = None,
 ) -> InboxItem:
+    row_title = title or f"item-{uuid.uuid4().hex[:6]}"
+    row_summary = "test summary"
     item = InboxItem(
         workspace_id=workspace.id,
         type=type,
         status=status,
         owner_user_id=owner_user_id,
-        title=title or f"item-{uuid.uuid4().hex[:6]}",
-        summary="test summary",
+        title=row_title,
+        headline=derive_headline(summary=row_summary, title=row_title),
+        summary=row_summary,
         payload=payload or {},
         play_key=play_key,
         repo_id=repo_id,
@@ -768,3 +772,186 @@ async def test_payload_resolved_at_and_resolved_by_set_correctly(
     assert refreshed.resolved_by_user_id == user.id
     assert refreshed.resolved_at is not None
     assert before - timedelta(seconds=5) <= refreshed.resolved_at <= after + timedelta(seconds=5)
+
+
+# ---------------------------------------------------------------------------
+# 21. headline on list/detail
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_and_detail_include_headline(
+    v1_client, seed_workspace, db_session
+):
+    user, raw, ws = seed_workspace
+    item = await _make_item(
+        db_session,
+        ws,
+        owner_user_id=user.id,
+        title="Daily digest",
+        payload={},
+    )
+    item.summary = "Yellow: three blockers\nDetails…"
+    item.headline = derive_headline(summary=item.summary, title=item.title)
+    await db_session.flush()
+
+    listed = await v1_client.get(
+        f"/v1/workspaces/{ws.id}/inbox", headers=_auth(raw)
+    )
+    assert listed.status_code == 200
+    row = next(i for i in listed.json()["items"] if i["id"] == str(item.id))
+    assert row["headline"] == "Yellow: three blockers"
+
+    detail = await v1_client.get(
+        f"/v1/workspaces/{ws.id}/inbox/{item.id}", headers=_auth(raw)
+    )
+    assert detail.json()["headline"] == "Yellow: three blockers"
+
+
+# ---------------------------------------------------------------------------
+# 22. report action_items disposition
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_report_action_items_disposition_sequence(
+    v1_client, seed_workspace, db_session
+):
+    user, raw, ws = seed_workspace
+    item = await _make_item(
+        db_session,
+        ws,
+        owner_user_id=user.id,
+        type="report",
+        payload={
+            "body": "# Digest",
+            "action_items": [
+                {
+                    "id": "ai-01",
+                    "prompt": "Keep cascade at 30s?",
+                    "primary": "Keep",
+                    "secondary": "Revert",
+                },
+                {
+                    "id": "ai-02",
+                    "prompt": "Document intake scope?",
+                    "primary": "Yes",
+                    "secondary": "Later",
+                },
+            ],
+        },
+    )
+
+    first = await v1_client.post(
+        f"/v1/workspaces/{ws.id}/inbox/{item.id}/disposition",
+        headers=_auth(raw),
+        json={
+            "action": "resolve",
+            "action_item_id": "ai-01",
+            "choice": "primary",
+        },
+    )
+    assert first.status_code == 200, first.text
+    body1 = first.json()
+    assert body1["status"] == "new"
+    assert body1["payload"]["action_item_decisions"]["ai-01"] == "primary"
+    assert any(e["action"] == "action_item_decided" for e in body1["events"])
+
+    dup = await v1_client.post(
+        f"/v1/workspaces/{ws.id}/inbox/{item.id}/disposition",
+        headers=_auth(raw),
+        json={
+            "action": "resolve",
+            "action_item_id": "ai-01",
+            "choice": "primary",
+        },
+    )
+    assert dup.status_code == 422
+
+    second = await v1_client.post(
+        f"/v1/workspaces/{ws.id}/inbox/{item.id}/disposition",
+        headers=_auth(raw),
+        json={
+            "action": "resolve",
+            "action_item_id": "ai-02",
+            "choice": "secondary",
+        },
+    )
+    assert second.status_code == 200, second.text
+    body2 = second.json()
+    assert body2["status"] == "resolved"
+    assert body2["resolution"] == "acknowledged"
+
+
+@pytest.mark.asyncio
+async def test_report_bulk_acknowledge_blocked_with_pending_action_items(
+    v1_client, seed_workspace, db_session
+):
+    user, raw, ws = seed_workspace
+    item = await _make_item(
+        db_session,
+        ws,
+        owner_user_id=user.id,
+        type="report",
+        payload={
+            "action_items": [
+                {
+                    "id": "ai-01",
+                    "prompt": "One",
+                    "primary": "Yes",
+                    "secondary": "No",
+                },
+            ],
+        },
+    )
+    res = await v1_client.post(
+        f"/v1/workspaces/{ws.id}/inbox/{item.id}/disposition",
+        headers=_auth(raw),
+        json={"action": "resolve"},
+    )
+    assert res.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_report_empty_action_items_acknowledge_still_works(
+    v1_client, seed_workspace, db_session
+):
+    user, raw, ws = seed_workspace
+    item = await _make_item(
+        db_session,
+        ws,
+        owner_user_id=user.id,
+        type="report",
+        payload={"body": "ok", "action_items": []},
+    )
+    res = await v1_client.post(
+        f"/v1/workspaces/{ws.id}/inbox/{item.id}/disposition",
+        headers=_auth(raw),
+        json={"action": "resolve"},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["status"] == "resolved"
+    assert res.json()["resolution"] == "acknowledged"
+
+
+@pytest.mark.asyncio
+async def test_action_item_disposition_rejects_non_report(
+    v1_client, seed_workspace, db_session
+):
+    user, raw, ws = seed_workspace
+    item = await _make_item(
+        db_session,
+        ws,
+        owner_user_id=user.id,
+        type="clarification",
+    )
+    res = await v1_client.post(
+        f"/v1/workspaces/{ws.id}/inbox/{item.id}/disposition",
+        headers=_auth(raw),
+        json={
+            "action": "resolve",
+            "action_item_id": "ai-01",
+            "choice": "primary",
+        },
+    )
+    assert res.status_code == 422

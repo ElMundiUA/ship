@@ -106,12 +106,73 @@ export const INBOX_TYPE_META: Record<
  *   - ``decision`` — primary + secondary disposition buttons. Used for
  *     everything that's a yes/no/dismiss decision.
  */
-export type InboxFooterKind = "acknowledge" | "reply" | "decision";
+export type InboxFooterKind = "acknowledge" | "reply" | "decision" | "report_actions";
 
-export function inboxFooterKind(type: InboxType): InboxFooterKind {
+export type InboxReportActionItem = {
+  id: string;
+  prompt: string;
+  primary: string;
+  secondary: string;
+};
+
+export function reportActionItems(
+  payload: Record<string, unknown> | undefined,
+): InboxReportActionItem[] {
+  const raw = payload?.action_items;
+  if (!Array.isArray(raw) || raw.length === 0) return [];
+  const out: InboxReportActionItem[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") continue;
+    const row = entry as Record<string, unknown>;
+    const id = typeof row.id === "string" ? row.id : "";
+    const prompt = typeof row.prompt === "string" ? row.prompt : "";
+    const primary = typeof row.primary === "string" ? row.primary : "";
+    const secondary = typeof row.secondary === "string" ? row.secondary : "";
+    if (!id || !prompt || !primary || !secondary) continue;
+    out.push({ id, prompt, primary, secondary });
+  }
+  return out;
+}
+
+export function reportActionItemDecisions(
+  payload: Record<string, unknown> | undefined,
+): Record<string, "primary" | "secondary"> {
+  const raw = payload?.action_item_decisions;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const out: Record<string, "primary" | "secondary"> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (value === "primary" || value === "secondary") out[key] = value;
+  }
+  return out;
+}
+
+export function inboxFooterKind(
+  type: InboxType,
+  payload?: Record<string, unknown>,
+): InboxFooterKind {
+  if (type === "report" && reportActionItems(payload).length > 0) {
+    return "report_actions";
+  }
   if (type === "report") return "acknowledge";
   if (type === "clarification") return "reply";
   return "decision";
+}
+
+/** Primary list-row text: headline, else truncated summary, else title. */
+export function inboxListLine(item: {
+  headline?: string | null;
+  summary?: string | null;
+  title: string;
+}): string {
+  const headline = item.headline?.trim();
+  if (headline) return headline;
+  const summary = item.summary?.trim();
+  if (summary) {
+    const first = summary.split(/\r?\n/).find((line) => line.trim());
+    const line = (first ?? summary).trim();
+    return line.length <= 80 ? line : line.slice(0, 80);
+  }
+  return item.title;
 }
 
 /**
@@ -125,6 +186,7 @@ export type InboxItem = {
   type: InboxType;
   status: InboxStatus;
   title: string;
+  headline: string;
   summary: string | null;
   /** Symbolic handle that resolved (e.g. "secops"). */
   intake_handle: string | null;
@@ -176,7 +238,8 @@ export type InboxItemEvent = {
     | "unsnoozed"
     | "resolved"
     | "dismissed"
-    | "commented";
+    | "commented"
+    | "action_item_decided";
   payload: Record<string, unknown>;
   created_at: string;
 };
