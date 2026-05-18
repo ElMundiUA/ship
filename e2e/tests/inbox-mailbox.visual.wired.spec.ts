@@ -23,7 +23,7 @@ test.describe("inbox mailbox visuals (wired)", () => {
       page.getByRole("heading", { name: "Inbox", exact: true }),
     ).toBeVisible({ timeout: 30_000 });
 
-    const emptyTitle = page.getByText("Inbox empty.", { exact: true });
+    const emptyTitle = page.getByText("Inbox empty", { exact: true });
     if (await emptyTitle.isVisible().catch(() => false)) {
       await expect(
         page.getByText("Nothing waiting on you — agents working."),

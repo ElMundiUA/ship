@@ -267,12 +267,15 @@ function MailboxList({
       {items.length === 0 ? (
         <div className="flex flex-1 items-center justify-center p-4">
           <EmptyState
-            title="Inbox empty."
+            title="Inbox empty"
             body="Nothing waiting on you — agents working."
           />
         </div>
       ) : (
-        <ul className="divide-y divide-white/[0.06] overflow-y-auto">
+        <ul
+          data-testid="inbox-mailbox-rows"
+          className="divide-y divide-white/[0.06] overflow-y-auto"
+        >
           {items.map((item) => (
             <li key={item.id}>
               <MailboxRow
@@ -452,7 +455,7 @@ function MailboxPreview({
     return (
       <div className="flex min-h-[60vh] items-center justify-center rounded-xl border border-white/[0.08] bg-white/[0.015] p-6">
         <EmptyState
-          title="Inbox empty."
+          title="Inbox empty"
           body="Nothing waiting on you — agents working."
         />
       </div>

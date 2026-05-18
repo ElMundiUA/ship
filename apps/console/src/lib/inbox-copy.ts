@@ -7,16 +7,22 @@ import type { InboxItem } from "@/lib/inbox-types";
 
 /** Human labels for raw ``intake_reason`` prefixes (tooltip only). */
 export const INTAKE_REASON_LABELS: Record<string, string> = {
-  "rule:": "Routed by rule",
+  "rule:user": "Routed to assignee",
+  "rule:strategy:": "Rule strategy",
   "group:": "Group assignment",
-  "builtin:requested_by": "Requested assignee",
+  "builtin:": "Builtin handle",
   "fallback:": "Fallback routing",
   unresolved: "Unassigned",
+  "unresolved:": "Unassigned (qualified)",
   agent_run_blocked: "Agent escalation",
+  agent_run_clarification: "Agent clarification",
+  agent_run_no_tracker: "No tracker bound",
   "manual:admin": "Manual assignment",
   knowledge_draft_review: "Knowledge draft review",
   knowledge_archive_review: "Knowledge archive review",
   "round_robin:": "Round-robin",
+  tracker_outage: "Tracker outage",
+  refire_capped: "Refire cap",
 };
 
 const AGENT_BLOCKED = /^agent blocked:\s*(.+)$/i;
