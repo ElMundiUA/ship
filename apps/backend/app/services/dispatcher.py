@@ -151,6 +151,7 @@ class _Reason:
     CAP_EXCEEDED = "cap_exceeded"  # workspace's parallel dispatch limit hit
     PROJECT_BUSY = "project_busy"  # another non-anchor ticket in the same Linear project is in flight
     CASCADE_BLOCKED = "cascade_blocked"  # too many dispatches for this ticket recently
+    BLOCKED_BY_DEPENDENCY = "blocked_by_dependency"  # one of the ticket's Linear `blocks` relations is unresolved
     NO_REPO = "no_repo"  # workspace has no activated repo to dispatch to
     NO_ROUTINE = "no_routine"  # ticket carries no stage label or unknown stage
     DISPATCH_FAILED = "dispatch_failed"  # GH API rejected the call
@@ -720,6 +721,67 @@ async def maybe_dispatch(
             "dispatcher: project context lookup failed ticket=%s err=%s",
             ticket_ref, exc,
         )
+
+    # 5a. Dependency gate. Linear models hard prerequisites via the
+    # `blocks` relation (issue A blocks issue B → B can't start until
+    # A is done). Three parallel devs picked up sibling inbox tickets
+    # in the same project and each wrote a conflicting Alembic
+    # `0074_*` migration because no stage checked the relation
+    # (caught 2026-05-18 on ELS-143/144/147). Refuse the dispatch
+    # while any blocker is in a non-terminal state. ``canceled``
+    # counts as resolved — the work is no longer expected, so the
+    # dependency is conceptually gone. Best-effort: if the adapter
+    # can't answer (non-Linear tracker, GraphQL hiccup), we proceed.
+    if resolved_tracker is not None:
+        get_blockers_fn = getattr(
+            resolved_tracker.gateway, "get_ticket_blockers", None
+        )
+        if get_blockers_fn is not None:
+            try:
+                blockers = await get_blockers_fn(
+                    TicketRef(
+                        kind=resolved_tracker.kind,
+                        workspace_hint=None,
+                        id=ticket_ref,
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001 — best-effort
+                log.debug(
+                    "dispatcher: get_ticket_blockers failed ticket=%s err=%s",
+                    ticket_ref, exc,
+                )
+                blockers = None
+            unresolved = [
+                b for b in (blockers or []) if not b.get("completed")
+            ]
+            if unresolved:
+                await release_lock(
+                    session, workspace_id=workspace_id, key=lock_key
+                )
+                session.add(
+                    AuditLog(
+                        workspace_id=workspace_id,
+                        action="dispatch.blocked_by_dep",
+                        target_kind="ticket",
+                        target_id=ticket_ref,
+                        payload={
+                            "trigger_kind": trigger_kind,
+                            "fsm_stage": fsm_stage,
+                            "blockers": [
+                                {
+                                    "identifier": b.get("identifier"),
+                                    "state_name": b.get("state_name"),
+                                }
+                                for b in unresolved
+                            ],
+                        },
+                    )
+                )
+                return DispatchResult(
+                    fired=False,
+                    reason=_Reason.BLOCKED_BY_DEPENDENCY,
+                    lock_key=lock_key,
+                )
 
     # 5b. Project-WIP gate. One non-anchor ticket per Linear project
     # at a time — anchors decompose their project and must stay
