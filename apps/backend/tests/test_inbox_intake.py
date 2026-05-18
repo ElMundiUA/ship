@@ -199,6 +199,46 @@ async def test_silent_profile_skips_every_finding(
 
 
 @pytest.mark.asyncio
+async def test_exception_finding_skips_inbox_row(
+    db_session: AsyncSession, seeded_run, fake_resolve, monkeypatch
+):
+    workspace, run, _owner_user_id = seeded_run
+    crumbs: list[dict] = []
+    from backend.app.core import sentry as sentry_mod
+
+    monkeypatch.setattr(
+        sentry_mod,
+        "record_inbox_exception_breadcrumb",
+        lambda **kw: crumbs.append(kw),
+    )
+    finding = RunSummaryFinding(
+        type="exception",
+        title="CI flake",
+        summary="Transient",
+        payload={"ticket_ref": "ELS-1", "fsm_stage": "dev_implementation"},
+        when_tags=("budget_breach_allowance_requested",),
+    )
+    report = await emit_for_run(
+        db_session,
+        workspace_id=workspace.id,
+        repo_id=None,
+        run_id=run.id,
+        play_key="op-retry-sweep",
+        pattern_meta=_pattern_meta("scan_default"),
+        findings=[finding],
+    )
+    assert report.items_created == []
+    assert report.items_skipped[0]["reason"] == "exception:breadcrumb_only"
+    items = (
+        await db_session.execute(
+            select(InboxItem).where(InboxItem.run_id == run.id)
+        )
+    ).scalars().all()
+    assert items == []
+    assert len(crumbs) == 1
+
+
+@pytest.mark.asyncio
 async def test_finding_emits_inbox_item_with_routed_owner(
     db_session: AsyncSession, seeded_run, fake_resolve
 ):

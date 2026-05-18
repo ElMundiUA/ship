@@ -129,12 +129,16 @@ def fake_resolve(monkeypatch, seeded_run):
 async def test_intake_with_run_id_creates_escalation_per_inbox_item(
     db_session: AsyncSession, seeded_run, fake_resolve
 ):
-    """Three findings → three RunEscalation rows, each with the right reason."""
+    """Two inbox findings → two RunEscalation rows, each with the right reason.
+
+    Exception findings are breadcrumb-only (ELS-144) and do not create
+    inbox rows or run escalations.
+    """
     workspace, run, _owner_user_id = seeded_run
     findings = [
         # ``flow_release`` enables clarification / approval / failure /
-        # improvement / exception — pick three different types so we
-        # can prove the per-item linkage isn't a special case.
+        # improvement — pick two different types so we can prove the
+        # per-item linkage isn't a special case.
         RunSummaryFinding(
             type="clarification",
             title="missing release metadata",
@@ -167,20 +171,23 @@ async def test_intake_with_run_id_creates_escalation_per_inbox_item(
         findings=findings,
     )
 
-    assert len(report.items_created) == 3
-    assert len(report.escalations_created) == 3
+    assert len(report.items_created) == 2
+    assert len(report.escalations_created) == 2
+    assert any(
+        s.get("reason") == "exception:breadcrumb_only"
+        for s in report.items_skipped
+    )
 
     escalations = (
         await db_session.execute(
             select(RunEscalation).where(RunEscalation.run_id == run.id)
         )
     ).scalars().all()
-    assert len(escalations) == 3
+    assert len(escalations) == 2
     by_item = {e.inbox_item_id: e.escalation_reason for e in escalations}
-    # Item order matches finding order.
+    # Item order matches finding order (exception skipped).
     assert by_item[report.items_created[0]] == "needs_clarification"
     assert by_item[report.items_created[1]] == "play_failed_repeatedly"
-    assert by_item[report.items_created[2]] == "play_exception"
 
 
 @pytest.mark.asyncio
@@ -255,20 +262,12 @@ async def test_intake_without_run_id_skips_escalations(
             False,
             "improvement_proposed",
         ),
-        (
-            "flow_release",
-            "exception",
-            "allow_release_with_known_risk",
-            False,
-            "play_exception",
-        ),
     ],
     ids=[
         "approval_via_requires_approval_override",
         "failure",
         "clarification",
         "improvement",
-        "exception",
     ],
 )
 async def test_intake_escalation_reason_mapping(
@@ -309,6 +308,51 @@ async def test_intake_escalation_reason_mapping(
     assert escalation is not None
     assert escalation.escalation_reason == expected_reason
     assert escalation.inbox_item_id == report.items_created[0]
+
+
+@pytest.mark.asyncio
+async def test_intake_exception_skips_escalation(
+    db_session: AsyncSession, seeded_run, fake_resolve, monkeypatch
+):
+    """Exception findings are breadcrumb-only — no inbox row or linkage."""
+    from backend.app.core import sentry as sentry_mod
+
+    crumbs: list[dict] = []
+
+    def _crumb(**kwargs):
+        crumbs.append(kwargs)
+
+    monkeypatch.setattr(sentry_mod, "record_inbox_exception_breadcrumb", _crumb)
+
+    workspace, run, _owner_user_id = seeded_run
+    finding = RunSummaryFinding(
+        type="exception",
+        title="known risk",
+        summary=None,
+        payload={},
+        when_tags=("allow_release_with_known_risk",),
+    )
+    report = await emit_for_run(
+        db_session,
+        workspace_id=workspace.id,
+        repo_id=None,
+        run_id=run.id,
+        play_key="flow-release-notes",
+        pattern_meta=_pattern_meta("flow_release"),
+        findings=[finding],
+    )
+
+    assert report.items_created == []
+    assert report.escalations_created == []
+    assert report.items_skipped[0]["reason"] == "exception:breadcrumb_only"
+    assert len(crumbs) == 1
+
+    escalations = (
+        await db_session.execute(
+            select(RunEscalation).where(RunEscalation.run_id == run.id)
+        )
+    ).scalars().all()
+    assert escalations == []
 
 
 @pytest.mark.asyncio

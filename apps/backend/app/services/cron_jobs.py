@@ -637,6 +637,24 @@ def register_all() -> None:
         job_id="fsm_self_heal_scan",
     )
 
+    register_cron(
+        fn=_inbox_stale_sweep_tick,
+        cron_expr="*/15 * * * *",
+        job_id="inbox_stale_sweep",
+    )
+
+
+@cron_with_lock(lock=CronLockId.INBOX_STALE_SWEEP, name="inbox_stale_sweep")
+async def _inbox_stale_sweep_tick() -> None:
+    """Dismiss time-boxed inbox rows past ``stale_after``."""
+    from backend.app.db.session import get_sessionmaker
+    from backend.app.services.inbox.sweep import sweep_stale_inbox_items
+
+    sessionmaker = get_sessionmaker()
+    async with sessionmaker() as session:
+        await sweep_stale_inbox_items(session)
+        await session.commit()
+
 
 @cron_with_lock(lock=CronLockId.FSM_SCAN_BACKSTOP, name="fsm_self_heal_scan")
 async def _fsm_self_heal_scan_tick() -> None:

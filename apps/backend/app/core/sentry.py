@@ -157,4 +157,28 @@ def _reset_for_tests() -> None:
     _SENTRY_INITIALISED = False
 
 
-__all__ = ["init_sentry"]
+def record_inbox_exception_breadcrumb(
+    *,
+    source: str,
+    title: str,
+    ticket_ref: str | None = None,
+    **data: object,
+) -> None:
+    """Record exception-path inbox content without creating a row."""
+    try:
+        import sentry_sdk
+
+        payload: dict[str, object] = {"source": source, **data}
+        if ticket_ref:
+            payload["ticket_ref"] = ticket_ref
+        sentry_sdk.add_breadcrumb(
+            category="inbox.exception",
+            message=title[:200],
+            level="info",
+            data=payload,
+        )
+    except Exception:  # noqa: BLE001 — observability must not break callers
+        log.debug("sentry breadcrumb skipped for inbox exception", exc_info=True)
+
+
+__all__ = ["init_sentry", "record_inbox_exception_breadcrumb"]

@@ -2450,6 +2450,22 @@ class ToolBox:
         else:
             summary_text = summary
 
+        if type_ == "exception":
+            from backend.app.core.sentry import record_inbox_exception_breadcrumb
+
+            record_inbox_exception_breadcrumb(
+                source="agent_tool.inbox_create",
+                title=title_clean,
+                summary=summary_text,
+            )
+            return _json_result(
+                {
+                    "type": type_,
+                    "status": "breadcrumb_only",
+                    "title": title_clean,
+                }
+            )
+
         item = InboxItem(
             workspace_id=self._workspace_id,
             repo_id=self._active_repo_id,

@@ -43,6 +43,7 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import dataclass, field
+from datetime import timedelta
 from typing import Any
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -275,6 +276,17 @@ def _build_inbox_item(
     """
     payload = dict(finding.payload or {})
     payload["requires_approval"] = bool(finding.requires_approval)
+    auto_resolvable = False
+    stale_after = None
+    if effective_type == "stuck":
+        auto_resolvable = True
+        stale_after = timedelta(hours=1)
+    elif (
+        effective_type == "failure"
+        and payload.get("ticket_ref")
+        and payload.get("fsm_stage")
+    ):
+        auto_resolvable = True
     return InboxItem(
         workspace_id=workspace_id,
         repo_id=repo_id,
@@ -290,6 +302,8 @@ def _build_inbox_item(
         owner_user_id=resolved.user_id,
         intake_handle=resolved.intake_handle,
         intake_reason=resolved.intake_reason,
+        auto_resolvable=auto_resolvable,
+        stale_after=stale_after,
     )
 
 
@@ -373,6 +387,21 @@ async def emit_for_run(
         if gate_reason is not None:
             report.items_skipped.append(
                 {"finding_index": index, "reason": gate_reason}
+            )
+            continue
+
+        if effective_type == "exception":
+            from backend.app.core.sentry import record_inbox_exception_breadcrumb
+
+            record_inbox_exception_breadcrumb(
+                source="play_intake",
+                title=finding.title,
+                ticket_ref=str(finding.payload.get("ticket_ref") or "") or None,
+                play_key=play_key,
+                run_id=str(run_id) if run_id else None,
+            )
+            report.items_skipped.append(
+                {"finding_index": index, "reason": "exception:breadcrumb_only"}
             )
             continue
 

@@ -242,6 +242,41 @@ async def test_inbox_create_writes_report_item_with_body_in_payload(
 
 
 @pytest.mark.asyncio
+async def test_inbox_create_exception_is_breadcrumb_only(
+    db_session, seed_workspace, monkeypatch
+) -> None:
+    from backend.app.core import sentry as sentry_mod
+    from backend.app.db.models.inbox import InboxItem
+
+    crumbs: list[dict] = []
+    monkeypatch.setattr(
+        sentry_mod,
+        "record_inbox_exception_breadcrumb",
+        lambda **kw: crumbs.append(kw),
+    )
+
+    user, _, workspace = seed_workspace
+    toolbox = _toolbox(db_session, workspace, user)
+
+    out = await toolbox._tool_inbox_create(
+        {
+            "type": "exception",
+            "title": "Play saw an anomaly",
+            "body": "Stack trace in logs",
+        }
+    )
+    payload = json.loads(out)
+    assert payload["status"] == "breadcrumb_only"
+    rows = (
+        await db_session.execute(
+            select(InboxItem).where(InboxItem.workspace_id == workspace.id)
+        )
+    ).scalars().all()
+    assert rows == []
+    assert len(crumbs) == 1
+
+
+@pytest.mark.asyncio
 async def test_inbox_create_rejects_unknown_type(
     db_session, seed_workspace
 ) -> None:

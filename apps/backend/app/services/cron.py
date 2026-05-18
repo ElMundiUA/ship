@@ -116,6 +116,9 @@ class CronLockId(IntEnum):
     # than 20 min. Conservative cadence + idempotent dispatch (same
     # lock as the poller's path) makes the overlap safe.
     FSM_SCAN_BACKSTOP = 1016
+    # Inbox stale-row dismiss (ELS-144) — rows with ``stale_after`` past
+    # ``created_at + stale_after`` and ``status=new`` become dismissed.
+    INBOX_STALE_SWEEP = 1017
 
 
 # ---------------------------------------------------------------------------

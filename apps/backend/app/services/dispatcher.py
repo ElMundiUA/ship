@@ -39,8 +39,8 @@ from backend.app.db.models.integrations import (
     GitHubInstallation,
     WorkspaceRepo,
 )
-from backend.app.db.models.inbox import InboxItem
 from backend.app.db.models.tenancy import AuditLog, Workspace
+from sqlalchemy.orm.attributes import flag_modified
 from backend.app.integrations.gateway.tracker import TicketRef
 from backend.app.integrations.github.workflows import (
     WorkflowDispatchError,
@@ -367,6 +367,15 @@ async def _count_recent_dispatches(
 # ---------------------------------------------------------------------------
 
 
+ENV_SEPARATION_ACK_KEY = "env_separation_acknowledged"
+ENV_SEPARATION_PENDING_KEY = "env_separation_pending"
+
+
+def env_separation_handle(*, workspace_id: uuid.UUID, project_id: str) -> str:
+    """Stable per-project handle (fits workspace settings + legacy intake_handle)."""
+    return f"env-warn:{str(workspace_id)[:8]}:{str(project_id)[:8]}"
+
+
 async def _emit_env_separation_warning(
     session: AsyncSession,
     *,
@@ -374,68 +383,37 @@ async def _emit_env_separation_warning(
     project_id: str,
     project_name: str,
 ) -> None:
-    """One-time inbox warning when auto-dispatch first touches a project.
+    """Queue a one-time Console env-separation modal for this project.
 
-    The operator opted into Ship by clicking through the wizard, but
-    that consent doesn't extend to "let agents merge PRs into prod
-    main on day one". When the per-project WIP gate first acquires
-    the lock for a project we drop a single warning into the inbox
-    surfacing the env-separation expectation. Idempotent via
-    ``InboxItem.intake_handle`` — a second dispatch on the same
-    project doesn't re-spam.
+    Idempotent via ``env-warn:<ws8>:<proj8>`` stored in
+    ``workspace.settings`` — no inbox row (ELS-144).
     """
-    # ``InboxItem.intake_handle`` is VARCHAR(64); two full UUIDs +
-    # prefix overflow at 82 chars and the poller's transaction
-    # rolls back with ``StringDataRightTruncationError``, stalling
-    # the entire dispatch chain (caught on askslayer 2026-05-15
-    # right after this guard was added). Short-prefix the IDs —
-    # collision risk is per-workspace + per-project and 8 hex chars
-    # of each is well under 2⁻³² per pair within a single tenant.
-    handle = f"env-warn:{str(workspace_id)[:8]}:{str(project_id)[:8]}"
-    existing = (
-        await session.execute(
-            select(InboxItem.id).where(InboxItem.intake_handle == handle).limit(1)
-        )
-    ).scalar_one_or_none()
-    if existing is not None:
-        return
-    session.add(
-        InboxItem(
-            workspace_id=workspace_id,
-            repo_id=None,
-            type="warning",
-            title=(
-                f"Agents will auto-merge PRs in project {project_name!r}"
-            )[:300],
-            summary=(
-                "Ship just started dispatching agent work on a ticket in "
-                f"project {project_name!r}. Tickets in the project run "
-                "one-at-a-time and the planned auto-merger bundle will "
-                "ship PRs into your default branch when the reviewer "
-                "is confident. **Strongly recommended before you let "
-                "this run unattended:**\n\n"
-                "1. Use a non-prod default branch (``develop`` / "
-                "``main`` with deploy gates downstream) and let the "
-                "agent open PRs against it — not directly into prod.\n"
-                "2. Make sure your DB / API base URL / payment keys "
-                "in this repo's GH Actions secrets are dev/staging, "
-                "not prod credentials.\n"
-                "3. Keep ``CODEOWNERS`` pointed at a human reviewer "
-                "for risky paths (auth, migrations, payments) so the "
-                "auto-merger can't skip required review.\n\n"
-                "Acknowledge this once and Ship won't warn again for "
-                "this project."
-            ),
-            payload={
-                "project_id": project_id,
-                "project_name": project_name,
-                "reason": "auto_dispatch_first_touch",
-            },
-            status="new",
-            intake_handle=handle,
-            intake_reason="env_separation_warning",
-        )
+    handle = env_separation_handle(
+        workspace_id=workspace_id, project_id=project_id
     )
+    workspace = await session.get(Workspace, workspace_id)
+    if workspace is None:
+        return
+
+    settings = dict(workspace.settings or {})
+    acknowledged = set(settings.get(ENV_SEPARATION_ACK_KEY) or [])
+    if handle in acknowledged:
+        return
+
+    pending = list(settings.get(ENV_SEPARATION_PENDING_KEY) or [])
+    if any(entry.get("handle") == handle for entry in pending):
+        return
+
+    pending.append(
+        {
+            "handle": handle,
+            "project_id": project_id,
+            "project_name": project_name,
+        }
+    )
+    settings[ENV_SEPARATION_PENDING_KEY] = pending
+    workspace.settings = settings
+    flag_modified(workspace, "settings")
 
 
 async def _pick_dispatch_repo(

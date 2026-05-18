@@ -28,8 +28,8 @@ E14 architecture (locked 2026-04-30):
   - ``needs_clarification`` → tag with ``needs:clarification`` so
                              intake stops re-picking until the
                              human answers; optional comment.
-  - ``blocked``             → drop a blocker into the workspace
-                             inbox; ticket unchanged.
+  - ``blocked``             → audit only (no inbox row); ticket
+                             unchanged.
   - ``out_of_scope``        → close the ticket with optional
                              comment.
 
@@ -54,6 +54,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from sqlalchemy import select as sa_select
 
@@ -64,9 +65,16 @@ from backend.app.api.v1.routes.workspaces import (
 )
 from backend.app.core.config import Settings, get_settings
 from backend.app.db.models.dashboard_priorities import WorkspaceProjectPriority
+from backend.app.core.sentry import record_inbox_exception_breadcrumb
 from backend.app.db.models.inbox import InboxItem
 from backend.app.db.models.pipelines import PullRequest
-from backend.app.db.models.tenancy import AuditLog
+from backend.app.db.models.tenancy import AuditLog, Workspace
+from backend.app.services.inbox.sweep import sweep_auto_resolvable
+from backend.app.services.dispatcher import (
+    ENV_SEPARATION_ACK_KEY,
+    ENV_SEPARATION_PENDING_KEY,
+    env_separation_handle,
+)
 from backend.app.db.session import get_session
 from backend.app.integrations.gateway.tracker import TicketRef
 from backend.app.services.linear_provisioner import (
@@ -1951,6 +1959,30 @@ async def post_inbox_item(
         prerequisite as an inbox item the operator can act on.
     """
     await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+    if payload.type == "exception":
+        record_inbox_exception_breadcrumb(
+            source="agent_run.inbox_item",
+            title=payload.title,
+            ticket_ref=payload.ticket_ref,
+        )
+        session.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                actor_user_id=auth.user.id,
+                actor_token_id=auth.token.id if auth.token else None,
+                action="agent_run.inbox_item",
+                target_kind="inbox_item",
+                target_id=None,
+                payload={
+                    "type": payload.type,
+                    "title": payload.title[:300],
+                    "ticket_ref": payload.ticket_ref,
+                    "breadcrumb_only": True,
+                },
+            )
+        )
+        await session.flush()
+        return WriteOut(ok=True, note="exception recorded (no inbox row)")
     # Build the row's payload bag. ``body`` (markdown for the preview
     # pane) lives here so the InboxItem schema can keep ``summary``
     # capped at 2KB for the list view. When the agent didn't pass an
@@ -1996,6 +2028,72 @@ async def post_inbox_item(
     )
     await session.flush()
     return WriteOut(ok=True, note=f"inbox item created (type={payload.type})")
+
+
+class EnvSeparationWarningOut(BaseModel):
+    handle: str
+    project_id: str
+    project_name: str
+
+
+class EnvSeparationAckIn(BaseModel):
+    handle: str = Field(min_length=8, max_length=64)
+
+
+@router.get(
+    "/agent-runs/env-separation-warnings",
+    response_model=list[EnvSeparationWarningOut],
+)
+async def list_env_separation_warnings(
+    workspace_id: uuid.UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> list[EnvSeparationWarningOut]:
+    """Pending first-run env-separation modals for this workspace."""
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+    workspace = await session.get(Workspace, workspace_id)
+    if workspace is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="workspace_not_found")
+    pending = list((workspace.settings or {}).get(ENV_SEPARATION_PENDING_KEY) or [])
+    return [
+        EnvSeparationWarningOut(
+            handle=str(entry.get("handle") or ""),
+            project_id=str(entry.get("project_id") or ""),
+            project_name=str(entry.get("project_name") or ""),
+        )
+        for entry in pending
+        if entry.get("handle")
+    ]
+
+
+@router.post("/agent-runs/env-separation-warnings/ack", response_model=WriteOut)
+async def ack_env_separation_warning(
+    workspace_id: uuid.UUID,
+    payload: EnvSeparationAckIn,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> WriteOut:
+    """Mark a project env-separation warning as acknowledged."""
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+    workspace = await session.get(Workspace, workspace_id)
+    if workspace is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="workspace_not_found")
+
+    settings = dict(workspace.settings or {})
+    pending = [
+        e
+        for e in (settings.get(ENV_SEPARATION_PENDING_KEY) or [])
+        if e.get("handle") != payload.handle
+    ]
+    acknowledged = list(settings.get(ENV_SEPARATION_ACK_KEY) or [])
+    if payload.handle not in acknowledged:
+        acknowledged.append(payload.handle)
+    settings[ENV_SEPARATION_PENDING_KEY] = pending
+    settings[ENV_SEPARATION_ACK_KEY] = acknowledged
+    workspace.settings = settings
+    flag_modified(workspace, "settings")
+    await session.flush()
+    return WriteOut(ok=True, note="env separation warning acknowledged")
 
 
 # ---------------------------------------------------------------------------
@@ -3158,6 +3256,27 @@ async def _flip_drafts_row_to_parked(
     return True
 
 
+async def _sweep_inbox_on_ticket_advance(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    ticket_ref: str | None,
+    fsm_stage: str | None,
+    actions: list[str],
+) -> None:
+    """Auto-close recoverable inbox rows after a successful tracker move."""
+    if not ticket_ref or not fsm_stage:
+        return
+    swept = await sweep_auto_resolvable(
+        session,
+        workspace_id=workspace_id,
+        ticket_ref=ticket_ref,
+        fsm_stage=fsm_stage,
+    )
+    if swept:
+        actions.append(f"inbox:sweep_auto_resolved:{swept}")
+
+
 @router.post("/agent-runs/finish", response_model=FinishOut)
 async def finish_agent_run(
     workspace_id: uuid.UUID,
@@ -3512,6 +3631,13 @@ async def finish_agent_run(
                     from_state=payload.fsm_stage,
                 )
                 actions.append(f"tracker:transition:{payload.stage_next}")
+                await _sweep_inbox_on_ticket_advance(
+                    session,
+                    workspace_id=workspace_id,
+                    ticket_ref=payload.ticket_ref,
+                    fsm_stage=payload.fsm_stage,
+                    actions=actions,
+                )
 
             # Auto-merger hook (post-E16 WAU). When the auto-merger
             # bundle finishes with ``payload.auto_merge_action="merge"``,
@@ -3560,6 +3686,13 @@ async def finish_agent_run(
                             )
                             actions.append(
                                 f"tracker:transition:{payload.stage_next}"
+                            )
+                            await _sweep_inbox_on_ticket_advance(
+                                session,
+                                workspace_id=workspace_id,
+                                ticket_ref=payload.ticket_ref,
+                                fsm_stage=payload.fsm_stage,
+                                actions=actions,
                             )
                         except Exception as exc:  # noqa: BLE001
                             logger.warning(
@@ -3666,33 +3799,9 @@ async def finish_agent_run(
         )
 
     elif payload.outcome == "blocked":
-        # No ticket move — operator sees the blocker via inbox. Snapshot
-        # the source ticket if there was one (blockers tied to a
-        # specific ticket get the same context as clarifications).
-        ticket_snapshot = None
-        if payload.ticket_ref and resolved is not None:
-            ref = _ticket_ref_from(resolved.kind, payload.ticket_ref)
-            ticket_snapshot = await _try_ticket_snapshot(resolved.gateway, ref)
-        session.add(
-            InboxItem(
-                workspace_id=workspace_id,
-                repo_id=None,
-                type="blocker",
-                title=f"agent blocked: {payload.fsm_stage or 'run'}"[:300],
-                summary=(payload.summary or payload.comment or "")[:2000] or None,
-                payload={
-                    "run_id": payload.run_id,
-                    "fsm_stage": payload.fsm_stage,
-                    "ticket_ref": payload.ticket_ref,
-                    **({"source_ticket": ticket_snapshot} if ticket_snapshot else {}),
-                    **payload.payload,
-                },
-                status="new",
-                intake_handle=None,
-                intake_reason="agent_run_blocked",
-            )
-        )
-        actions.append("inbox:blocker")
+        # No ticket move and no inbox row — transient blocked finishes
+        # stay in the audit log only (ELS-144). Real escalations still
+        # surface via refire_capped / tracker_outage paths.
         await _release_project_lock_for_ticket(
             session,
             workspace_id=workspace_id,
@@ -3715,6 +3824,13 @@ async def finish_agent_run(
         # it resolves the state by literal name, not via FSM map.
         await resolved.gateway.transition(ref, to_state="Done")
         actions.append("tracker:transition:Done")
+        await _sweep_inbox_on_ticket_advance(
+            session,
+            workspace_id=workspace_id,
+            ticket_ref=payload.ticket_ref,
+            fsm_stage=payload.fsm_stage,
+            actions=actions,
+        )
         await _release_project_lock_for_ticket(
             session,
             workspace_id=workspace_id,
