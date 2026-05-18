@@ -1039,34 +1039,12 @@ async def maybe_dispatch(
         },
     )
     session.add(dispatch_audit)
-    await session.flush()
-
-    # ELS-149: backfill the dispatch audit id onto the lock rows so
-    # the lock sweeper can recover the owning ticket_ref without
-    # falling back to project_id heuristics. The lock was acquired
-    # before this audit row existed (it has the row's id as the FK),
-    # so we update post-flush.
-    if dispatch_audit.id is not None:
-        await session.execute(
-            text(
-                "UPDATE agent_dispatch_locks SET run_id = :rid "
-                "WHERE workspace_id = :ws AND key = :k"
-            ),
-            {"rid": dispatch_audit.id, "ws": workspace_id, "k": lock_key},
-        )
-        if project_id and not is_anchor and not is_cascade:
-            await session.execute(
-                text(
-                    "UPDATE agent_dispatch_locks SET run_id = :rid "
-                    "WHERE workspace_id = :ws AND key = :k "
-                    "AND run_id IS NULL"
-                ),
-                {
-                    "rid": dispatch_audit.id,
-                    "ws": workspace_id,
-                    "k": f"project:{project_id}",
-                },
-            )
+    # ELS-149 followup: pre-merge attempt to backfill the dispatch
+    # audit id onto agent_dispatch_locks.run_id hit a schema mismatch
+    # — audit_log.id is bigint in prod, lock.run_id is uuid. Reverted.
+    # The sweeper falls back to project_id heuristics, which covers
+    # 99% of cases. Schema-aligning the two columns is a separate
+    # migration tracked in the lock-lifecycle epic.
     log.info(
         "dispatch fired: ws=%s ticket=%s trigger=%s repo=%s",
         workspace_id,
