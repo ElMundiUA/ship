@@ -482,28 +482,10 @@ async def update_repo(
 class WizardSeedIn(BaseModel):
     """Body for ``POST /workspaces/{ws}/repos/{repo_id}/wizard_seed``."""
 
-    # P5-06 deprecation: every wizard run now seeds the canonical
-    # :data:`backend.app.services.lane_recipes.DEFAULT_BUNDLE`
-    # regardless of what the caller passes. Field is retained so
-    # legacy clients (CLI versions in flight, tests not yet rebased,
-    # the FE during the Wave-8c cut-over) don't 422 the moment they
-    # POST a body. Drop once Wave 8c lands and the FE stops sending
-    # it.
-    presets: list[str] | None = Field(
-        default=None,
-        description=(
-            "DEPRECATED (P5-06). Ignored — the wizard always seeds "
-            "DEFAULT_BUNDLE now. Field retained for legacy CLI / "
-            "FE clients during the Wave-8c cut-over."
-        ),
-    )
-    knowledge_slugs: list[str] | None = Field(
-        default=None,
-        description=(
-            "Deprecated compatibility field. Wizard seed ignores it; "
-            "knowledge is generated post-merge by the bootstrap workflow."
-        ),
-    )
+    # ELS-178 (W2) — `presets` + `knowledge_slugs` retired 2026-05-19.
+    # Wizard always seeds DEFAULT_BUNDLE; knowledge surface moved to
+    # workspace-level buckets. BFF no longer sends either.
+
     # The tracker kind to render into the FSM doc. Normally derived
     # from the repo's tracker binding, but the wizard lets the user
     # preview the seed before saving the binding — the request body
@@ -525,65 +507,24 @@ class WizardSeedIn(BaseModel):
     rotate_run_token: bool = False
 
 
-class WizardSeedCodeownersSummary(BaseModel):
-    """CODEOWNERS → routing summary block of :class:`WizardSeedOut`.
-
-    Wave-8c FE renders this directly: the post-wizard "what we wired"
-    panel reads ``rules_count`` ("we found N CODEOWNERS rules") and
-    ``unresolved_owners`` ("but couldn't match these usernames to a
-    workspace member yet").
-    """
-
-    file_found: bool
-    rules_count: int
-    routing_rules_created: int
-    unresolved_owners: list[str]
-
-
-class WizardSeedIntelHandle(BaseModel):
-    """Legacy repo-intel harvest handle on :class:`WizardSeedOut`.
-
-    Retained for old clients and the manual refresh endpoint. The wizard seed
-    path now returns ``None`` because post-merge bootstrap owns repo analysis.
-
-    Two modes:
-
-    - Inline (``enqueued=False``): no redis worker configured (dev),
-      the wizard ran the harvest synchronously and ``intel_id`` is
-      the freshly-inserted :class:`RepoIntel.id`.
-    - Queued (``enqueued=True``): arq worker handles the job;
-      ``job_id`` is the arq id the FE polls. ``intel_id`` is ``None``
-      until the worker writes the row.
-    """
-
-    enqueued: bool
-    job_id: str | None = None
-    intel_id: uuid.UUID | None = None
-
-
 class WizardSeedOut(BaseModel):
-    """Response shape for ``POST .../wizard_seed`` (extended in P5-06).
+    """Response shape for ``POST .../wizard_seed``.
 
-    Fields added in P5-06 (``codeowners``, ``intel``,
-    ``synthetic_lanes_created``) are all defaulted so legacy FE
-    builds that ignore them keep deserialising. Wave-8c FE binds
-    against them once the new Inbox / Coverage panels ship.
+    ELS-178 (W2) — `codeowners`, `intel`, `synthetic_lanes_created`,
+    `presets`, `knowledge_slugs` retired 2026-05-19. The wizard route
+    stopped populating them long ago (always None / 0 / []); the
+    accompanying type classes (`WizardSeedCodeownersSummary`,
+    `WizardSeedIntelHandle`) + the `wizard_seed_routing` service +
+    the synthetic-lane sync flavor went with them.
     """
 
     pr_url: str
     pr_number: int
     branch: str
     files: list[str]
-    presets: list[str]
-    knowledge_slugs: list[str]
     tracker_kind: str | None = None
     run_token_prefix: str | None = None
     run_token_rotated: bool = False
-    # ── P5-06 additions ──────────────────────────────────────────
-    codeowners: WizardSeedCodeownersSummary | None = None
-    intel: WizardSeedIntelHandle | None = None
-    # ── P5-07 addition ───────────────────────────────────────────
-    synthetic_lanes_created: int = 0
 
 
 class WizardSeedActivateIn(BaseModel):
@@ -787,12 +728,9 @@ async def wizard_seed(
                 pr_number=seed_pr_number_int,
                 branch=str(seed_branch),
                 files=[],
-                presets=["default"],
-                knowledge_slugs=[],
                 tracker_kind=(last_seed.payload or {}).get("tracker_kind"),
                 run_token_prefix=repo_row.run_token_prefix,
                 run_token_rotated=False,
-                synthetic_lanes_created=0,
             )
 
     # ── Workspace defaults gate ──────────────────────────────────
@@ -1075,11 +1013,6 @@ async def wizard_seed(
             },
         ) from exc
 
-    # Post-merge bootstrap/config sync owns all repo-analysis side effects.
-    codeowners_summary: WizardSeedCodeownersSummary | None = None
-    synthetic_lanes_created = 0
-    intel_handle = None
-
     # Stamp the bundle version so the dashboard can tell "up to date"
     # from "upgrade available" next render.
     repo_row.installed_bundle_version = _BUNDLE_VERSION
@@ -1093,8 +1026,6 @@ async def wizard_seed(
             target_kind="workspace_repo",
             target_id=str(repo_row.id),
             payload={
-                "presets": cleaned,
-                "knowledge_slugs": bundle.knowledge_slugs,
                 "tracker_kind": tracker_kind,
                 "tracker_source": (
                     "body"
@@ -1110,17 +1041,6 @@ async def wizard_seed(
                 "run_token_prefix": repo_row.run_token_prefix,
                 "bundle_version": _BUNDLE_VERSION,
                 "bundle_hash": bundle.bundle_hash,
-                "synthetic_lanes_created": synthetic_lanes_created,
-                "codeowners": (
-                    codeowners_summary.model_dump()
-                    if codeowners_summary is not None
-                    else None
-                ),
-                "intel": (
-                    intel_handle.model_dump(mode="json")
-                    if intel_handle is not None
-                    else None
-                ),
             },
         )
     )
@@ -1131,14 +1051,9 @@ async def wizard_seed(
         pr_number=result.pr_number,
         branch=result.branch,
         files=[p for p, _ in bundle.files],
-        presets=cleaned,
-        knowledge_slugs=bundle.knowledge_slugs,
         tracker_kind=tracker_kind,
         run_token_prefix=repo_row.run_token_prefix,
         run_token_rotated=rotated,
-        codeowners=codeowners_summary,
-        intel=intel_handle,
-        synthetic_lanes_created=synthetic_lanes_created,
     )
 
 
@@ -1406,32 +1321,15 @@ async def get_latest_wizard_seed(
         )
 
     payload = row.payload or {}
-    codeowners_payload = payload.get("codeowners")
-    codeowners = (
-        WizardSeedCodeownersSummary(**codeowners_payload)
-        if isinstance(codeowners_payload, dict)
-        else None
-    )
-    intel_payload = payload.get("intel")
-    intel = (
-        WizardSeedIntelHandle(**intel_payload)
-        if isinstance(intel_payload, dict)
-        else None
-    )
 
     return WizardSeedOut(
         pr_url=payload.get("pr_url") or "",
         pr_number=int(payload.get("pr_number") or 0),
         branch=payload.get("branch") or "",
         files=list(payload.get("files") or []),
-        presets=list(payload.get("presets") or []),
-        knowledge_slugs=list(payload.get("knowledge_slugs") or []),
         tracker_kind=payload.get("tracker_kind"),
         run_token_prefix=payload.get("run_token_prefix"),
         run_token_rotated=bool(payload.get("run_token_rotated") or False),
-        codeowners=codeowners,
-        intel=intel,
-        synthetic_lanes_created=int(payload.get("synthetic_lanes_created") or 0),
     )
 
 

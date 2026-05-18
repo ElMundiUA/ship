@@ -666,51 +666,19 @@ export function getTrackerFsm(
 
 // --- Unified wizard seed PR (Wizard v2 iter 5) -----------------------------
 
-/**
- * CODEOWNERS → routing summary block on :class:`WizardSeedOut` (P5-06).
- *
- * Surfaced in the Wave-8c "what just happened" panel so the operator
- * can see how many routing rules were pre-seeded from CODEOWNERS and
- * which owner handles couldn't be matched to a workspace member yet.
- */
-export interface ApiWizardSeedCodeownersSummary {
-  file_found: boolean;
-  rules_count: number;
-  routing_rules_created: number;
-  unresolved_owners: string[];
-}
-
-/**
- * Repo-intel harvest dispatch handle (P5-06).
- *
- * - ``enqueued=true`` → arq worker is processing the harvest;
- *   ``job_id`` is the polling handle.
- * - ``enqueued=false`` → no worker, the wizard ran the harvest
- *   inline and ``intel_id`` points at the freshly-inserted row.
- */
-export interface ApiWizardSeedIntelHandle {
-  enqueued: boolean;
-  job_id: string | null;
-  intel_id: string | null;
-}
+// ELS-178 (W2) — ApiWizardSeedCodeownersSummary,
+// ApiWizardSeedIntelHandle, codeowners/intel/synthetic_lanes_created/
+// presets/knowledge_slugs fields retired 2026-05-19. Wizard backend no
+// longer populates any of them.
 
 export interface ApiWizardSeedResult {
   pr_url: string;
   pr_number: number;
   branch: string;
   files: string[];
-  presets: string[];
-  knowledge_slugs: string[];
   tracker_kind: string | null;
   run_token_prefix: string | null;
   run_token_rotated: boolean;
-  // ── P5-06 / P5-07 additions ────────────────────────────────
-  // All three default to ``null`` / ``0`` server-side so older FE
-  // builds that don't read them keep deserialising. The Wave-8c
-  // wizard's done step renders them directly.
-  codeowners: ApiWizardSeedCodeownersSummary | null;
-  intel: ApiWizardSeedIntelHandle | null;
-  synthetic_lanes_created: number;
 }
 
 export function wizardSeed(
