@@ -98,6 +98,9 @@ async def sweep_dangling_project_locks(session: AsyncSession) -> int:
     for lock_row in stale:
         owning_ticket_ref: str | None = None
         owning_dispatch_id = lock_row.run_id
+
+        # Primary path: lock.run_id points at the audit row of the
+        # dispatch that took the lock. Resolve to the ticket_ref.
         if owning_dispatch_id is not None:
             owning = (
                 await session.execute(
@@ -115,13 +118,54 @@ async def sweep_dangling_project_locks(session: AsyncSession) -> int:
             if owning is not None:
                 owning_ticket_ref = owning.tr or owning.target_id
 
+        # Fallback path: locks created today don't carry run_id (the
+        # dispatcher acquires the lock BEFORE the dispatch audit row is
+        # written, and the audit-row id is the run_id). Parse project_id
+        # from the lock key and find the most recent dispatch in the
+        # same project. The lock is stale and a dispatch with this
+        # project_id is the most likely owner.
+        project_id_from_key: str | None = None
+        if owning_ticket_ref is None and (lock_row.key or "").startswith(
+            "project:"
+        ):
+            project_id_from_key = lock_row.key[len("project:"):]
+            latest_dispatch = (
+                await session.execute(
+                    text(
+                        """
+                        SELECT payload->>'ticket_ref' AS tr,
+                               target_id,
+                               id AS audit_id
+                        FROM audit_log
+                        WHERE workspace_id = :ws
+                          AND action = 'agent_run.dispatch'
+                          AND payload->>'project_id' = :pid
+                          AND created_at >= :claimed_at - INTERVAL '5 minutes'
+                          AND created_at <= :claimed_at + INTERVAL '5 minutes'
+                        ORDER BY created_at DESC
+                        LIMIT 1
+                        """
+                    ),
+                    {
+                        "ws": lock_row.workspace_id,
+                        "pid": project_id_from_key,
+                        "claimed_at": lock_row.claimed_at,
+                    },
+                )
+            ).first()
+            if latest_dispatch is not None:
+                owning_ticket_ref = (
+                    latest_dispatch.tr or latest_dispatch.target_id
+                )
+                owning_dispatch_id = latest_dispatch.audit_id
+
         # Without a ticket_ref we can't tell whether the chain is
         # alive. Don't release — leave the lock for the 24h TTL.
         # This is the catastrophe-only fallback path.
         if not owning_ticket_ref:
             log.debug(
-                "lock_sweep: skip lock=%s (no ticket_ref for run_id=%s)",
-                lock_row.key, owning_dispatch_id,
+                "lock_sweep: skip lock=%s (no ticket_ref via run_id=%s or project lookup)",
+                lock_row.key, lock_row.run_id,
             )
             continue
 

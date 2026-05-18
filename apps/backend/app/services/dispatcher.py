@@ -1021,25 +1021,52 @@ async def maybe_dispatch(
         )
 
     # 7. Happy path. Audit the successful fire.
-    session.add(
-        AuditLog(
-            workspace_id=workspace_id,
-            action="agent_run.dispatch",
-            target_kind="ticket",
-            target_id=ticket_ref,
-            payload={
-                "trigger_kind": trigger_kind,
-                "repo": repo.full_name,
-                "workflow_file": WORKFLOW_FILE,
-                "routine_id": routine_id,
-                "fsm_stage": fsm_stage,
-                # Stash project_id so /tracker/next can fall back to
-                # it when synthesising a row from audit on a stale
-                # tracker replica (orphan gate needs project_id).
-                "project_id": project_id,
-            },
-        )
+    dispatch_audit = AuditLog(
+        workspace_id=workspace_id,
+        action="agent_run.dispatch",
+        target_kind="ticket",
+        target_id=ticket_ref,
+        payload={
+            "trigger_kind": trigger_kind,
+            "repo": repo.full_name,
+            "workflow_file": WORKFLOW_FILE,
+            "routine_id": routine_id,
+            "fsm_stage": fsm_stage,
+            # Stash project_id so /tracker/next can fall back to
+            # it when synthesising a row from audit on a stale
+            # tracker replica (orphan gate needs project_id).
+            "project_id": project_id,
+        },
     )
+    session.add(dispatch_audit)
+    await session.flush()
+
+    # ELS-149: backfill the dispatch audit id onto the lock rows so
+    # the lock sweeper can recover the owning ticket_ref without
+    # falling back to project_id heuristics. The lock was acquired
+    # before this audit row existed (it has the row's id as the FK),
+    # so we update post-flush.
+    if dispatch_audit.id is not None:
+        await session.execute(
+            text(
+                "UPDATE agent_dispatch_locks SET run_id = :rid "
+                "WHERE workspace_id = :ws AND key = :k"
+            ),
+            {"rid": dispatch_audit.id, "ws": workspace_id, "k": lock_key},
+        )
+        if project_id and not is_anchor and not is_cascade:
+            await session.execute(
+                text(
+                    "UPDATE agent_dispatch_locks SET run_id = :rid "
+                    "WHERE workspace_id = :ws AND key = :k "
+                    "AND run_id IS NULL"
+                ),
+                {
+                    "rid": dispatch_audit.id,
+                    "ws": workspace_id,
+                    "k": f"project:{project_id}",
+                },
+            )
     log.info(
         "dispatch fired: ws=%s ticket=%s trigger=%s repo=%s",
         workspace_id,
