@@ -456,6 +456,50 @@ async function _runCommandImpl(ctx, rest) {
   let prUrl = null;
   if (args.commitAndPr) {
     if (runtime.status !== "FINISHED") {
+      // Synthesise a ``blocked`` finish so the server-side
+      // ``/agent-runs/finish`` handler runs and releases the
+      // project dispatch lock + writes the audit row. Without
+      // this POST the runner exits silently from the server's
+      // perspective: the dispatch lock taken when the workflow
+      // fired sits for the full 24h ``PROJECT_LOCK_TTL_S``,
+      // blocking every other ticket in the same Linear project.
+      // Caught on askslayer 2026-05-17 23:14: cursor-agent died
+      // in 27s on a Cursor Free plan named-model error, no
+      // sidecar, locks held for 17h until manual cleanup. The
+      // server's release-on-terminal-finish path (Ship #174)
+      // wasn't reachable because we never called it.
+      try {
+        await postAgentFinish({
+          apiBase,
+          apiToken,
+          workspaceId,
+          payload: {
+            run_id: runId,
+            ticket_ref: task?.ticket_ref || args.ticket || null,
+            fsm_stage: fsmStage || null,
+            process: "development",
+            outcome: "blocked",
+            stage_next: null,
+            comment: `Agent runtime ${runtime.status} (exit=${runtime.exitCode}) before sidecar — no work landed. Common causes: agent CLI credits depleted, model unavailable on workspace plan, network drop. [Ship SDLC:role-${specialistSlug}]`,
+            payload: {
+              ship_runner: {
+                failing_stage: "agent_runtime",
+                runtime_status: runtime.status,
+                exit_code: runtime.exitCode,
+                provider,
+              },
+            },
+            pr: null,
+          },
+          description: `finish blocked (agent_runtime_${runtime.status})`,
+        });
+      } catch (postErr) {
+        process.stderr.write(
+          `[ship] post-runtime-crash finish POST failed: ${
+            postErr instanceof Error ? postErr.message : postErr
+          }\n`,
+        );
+      }
       emit(args, {
         status: "error",
         routine: args.routine,
