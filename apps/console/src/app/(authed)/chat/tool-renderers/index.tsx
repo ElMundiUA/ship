@@ -48,6 +48,7 @@ import type { ReactNode } from "react";
 
 import { Badge, type BadgeTone } from "@/components/ui";
 import { cn } from "@/lib/cn";
+import { RenderProposeMassPlan } from "./mass-planning-preview";
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -1033,6 +1034,7 @@ export const TOOL_RENDERERS: Record<string, ToolRenderer> = {
   inbox_dispose: RenderInboxDispose,
   runs_query: RenderRunsQuery,
   run_detail: RenderRunDetail,
+  propose_mass_plan: RenderProposeMassPlan,
 };
 
 // ---------------------------------------------------------------------------
@@ -1056,6 +1058,7 @@ export const TOOL_FRIENDLY_VERB: Record<string, string> = {
   inbox_dispose: "Resolving the Inbox item…",
   runs_query: "Searching recent Runs…",
   run_detail: "Loading Run details…",
+  propose_mass_plan: "Reading your requirements doc…",
 };
 
 export const TOOL_FRIENDLY_VERB_FALLBACK = "Working on it…";
