@@ -956,3 +956,65 @@ async def test_action_item_disposition_rejects_non_report(
         },
     )
     assert res.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_action_item_disposition_rejects_unknown_id(
+    v1_client, seed_workspace, db_session
+):
+    user, raw, ws = seed_workspace
+    item = await _make_item(
+        db_session,
+        ws,
+        owner_user_id=user.id,
+        type="report",
+        payload={
+            "action_items": [
+                {
+                    "id": "ai-01",
+                    "prompt": "One",
+                    "primary": "Yes",
+                    "secondary": "No",
+                },
+            ],
+        },
+    )
+    res = await v1_client.post(
+        f"/v1/workspaces/{ws.id}/inbox/{item.id}/disposition",
+        headers=_auth(raw),
+        json={
+            "action": "resolve",
+            "action_item_id": "ai-missing",
+            "choice": "primary",
+        },
+    )
+    assert res.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_report_dismiss_blocked_with_pending_action_items(
+    v1_client, seed_workspace, db_session
+):
+    user, raw, ws = seed_workspace
+    item = await _make_item(
+        db_session,
+        ws,
+        owner_user_id=user.id,
+        type="report",
+        payload={
+            "action_items": [
+                {
+                    "id": "ai-01",
+                    "prompt": "One",
+                    "primary": "Yes",
+                    "secondary": "No",
+                },
+            ],
+        },
+    )
+    res = await v1_client.post(
+        f"/v1/workspaces/{ws.id}/inbox/{item.id}/disposition",
+        headers=_auth(raw),
+        json={"action": "dismiss"},
+    )
+    assert res.status_code == 422
