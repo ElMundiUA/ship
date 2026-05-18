@@ -232,6 +232,22 @@ async def push_ship_methodology_github_secrets(
         settings=settings,
         client=client,
     )
+    # SHIP_WORKSPACE_ID — pins ``shipctl`` to this workspace without a
+    # GET /v1/workspaces round trip. The ship-agent-run.yml workflow
+    # references it explicitly; the agent-role-resolve path requires
+    # it. Missing here means every CI run dies with "agent-role
+    # resolve requires SHIP_API_BASE + SHIP_API_TOKEN +
+    # SHIP_WORKSPACE_ID" — observed on askslayer/visitor-landing
+    # 2026-05-18. Pushed unconditionally because it's the workspace
+    # uuid, not a secret needing rotation.
+    await put_repo_secret(
+        repo,
+        install,
+        name="SHIP_WORKSPACE_ID",
+        plaintext=str(workspace_id),
+        settings=settings,
+        client=client,
+    )
 
     if not mint_new_api_pat:
         return
