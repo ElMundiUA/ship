@@ -140,8 +140,8 @@ async def sweep_dangling_project_locks(session: AsyncSession) -> int:
                         WHERE workspace_id = :ws
                           AND action = 'agent_run.dispatch'
                           AND payload->>'project_id' = :pid
-                          AND created_at >= :claimed_at - INTERVAL '5 minutes'
-                          AND created_at <= :claimed_at + INTERVAL '5 minutes'
+                          AND created_at >= CAST(:claimed_at AS timestamptz) - INTERVAL '5 minutes'
+                          AND created_at <= CAST(:claimed_at AS timestamptz) + INTERVAL '5 minutes'
                         ORDER BY created_at DESC
                         LIMIT 1
                         """
