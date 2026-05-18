@@ -358,7 +358,6 @@ class InboxItem(Base):
         nullable=True,
     )
     title: Mapped[str] = mapped_column(String(length=255), nullable=False)
-    headline: Mapped[str] = mapped_column(String(length=80), nullable=False)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     payload: Mapped[dict] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
@@ -415,6 +414,7 @@ class InboxItem(Base):
         server_default=text("false"),
     )
     stale_after: Mapped[timedelta | None] = mapped_column(Interval, nullable=True)
+    # Populated at write via derive_headline; ELS-143 backfill used title-only.
     headline: Mapped[str | None] = mapped_column(String(length=80), nullable=True)
 
 
