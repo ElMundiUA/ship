@@ -931,6 +931,37 @@ async def get_next_task(
         )
 
     if pick is None:
+        # ELS-148 / A1: every picker filter that returns null here
+        # leaves the `maybe_dispatch`-acquired project_lock dangling.
+        # The agent CLI exits via EXIT_NO_TASK without calling
+        # /finish, so the lock survives until its 24h TTL — blocking
+        # every sibling ticket in the project. Release here based on
+        # which filter caught the pinned ticket. Best-effort: noop
+        # when the route was called without a pinned `ticket_ref`
+        # (legacy non-pinned cron path; no fresh project_lock to
+        # release in that path either).
+        if ticket_ref:
+            skipped_kind = None
+            if any(str(r.get("id") or "") == ticket_ref for r in skipped_orphans):
+                skipped_kind = "orphan_skipped"
+            elif any(
+                str(r.get("id") or "") == ticket_ref
+                for r, _ in skipped_overlay
+            ):
+                skipped_kind = "overlay_frozen"
+            elif any(
+                str(r.get("id") or "") == ticket_ref
+                for r, _ in skipped_priority
+            ):
+                skipped_kind = "priority_skipped"
+            if skipped_kind is not None:
+                await _release_project_lock_for_ticket(
+                    session,
+                    workspace_id=workspace_id,
+                    resolved=resolved,
+                    ticket_ref=ticket_ref,
+                    reason=f"picker_{skipped_kind}",
+                )
         return TaskResponseOut(
             ticket=None, fsm_stage=state, tracker_kind=resolved.kind
         )
@@ -1025,6 +1056,16 @@ async def get_next_task(
                     )
                 )
                 await session.flush()
+            # ELS-148 / A1: same leak as the picker null paths above —
+            # refire-cap returns null without /finish, so the dispatcher's
+            # project_lock dangles. Release it before exiting.
+            await _release_project_lock_for_ticket(
+                session,
+                workspace_id=workspace_id,
+                resolved=resolved,
+                ticket_ref=ticket_ref,
+                reason="picker_refire_capped",
+            )
             return TaskResponseOut(
                 ticket=None, fsm_stage=state, tracker_kind=resolved.kind
             )
