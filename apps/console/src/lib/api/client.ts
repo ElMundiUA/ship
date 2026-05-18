@@ -26,11 +26,13 @@ import type {
   ApiWorkspace,
 } from "./types";
 import type {
-  InboxItemDetail,
-  InboxItemEvent,
-  InboxListResponse,
+  InboxCategory,
   InboxCountsResponse,
   InboxFilterState,
+  InboxItemDetail,
+  InboxItemEvent,
+  InboxLane,
+  InboxListResponse,
   InboxStatus,
   InboxType,
 } from "@/lib/inbox-types";
@@ -3218,6 +3220,9 @@ export function removeMember(
 export type InboxListQuery = {
   ownership?: InboxFilterState["ownership"];
   types?: InboxType[];
+  categories?: InboxCategory[];
+  lane?: InboxLane;
+  sort?: "created_desc" | "priority_desc_created_asc";
   /** Optional; omitted uses API default. */
   statuses?: InboxStatus[];
   repo_id?: string;
@@ -3230,6 +3235,9 @@ function buildInboxQuery(opts: InboxListQuery): string {
   const params = new URLSearchParams();
   if (opts.ownership) params.set("ownership", opts.ownership);
   for (const t of opts.types ?? []) params.append("type", t);
+  for (const c of opts.categories ?? []) params.append("category", c);
+  if (opts.lane) params.set("lane", opts.lane);
+  if (opts.sort) params.set("sort", opts.sort);
   for (const s of opts.statuses ?? []) params.append("status", s);
   if (opts.repo_id) params.set("repo_id", opts.repo_id);
   if (opts.play_key) params.set("play_key", opts.play_key);

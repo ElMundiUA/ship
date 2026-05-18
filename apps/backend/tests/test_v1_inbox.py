@@ -76,18 +76,34 @@ async def _make_item(
     workspace,
     *,
     type: str = "clarification",
+    category: str | None = None,
+    priority: int | None = None,
     status: str = "new",
     owner_user_id: uuid.UUID | None = None,
     title: str | None = None,
     payload: dict | None = None,
     play_key: str | None = None,
     repo_id: uuid.UUID | None = None,
+    run_id: uuid.UUID | None = None,
+    intake_reason: str | None = None,
     snoozed_until: datetime | None = None,
     created_at: datetime | None = None,
 ) -> InboxItem:
+    from backend.app.services.inbox.classification import (
+        category_from_type,
+        priority_for_item,
+    )
+
+    cat = category if category is not None else category_from_type(type)
     item = InboxItem(
         workspace_id=workspace.id,
         type=type,
+        category=cat,
+        priority=(
+            priority
+            if priority is not None
+            else priority_for_item(category=cat, item_type=type)
+        ),
         status=status,
         owner_user_id=owner_user_id,
         title=title or f"item-{uuid.uuid4().hex[:6]}",
@@ -95,9 +111,10 @@ async def _make_item(
         payload=payload or {},
         play_key=play_key,
         repo_id=repo_id,
+        run_id=run_id,
         snoozed_until=snoozed_until,
         intake_handle="test_handle",
-        intake_reason="test:fixture",
+        intake_reason=intake_reason or "test:fixture",
     )
     db_session.add(item)
     await db_session.flush()
@@ -130,6 +147,7 @@ async def test_list_empty_returns_zero_counts(v1_client, seed_workspace):
         "exception": 0,
         "stuck": 0,
         "blocker": 0,
+        "report": 0,
     }
     assert body["counts_by_status"] == {
         "new": 0,
@@ -223,7 +241,10 @@ async def test_list_pagination_cursor_round_trip(
     pages = 0
     totals: list[int] = []
     while True:
-        url = f"/v1/workspaces/{ws.id}/inbox?ownership=mine&limit=10"
+        url = (
+            f"/v1/workspaces/{ws.id}/inbox"
+            "?ownership=mine&limit=10&sort=created_desc"
+        )
         if cursor is not None:
             url += f"&cursor={cursor}"
         res = await v1_client.get(url, headers=_auth(raw))
@@ -305,8 +326,56 @@ async def test_counts_endpoint_groups_by_type_and_status(
     assert body["by_status"]["snoozed"] == 1
     assert body["by_status"]["resolved"] == 1
     assert body["by_status"]["dismissed"] == 0
+    # Actionable badge: new decision_needed + failure (improvement → decision_needed).
+    assert body["actionable_new"] == 4
+    assert body["reports_new"] == 0
     # Cache hint set so the nav badge poller doesn't hammer it.
     assert "max-age=10" in res.headers.get("cache-control", "")
+
+
+@pytest.mark.asyncio
+async def test_counts_actionable_excludes_reports(
+    v1_client, seed_workspace, db_session
+):
+    _, raw, ws = seed_workspace
+    await _make_item(
+        db_session, ws, type="report", category="attention", status="new"
+    )
+    await _make_item(
+        db_session, ws, type="clarification", category="decision_needed"
+    )
+    res = await v1_client.get(
+        f"/v1/workspaces/{ws.id}/inbox/counts", headers=_auth(raw)
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["actionable_new"] == 1
+    assert body["reports_new"] == 1
+
+
+@pytest.mark.asyncio
+async def test_list_includes_lane_and_category_fields(
+    v1_client, seed_workspace, db_session
+):
+    _, raw, ws = seed_workspace
+    await _make_item(
+        db_session,
+        ws,
+        type="blocker",
+        category="failure",
+        intake_reason="refire_capped",
+    )
+    res = await v1_client.get(
+        f"/v1/workspaces/{ws.id}/inbox",
+        params={"ownership": "all", "category": "failure"},
+        headers=_auth(raw),
+    )
+    assert res.status_code == 200
+    items = res.json()["items"]
+    assert len(items) == 1
+    assert items[0]["category"] == "failure"
+    assert items[0]["lane"] == "now"
+    assert items[0]["priority"] == 10
 
 
 # ---------------------------------------------------------------------------

@@ -59,13 +59,18 @@ const SHIP_FEEDBACK_LABEL =
  * Retired mock/reporting pages and pre-redesign top-level paths are no
  * longer kept around as standalone routes.
  */
-function buildWorkspaceNav(): NavGroup[] {
+function buildWorkspaceNav(inboxActionableCount?: number | null): NavGroup[] {
+  const inboxLabel =
+    inboxActionableCount === null || inboxActionableCount === undefined
+      ? "Inbox"
+      : `Inbox · ${inboxActionableCount}`;
   return [
     {
       section: "Workspace",
       items: [
         { href: "/", label: "Dashboard", icon: <DotIcon /> },
-        { href: "/inbox", label: "Inbox", icon: <DotIcon /> },
+        { href: "/inbox", label: inboxLabel, icon: <DotIcon /> },
+        { href: "/reports", label: "Reports", icon: <DotIcon /> },
         { href: "/analytics", label: "Analytics", icon: <DotIcon /> },
         { href: "/process", label: "Process", icon: <DotIcon /> },
         { href: "/knowledge", label: "Knowledge", icon: <DotIcon /> },
@@ -102,9 +107,14 @@ function parseRepoSlug(pathname: string | null): string | null {
   return `${parts[0]}/${parts[1]}`;
 }
 
-function navFor(pathname: string | null): NavGroup[] {
+function navFor(
+  pathname: string | null,
+  opts?: { inboxActionableCount?: number | null },
+): NavGroup[] {
   const slug = parseRepoSlug(pathname);
-  const raw = slug ? buildRepoNav(slug) : buildWorkspaceNav();
+  const raw = slug
+    ? buildRepoNav(slug)
+    : buildWorkspaceNav(opts?.inboxActionableCount);
   return raw
     .map((g) => ({
       section: g.section,
@@ -259,11 +269,14 @@ export function AppShellChrome({
   workspace,
   allWorkspaces,
   me,
+  inboxActionableCount,
 }: {
   children: ReactNode;
   workspace?: AppShellWorkspace;
   allWorkspaces?: AppShellWorkspace[];
   me?: AppShellUser | null;
+  /** Actionable ``new`` count for sidebar ``Inbox · N`` label. */
+  inboxActionableCount?: number | null;
 }) {
   const pathname = usePathname();
   const [wsOpen, setWsOpen] = useState(false);
@@ -325,7 +338,7 @@ export function AppShellChrome({
     email: "user@example.com",
     initials: "U",
   };
-  const NAV = navFor(pathname);
+  const NAV = navFor(pathname, { inboxActionableCount });
   const allNavHrefs = NAV.flatMap((g) => g.items.map((i) => i.href));
   const repoSlug = parseRepoSlug(pathname);
   // Repo-mode header chip: show the repo the URL resolves to. In

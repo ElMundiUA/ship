@@ -1018,6 +1018,8 @@ async def get_next_task(
                             "url": str(pick.get("url") or "") or None,
                         },
                         status="new",
+                        category="failure",
+                        priority=10,
                         intake_handle=None,
                         intake_reason="refire_capped",
                     )

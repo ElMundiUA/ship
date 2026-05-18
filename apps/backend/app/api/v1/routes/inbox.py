@@ -67,8 +67,13 @@ from backend.app.db.models.inbox import (
     InboxItem,
     InboxItemEvent,
 )
+from backend.app.db.models.lanes import RoutineRun
 from backend.app.db.models.tenancy import AuditLog, User, WorkspaceMember
 from backend.app.db.session import get_session
+from backend.app.services.inbox.classification import (
+    ACTIONABLE_CATEGORIES,
+    derive_lane,
+)
 from backend.app.services.inbox.profiles import INBOX_TYPES
 from backend.app.services.inbox.routing import RoutingContext, resolve_handle
 from backend.app.services.inbox.side_effects import apply_side_effects
@@ -90,6 +95,12 @@ router = APIRouter(
 
 INBOX_STATUSES: tuple[str, ...] = ("new", "snoozed", "resolved", "dismissed")
 OPEN_STATUSES: tuple[str, ...] = ("new", "snoozed")
+INBOX_CATEGORIES: tuple[str, ...] = ("decision_needed", "failure", "attention")
+INBOX_LANES: tuple[str, ...] = ("now", "today", "whenever")
+INBOX_SORTS: tuple[str, ...] = (
+    "created_desc",
+    "priority_desc_created_asc",
+)
 
 # Type-restricted disposition actions (planning §7).
 _TYPE_GATED_ACTIONS: dict[str, str] = {
@@ -153,6 +164,9 @@ class InboxItemOut(BaseModel):
     snoozed_until: datetime | None
     resolved_at: datetime | None
     resolution: str | None
+    category: str
+    priority: int
+    lane: str
 
 
 class InboxItemEventOut(BaseModel):
@@ -198,6 +212,8 @@ class InboxCountsResponse(BaseModel):
     mine: int
     unassigned: int
     all_open: int
+    actionable_new: int
+    reports_new: int
     by_type: dict[str, int]
     by_status: dict[str, int]
 
@@ -292,7 +308,22 @@ def _to_owner_out(user: User | None) -> InboxOwnerOut | None:
     )
 
 
-def _to_item_out(item: InboxItem, owner: User | None) -> InboxItemOut:
+async def _load_runs_by_id(
+    session: AsyncSession, run_ids: set[uuid.UUID]
+) -> dict[uuid.UUID, RoutineRun]:
+    if not run_ids:
+        return {}
+    stmt = select(RoutineRun).where(RoutineRun.id.in_(run_ids))
+    rows = (await session.execute(stmt)).scalars().all()
+    return {r.id: r for r in rows}
+
+
+def _to_item_out(
+    item: InboxItem,
+    owner: User | None,
+    *,
+    lane: str,
+) -> InboxItemOut:
     return InboxItemOut(
         id=item.id,
         workspace_id=item.workspace_id,
@@ -311,7 +342,24 @@ def _to_item_out(item: InboxItem, owner: User | None) -> InboxItemOut:
         snoozed_until=item.snoozed_until,
         resolved_at=item.resolved_at,
         resolution=item.resolution,
+        category=item.category,
+        priority=item.priority,
+        lane=lane,
     )
+
+
+async def _project_items_out(
+    session: AsyncSession,
+    page_rows: list[tuple[InboxItem, User | None]],
+) -> list[InboxItemOut]:
+    run_ids = {item.run_id for item, _ in page_rows if item.run_id is not None}
+    runs = await _load_runs_by_id(session, run_ids)
+    out: list[InboxItemOut] = []
+    for item, owner in page_rows:
+        run = runs.get(item.run_id) if item.run_id else None
+        lane = derive_lane(item, run=run)
+        out.append(_to_item_out(item, owner, lane=lane))
+    return out
 
 
 def _to_event_out(event: InboxItemEvent) -> InboxItemEventOut:
@@ -399,6 +447,7 @@ def _apply_filters(
     auth_user_id: uuid.UUID,
     ownership: str,
     types: list[str] | None,
+    categories: list[str] | None,
     statuses: list[str] | None,
     repo_id: uuid.UUID | None,
     play_key: str | None,
@@ -419,6 +468,8 @@ def _apply_filters(
 
     if types:
         stmt = stmt.where(InboxItem.type.in_(types))
+    if categories:
+        stmt = stmt.where(InboxItem.category.in_(categories))
     if statuses:
         stmt = stmt.where(InboxItem.status.in_(statuses))
     if repo_id is not None:
@@ -462,6 +513,48 @@ def _normalise_types(raw: list[str] | None) -> list[str] | None:
     return list(raw)
 
 
+def _normalise_categories(raw: list[str] | None) -> list[str] | None:
+    if raw is None or len(raw) == 0:
+        return None
+    bad = [v for v in raw if v not in INBOX_CATEGORIES]
+    if bad:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"unknown category filter: {bad!r}; "
+                f"expected any of {sorted(INBOX_CATEGORIES)}"
+            ),
+        )
+    return list(raw)
+
+
+def _normalise_lane(raw: str | None) -> str | None:
+    if raw is None or raw == "":
+        return None
+    if raw not in INBOX_LANES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"unknown lane filter: {raw!r}; "
+                f"expected any of {sorted(INBOX_LANES)}"
+            ),
+        )
+    return raw
+
+
+def _normalise_sort(raw: str | None) -> str:
+    if raw is None or raw == "":
+        return "priority_desc_created_asc"
+    if raw not in INBOX_SORTS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"unknown sort: {raw!r}; expected any of {sorted(INBOX_SORTS)}"
+            ),
+        )
+    return raw
+
+
 # ---------------------------------------------------------------------------
 # LIST + COUNTS
 # ---------------------------------------------------------------------------
@@ -472,6 +565,9 @@ async def list_inbox(
     workspace_id: uuid.UUID,
     ownership: Literal["mine", "unassigned", "all"] = Query(default="mine"),
     type: list[str] | None = Query(default=None),
+    category: list[str] | None = Query(default=None),
+    lane: str | None = Query(default=None),
+    sort: str | None = Query(default=None),
     status_filter: list[str] | None = Query(default=None, alias="status"),
     repo_id: uuid.UUID | None = Query(default=None),
     play_key: str | None = Query(default=None),
@@ -497,6 +593,9 @@ async def list_inbox(
     await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
 
     types = _normalise_types(type)
+    categories = _normalise_categories(category)
+    lane_filter = _normalise_lane(lane)
+    sort_key = _normalise_sort(sort)
     statuses = _normalise_statuses(status_filter)
 
     Owner = User  # alias keeps the join readable.
@@ -511,34 +610,47 @@ async def list_inbox(
         auth_user_id=auth.user.id,
         ownership=ownership,
         types=types,
+        categories=categories,
         statuses=statuses,
         repo_id=repo_id,
         play_key=play_key,
     )
 
-    # Cursor: keyset pagination over ``(created_at DESC, id DESC)``.
-    # Use a row-tuple comparison so Postgres can index-scan instead
-    # of falling back to a sort-then-filter plan on large tables.
-    if cursor is not None:
+    if sort_key == "priority_desc_created_asc":
+        base_select = base_select.order_by(
+            InboxItem.priority.desc(),
+            InboxItem.created_at.asc(),
+            InboxItem.id.asc(),
+        )
+    else:
+        base_select = base_select.order_by(
+            InboxItem.created_at.desc(), InboxItem.id.desc()
+        )
+
+    fetch_limit = limit + 1
+    if lane_filter is not None:
+        # Lane is derived from run joins — over-fetch then filter in Python.
+        fetch_limit = min(500, max(limit + 1, 100))
+
+    if cursor is not None and sort_key != "priority_desc_created_asc":
         ts, item_id = _decode_cursor(cursor)
         base_select = base_select.where(
             tuple_(InboxItem.created_at, InboxItem.id)
             < tuple_(ts, item_id)
         )
 
-    base_select = base_select.order_by(
-        InboxItem.created_at.desc(), InboxItem.id.desc()
-    ).limit(limit + 1)
+    base_select = base_select.limit(fetch_limit)
 
     rows = (await session.execute(base_select)).all()
-    has_more = len(rows) > limit
+    projected = await _project_items_out(session, rows)
+    if lane_filter is not None:
+        projected = [i for i in projected if i.lane == lane_filter]
+    has_more = len(projected) > limit
+    items = projected[:limit]
     page_rows = rows[:limit]
-    items = [_to_item_out(item, owner) for item, owner in page_rows]
-    next_cursor = (
-        _encode_cursor(page_rows[-1][0].created_at, page_rows[-1][0].id)
-        if has_more and page_rows
-        else None
-    )
+    next_cursor = None
+    if has_more and page_rows and sort_key != "priority_desc_created_asc":
+        next_cursor = _encode_cursor(page_rows[-1][0].created_at, page_rows[-1][0].id)
 
     # ``total`` honours every filter (the count of what the user
     # would see if they kept walking). Same predicates as the page
@@ -550,11 +662,14 @@ async def list_inbox(
         auth_user_id=auth.user.id,
         ownership=ownership,
         types=types,
+        categories=categories,
         statuses=statuses,
         repo_id=repo_id,
         play_key=play_key,
     )
     total = int((await session.execute(total_stmt)).scalar_one())
+    if lane_filter is not None:
+        total = len(items)
 
     # counts_by_type — drop the type filter so chip counts stay
     # honest while the user is excluding a type.
@@ -568,6 +683,7 @@ async def list_inbox(
         auth_user_id=auth.user.id,
         ownership=ownership,
         types=None,
+        categories=categories,
         statuses=statuses,
         repo_id=repo_id,
         play_key=play_key,
@@ -588,6 +704,7 @@ async def list_inbox(
         auth_user_id=auth.user.id,
         ownership=ownership,
         types=types,
+        categories=categories,
         statuses=None,
         repo_id=repo_id,
         play_key=play_key,
@@ -656,6 +773,29 @@ async def get_counts(
                 )
             )
         ).label("all_open"),
+        func.count(
+            case(
+                (
+                    and_(
+                        InboxItem.category.in_(tuple(ACTIONABLE_CATEGORIES)),
+                        InboxItem.status == "new",
+                    ),
+                    InboxItem.id,
+                )
+            )
+        ).label("actionable_new"),
+        func.count(
+            case(
+                (
+                    and_(
+                        InboxItem.category == "attention",
+                        InboxItem.type == "report",
+                        InboxItem.status == "new",
+                    ),
+                    InboxItem.id,
+                )
+            )
+        ).label("reports_new"),
     ).where(InboxItem.workspace_id == workspace_id)
     bucket_row = (await session.execute(bucket_stmt)).one()
 
@@ -686,6 +826,8 @@ async def get_counts(
         mine=int(bucket_row.mine),
         unassigned=int(bucket_row.unassigned),
         all_open=int(bucket_row.all_open),
+        actionable_new=int(bucket_row.actionable_new),
+        reports_new=int(bucket_row.reports_new),
         by_type=by_type,
         by_status=by_status,
     )
@@ -716,7 +858,9 @@ async def _build_detail(
         .order_by(InboxItemEvent.created_at.asc(), InboxItemEvent.id.asc())
     )
     event_rows = (await session.execute(events_stmt)).scalars().all()
-    base = _to_item_out(item, owner)
+    run = await session.get(RoutineRun, item.run_id) if item.run_id else None
+    lane = derive_lane(item, run=run)
+    base = _to_item_out(item, owner, lane=lane)
     return InboxItemDetail(
         **base.model_dump(),
         payload=item.payload or {},
