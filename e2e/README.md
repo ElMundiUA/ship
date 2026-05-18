@@ -24,6 +24,7 @@ cd e2e && npm run test:deployed
 | **B2 — GitHub App install** | Кнопка в консоли → мастер на `github.com` → редирект обратно в онбординг | `E2E_RUN_GITHUB_APP_INSTALL=1` + тот же `E2E_STORAGE_STATE`; в storage желательно добавить cookies **github.com** (логин в том же браузере до «Save storage»). Пароль: `E2E_GITHUB_USERNAME` / `E2E_GITHUB_PASSWORD` только для бота **без 2FA**. Опционально: `E2E_GITHUB_INSTALL_ACCOUNT`, `E2E_GITHUB_REPO_FULL_NAME` |
 | **C — Sandbox repo** | `.ship/config.yml` + workflows exist on test repo | `E2E_SANDBOX_REPO` + `GITHUB_TOKEN`, `*.sandbox.spec.ts` |
 | **D — Console surfaces** (после онбординга) | Дашборд → пайплайны → clarifications → improvements → feedback → navigator → каталог → знания → metrics → settings → integrations → members → audit + клики по левому меню | `tests/console-flows.wired.spec.ts`, serial, нужен `E2E_STORAGE_STATE` |
+| **D2 — Process editor** | Deep link `/process/development`, Flow/Capacity tabs, stage inspector + review summary, Capacity schedule (`?tab=schedule`), repo selector (`?repo=`), locked prerequisite banner | `tests/process-editor.wired.spec.ts`, serial; `E2E_STORAGE_STATE` + `E2E_SHIP_API_BASE` / `E2E_SHIP_API_TOKEN` for fixture probe; optional `E2E_SANDBOX_REPO`, `E2E_PROCESS_EDITOR_LOCKED_WORKSPACE_ID` |
 | **E — Дашборд + API оркестрации** | UI: «Recommended» + недавние прогоны (`dashboard-delivery.wired.spec.ts`). API: `/v1/workspaces`, pipelines, dashboard, clarifications, improvements, artifact-feedback (`ship-api.sandbox.spec.ts` + `E2E_SHIP_API_*`). GitHub: список workflow runs + опционально label `ship:needs-clarification` (`github-actions.sandbox.spec.ts`) |
 | **F — Сквозные journey** | Clarification: POST → ответ формой в UI (`journey-clarification.wired.spec.ts`). Improvement: POST → Accept (`journey-improvement.wired.spec.ts`). Health dev: `/login` + `GET /v1/health` (`deployed-health.public.spec.ts`). Без сессии: редирект на логин (`session.noauth.spec.ts`, проект `noauth`) |
 | **G — Трекер GitHub → Ship** | Issue + лейбл + коммент `@ship clarification:` → `POST …/clarifications/sync` → poll GET → опционально UI (`tracker-github-clarification.wired.spec.ts`). Нужны репа с Ship App, трекер GitHub Issues в воркспейсе, PAT с `issues:write` |
@@ -167,6 +168,22 @@ npx playwright test e2e/tests/github-actions.sandbox.spec.ts
 
 ```bash
 npx playwright test e2e/tests/dashboard-delivery.wired.spec.ts
+```
+
+## Process editor (phase D2)
+
+Wired coverage for `/process/development` — Flow/Capacity tabs, stage inspector edits, schedule panel, repo selector, and optional locked-banner workspace.
+
+```bash
+export E2E_STORAGE_STATE=e2e/.auth/user.json
+export E2E_SHIP_API_BASE=https://api.dev.example.com
+export E2E_SHIP_API_TOKEN=ship_...
+# optional: pick sandbox repo when several are activated
+# export E2E_SANDBOX_REPO=your-org/e2e-sandbox
+# optional: workspace UUID missing tracker/orchestrator/default agent (locked banner)
+# export E2E_PROCESS_EDITOR_LOCKED_WORKSPACE_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+
+npx playwright test --project=authenticated tests/process-editor.wired.spec.ts
 ```
 
 ## Sandbox repo checks (phase C)
