@@ -656,6 +656,16 @@ def register_all() -> None:
         job_id="agent_dispatch_lock_sweep",
     )
 
+    # Inbox action_items backfill (ELS-165). Parses legacy
+    # clarification rows' markdown options into structured
+    # payload.action_items so the Decision UI shows pills. Cheap
+    # noop on rows that already carry action_items.
+    register_cron(
+        fn=_inbox_action_items_backfill_tick,
+        cron_expr="*/30 * * * *",
+        job_id="inbox_action_items_backfill",
+    )
+
 
 @cron_with_lock(lock=CronLockId.INBOX_STALE_SWEEP, name="inbox_stale_sweep")
 async def _inbox_stale_sweep_tick() -> None:
@@ -691,6 +701,21 @@ async def _agent_dispatch_lock_sweep_tick() -> None:
     )
 
     await sweep_dangling_project_locks_tick()
+
+
+@cron_with_lock(
+    lock=CronLockId.INBOX_ACTION_ITEMS_BACKFILL,
+    name="inbox_action_items_backfill",
+)
+async def _inbox_action_items_backfill_tick() -> None:
+    """Backfill ``payload.action_items`` on legacy clarification rows
+    that pre-date the structured Decision UI contract (ELS-162).
+    See :mod:`backfill_action_items` for the parser."""
+    from backend.app.services.inbox.backfill_action_items import (
+        backfill_inbox_action_items_tick,
+    )
+
+    await backfill_inbox_action_items_tick()
 
 
 __all__ = ["register_all"]

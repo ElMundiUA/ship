@@ -125,6 +125,11 @@ class CronLockId(IntEnum):
     # without workflow, etc.). Without this the 24h TTL blocks every
     # sibling ticket in the project for hours.
     AGENT_DISPATCH_LOCK_SWEEP = 1018
+    # Inbox action_items backfill (ELS-165) — parses legacy
+    # clarification rows' markdown bodies into structured
+    # ``payload.action_items`` so the Decision UI renders pills.
+    # Idempotent; only touches rows missing the structured payload.
+    INBOX_ACTION_ITEMS_BACKFILL = 1019
 
 
 # ---------------------------------------------------------------------------
