@@ -98,7 +98,11 @@ export function EnvSeparationWarningModal({ workspaceId }: Props) {
           </ul>
         </div>
         <div className="mt-6 flex justify-end">
-          <ButtonPrimary type="button" disabled={acking} onClick={() => void dismiss()}>
+          <ButtonPrimary
+            type="button"
+            className={acking ? "pointer-events-none opacity-60" : undefined}
+            onClick={acking ? undefined : () => void dismiss()}
+          >
             {acking ? "Saving…" : "Acknowledge"}
           </ButtonPrimary>
         </div>
