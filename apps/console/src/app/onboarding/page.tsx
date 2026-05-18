@@ -181,23 +181,13 @@ function pickStep(raw: string | string[] | undefined): StepId {
   ) {
     return v;
   }
-  // Pre-Wave-8c legacy ids: ``configure`` was the per-repo preset
-  // step, ``knowledge`` was the wizard v1 post-tracker landing pad.
-  // Both now mean "go to the new Confirm bootstrap step". The actual
-  // ``redirect()`` to ``?step=confirm`` happens server-side in
-  // :func:`OnboardingPage` so the URL bar reflects the new id.
-  if (v === "configure" || v === "knowledge") return "confirm";
   return "github";
 }
 
-/** Legacy step ids that should 303-redirect to the Wave-8c equivalent. */
-function legacyStepRedirectTarget(
-  raw: string | string[] | undefined,
-): StepId | null {
-  const v = Array.isArray(raw) ? raw[0] : raw;
-  if (v === "configure" || v === "knowledge") return "confirm";
-  return null;
-}
+// ELS-179 (W3) — legacyStepRedirectTarget removed 2026-05-19.
+// ``?step=configure`` and ``?step=knowledge`` were retired with the
+// Wave-8c cutover; bookmarks pointing at them now hit ``?step=github``
+// fallback like any other unrecognised step.
 
 /**
  * Derive the step the operator should land on when no ``?step=`` pin is
@@ -258,25 +248,6 @@ export default async function OnboardingPage({
   searchParams: SearchParams;
 }) {
   const params = await searchParams;
-
-  // ── Back-compat redirect for pre-Wave-8c step ids ────────────
-  // Bookmarks / email links pointing at ``?step=configure`` (the old
-  // 14-preset configure step) and ``?step=knowledge`` (wizard v1)
-  // should land on the new Confirm step *with the URL bar reflecting
-  // the new id* — otherwise the stepper highlight + analytics drift
-  // forever. Run this before any other work so we don't pay for
-  // workspace lookups on a request we're about to redirect.
-  const legacyTarget = legacyStepRedirectTarget(params.step);
-  if (legacyTarget) {
-    const search = new URLSearchParams();
-    for (const [k, vRaw] of Object.entries(params)) {
-      if (k === "step") continue;
-      const v = Array.isArray(vRaw) ? vRaw[0] : vRaw;
-      if (typeof v === "string") search.set(k, v);
-    }
-    search.set("step", legacyTarget);
-    redirect(`/onboarding?${search.toString()}`);
-  }
 
   const requestedStep = pickStep(params.step);
   const apiConfigured = isApiConfigured();

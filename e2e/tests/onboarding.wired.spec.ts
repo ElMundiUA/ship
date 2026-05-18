@@ -136,31 +136,6 @@ test.describe("onboarding wizard (authenticated)", () => {
     await expect(seedCta).toBeVisible();
   });
 
-  test("redirects ?step=configure to ?step=confirm", async ({ page }) => {
-    // Don't follow redirects automatically off-page (nothing to do —
-    // Playwright does follow same-origin 303s during goto). We just
-    // check the final URL matches the new step id.
-    await page.goto("/onboarding?step=configure");
-
-    // The legacy redirect handler in OnboardingPage drops ``step``
-    // first, so the resulting URL ends with ``?step=confirm``.
-    await expect
-      .poll(() => new URL(page.url()).searchParams.get("step"), {
-        timeout: 15_000,
-      })
-      .toBe("confirm");
-
-    const confirm = page.getByTestId("onboarding-step-confirm");
-    if (!(await isVisibleSoon(confirm))) {
-      test.skip(
-        true,
-        "Backend not wired: redirect landed at /onboarding?step=confirm but the step did not SSR (no activated repos in this workspace).",
-      );
-      return;
-    }
-    await expect(confirm).toBeVisible();
-  });
-
   test("done step shows pr link and routing summary when sessionStorage primed", async ({
     page,
   }) => {

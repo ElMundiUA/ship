@@ -89,10 +89,8 @@ _STARTERS: Final[dict[str, StarterWorkflow]] = {
             id="pipeline-self-heal",
             install_target=".github/workflows/pipeline-self-heal.yml",
         ),
-        StarterWorkflow(
-            id="ship-bootstrap",
-            install_target=".github/workflows/ship-bootstrap.yml",
-        ),
+        # ELS-179 (W3) — ship-bootstrap.yml retired 2026-05-19; no live
+        # install path. The wizard seed bundle only ships ship-agent-run.
         StarterWorkflow(
             id="ship-agent-run",
             install_target=".github/workflows/ship-agent-run.yml",
