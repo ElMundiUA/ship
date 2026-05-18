@@ -151,7 +151,7 @@ test.describe("onboarding wizard (authenticated)", () => {
     const seeded = buildWizardSeedResult({
       pr_url: "https://github.com/acme/widgets/pull/1234",
       pr_number: 1234,
-      branch: "ship/bundle-bootstrap-1",
+      branch: "ship/install-bootstrap-1",
       files: ["/.ship/config.yml", "/.github/workflows/pr-and-ci-gate.yml"],
       presets: ["default"],
       tracker_kind: null,
@@ -229,7 +229,7 @@ test.describe("onboarding wizard (authenticated)", () => {
     const fixture = buildWizardSeedResult({
       pr_url: "https://github.com/acme/widgets/pull/9876",
       pr_number: 9876,
-      branch: "ship/bundle-bootstrap-fallback",
+      branch: "ship/install-bootstrap-fallback",
       synthetic_lanes_created: 3,
       codeowners: {
         file_found: true,
