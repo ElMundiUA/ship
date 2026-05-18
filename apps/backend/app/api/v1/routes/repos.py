@@ -716,6 +716,42 @@ async def wizard_seed(
             )
         ).scalars().first()
         if last_seed is not None:
+            # ELS-181 (W5/B3) — even on idempotent short-circuit, repair
+            # SHIP_WORKSPACE_ID. The secret was added in commit 2e488df;
+            # repos seeded before that bump (and still on _BUNDLE_VERSION)
+            # would otherwise never get it pushed because we skip the
+            # full setup path. put_repo_secret is idempotent at GH side.
+            try:
+                from backend.app.db.models.integrations import (
+                    GitHubInstallation,
+                )
+                from backend.app.integrations.github.actions_secrets import (
+                    put_repo_secret,
+                )
+
+                install_row_short = (
+                    await session.execute(
+                        select(GitHubInstallation).where(
+                            GitHubInstallation.id == repo_row.installation_id
+                        )
+                    )
+                ).scalars().first()
+                if install_row_short is not None:
+                    await put_repo_secret(
+                        repo_row,
+                        install_row_short,
+                        name="SHIP_WORKSPACE_ID",
+                        plaintext=str(workspace_id),
+                        settings=settings,
+                        client=None,
+                    )
+            except Exception:  # noqa: BLE001 — best-effort repair
+                logger.warning(
+                    "wizard_seed short-circuit: SHIP_WORKSPACE_ID re-push "
+                    "skipped for repo=%s — operator may need to wizard-reseed",
+                    repo_row.full_name,
+                )
+
             seed_pr_url = (last_seed.payload or {}).get("pr_url")
             seed_pr_number = (last_seed.payload or {}).get("pr_number")
             try:
@@ -989,8 +1025,9 @@ async def wizard_seed(
         "**Knowledge**: indexed server-side after merge — Ship's webhook "
         "consumes the new `.ship/config.yml` and updates the workspace "
         "knowledge index out-of-band.\n\n"
-        "Merge once. The single `.github/workflows/ship-trigger-schedule.yml` "
-        "workflow drives every Ship routine on its cron tick."
+        "Merge once. The `.github/workflows/ship-agent-run.yml` workflow "
+        "handles every Ship agent dispatch — Linear state changes trigger "
+        "it via Ship's webhook, no cron required."
     )
     try:
         result = await commit_bundle_pr(

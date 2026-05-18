@@ -1324,7 +1324,7 @@ function TrackerStep({
         <Link href="/integrations" className="text-aqua underline">
           Integrations
         </Link>{" "}
-        \u2014 same data, more knobs (re-auth, probe, manage).
+        — same data, more knobs (re-auth, probe, manage).
       </p>
 
       <form
