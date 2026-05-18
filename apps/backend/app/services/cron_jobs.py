@@ -643,6 +643,19 @@ def register_all() -> None:
         job_id="inbox_stale_sweep",
     )
 
+    # Agent-dispatch lock sweeper (ELS-149). Releases project:* locks
+    # whose owning chain is dead — covers crashed agents that never
+    # reach /finish (Cursor Free runtime errors, OOM, GH workflow
+    # never invoked). Picker-null path is handled directly in
+    # _next_task (ELS-148); this cron covers the cases the picker
+    # never sees. Runs every 5 minutes; 60-min stale floor + 30-min
+    # activity window keep false positives off legitimate chains.
+    register_cron(
+        fn=_agent_dispatch_lock_sweep_tick,
+        cron_expr="*/5 * * * *",
+        job_id="agent_dispatch_lock_sweep",
+    )
+
 
 @cron_with_lock(lock=CronLockId.INBOX_STALE_SWEEP, name="inbox_stale_sweep")
 async def _inbox_stale_sweep_tick() -> None:
@@ -664,6 +677,20 @@ async def _fsm_self_heal_scan_tick() -> None:
     from backend.app.services.fsm_self_heal import scan_eligible_tickets
 
     await scan_eligible_tickets()
+
+
+@cron_with_lock(
+    lock=CronLockId.AGENT_DISPATCH_LOCK_SWEEP,
+    name="agent_dispatch_lock_sweep",
+)
+async def _agent_dispatch_lock_sweep_tick() -> None:
+    """Periodic cleanup for dangling ``project:*`` dispatch locks.
+    See :mod:`dispatch_lock_sweep` for the algorithm + thresholds."""
+    from backend.app.services.dispatch_lock_sweep import (
+        sweep_dangling_project_locks_tick,
+    )
+
+    await sweep_dangling_project_locks_tick()
 
 
 __all__ = ["register_all"]

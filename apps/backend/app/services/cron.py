@@ -119,6 +119,12 @@ class CronLockId(IntEnum):
     # Inbox stale-row dismiss (ELS-144) — rows with ``stale_after`` past
     # ``created_at + stale_after`` and ``status=new`` become dismissed.
     INBOX_STALE_SWEEP = 1017
+    # Agent-dispatch lock sweeper (ELS-149) — releases dangling
+    # ``project:*`` locks when the dispatched workflow_run finished
+    # but never wrote ``agent_run.finish`` (crashed agent, GH dispatch
+    # without workflow, etc.). Without this the 24h TTL blocks every
+    # sibling ticket in the project for hours.
+    AGENT_DISPATCH_LOCK_SWEEP = 1018
 
 
 # ---------------------------------------------------------------------------

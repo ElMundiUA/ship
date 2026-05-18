@@ -108,13 +108,18 @@ _PLANNING_ANCHOR_LABEL: Final[str] = "planning:anchor"
 
 # Per-project lock TTL. Holds across the full ticket lifecycle until
 # merge webhook or finish-time release (``maybe_release_project_lock_on_finish``,
-# ``github_app._release_project_lock_for_merged_pr``). 24h is the belt-and-
-# braces upper bound — for a non-anchor ticket that legitimately
-# takes that long, the operator already has a human PR-review in
-# flight and can extend via re-trigger. Without this fallback an
-# abandoned PR strands every other ticket in the project for
-# weeks.
-PROJECT_LOCK_TTL_S: Final[int] = 24 * 60 * 60
+# ``github_app._release_project_lock_for_merged_pr``). 60 minutes is
+# the belt-and-braces upper bound matching the ticket-level lock TTL.
+# Was 24h before ELS-150; that was too long — when the explicit
+# release paths missed (crashed agent, picker null without release,
+# GH dispatch without workflow_run, post-mortem 2026-05-18), the lock
+# stranded every sibling ticket in the project for a working day.
+# A 60-min TTL means even exotic uncovered cases self-heal within an
+# hour. Cascades within an active chain bypass the lock (don't
+# re-acquire), so a multi-stage chain doesn't lose its slot at the
+# 60-min mark; the first non-cascade dispatch is the lock-acquirer
+# and subsequent stages don't touch it.
+PROJECT_LOCK_TTL_S: Final[int] = 60 * 60
 
 # Per-ticket lock TTL. The dispatch fires a single workflow run which
 # typically completes in 5-10 min for the SDLC bundles we'll ship in
