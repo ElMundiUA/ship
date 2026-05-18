@@ -35,9 +35,134 @@ from backend.app.services.dispatcher import (
     count_active_locks,
     maybe_dispatch,
     maybe_dispatch_workspace_bundle,
+    maybe_release_project_lock_on_finish,
     release_lock,
+    should_release_project_lock,
     sweep_expired_locks,
 )
+
+
+# ---------------------------------------------------------------------------
+# Project lock finish release — pure matrix + DB integration
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("outcome", "stage_next", "labels", "expected"),
+    [
+        ("blocked", None, [], True),
+        ("needs_clarification", None, [], True),
+        ("out_of_scope", None, [], True),
+        ("noop", None, [], True),
+        ("ready_next_step", "dev_implementation", [], False),
+        ("ready_next_step", "qa_manual", [], False),
+        ("ready_next_step", "validation", [], False),
+        ("ready_next_step", "merged", [], True),
+        ("ready_next_step", "planning_done", [], True),
+        ("ready_next_step", None, [], True),
+        ("ready_next_step", "dev_implementation", ["planning:anchor"], False),
+        ("blocked", None, ["planning:anchor"], False),
+    ],
+)
+def test_should_release_project_lock_matrix(
+    outcome: str,
+    stage_next: str | None,
+    labels: list[str],
+    expected: bool,
+) -> None:
+    assert (
+        should_release_project_lock(
+            outcome=outcome, stage_next=stage_next, labels=labels
+        )
+        is expected
+    )
+
+
+@pytest.mark.asyncio
+async def test_finish_release_deletes_project_lock_and_audits(
+    db_session,
+) -> None:
+    """T1 — stall outcome drops ``project:<id>`` and writes audit."""
+    ws = await _make_workspace(db_session)
+    project_id = str(uuid.uuid4())
+    await acquire_lock(
+        db_session, workspace_id=ws, key=f"project:{project_id}"
+    )
+    released = await maybe_release_project_lock_on_finish(
+        db_session,
+        workspace_id=ws,
+        ticket_ref="ELS-1",
+        outcome="blocked",
+        stage_next=None,
+        labels=[],
+        project_id=project_id,
+    )
+    assert released is True
+    assert await release_lock(
+        db_session, workspace_id=ws, key=f"project:{project_id}"
+    ) is False
+    audit = (
+        await db_session.execute(
+            select(AuditLog).where(
+                AuditLog.workspace_id == ws,
+                AuditLog.action == "dispatch.project_lock_released",
+            )
+        )
+    ).scalar_one()
+    assert audit.target_id == "ELS-1"
+    assert audit.payload["via"] == "agent_run.finish"
+    assert audit.payload["outcome"] == "blocked"
+    assert audit.payload["project_id"] == project_id
+
+
+@pytest.mark.asyncio
+async def test_finish_keeps_project_lock_for_in_flight_stage_next(
+    db_session,
+) -> None:
+    """T4 — ``ready_next_step`` + in-flight ``stage_next`` keeps the row."""
+    ws = await _make_workspace(db_session)
+    project_id = str(uuid.uuid4())
+    await acquire_lock(
+        db_session, workspace_id=ws, key=f"project:{project_id}"
+    )
+    released = await maybe_release_project_lock_on_finish(
+        db_session,
+        workspace_id=ws,
+        ticket_ref="ELS-2",
+        outcome="ready_next_step",
+        stage_next="dev_implementation",
+        labels=[],
+        project_id=project_id,
+    )
+    assert released is False
+    assert await release_lock(
+        db_session, workspace_id=ws, key=f"project:{project_id}"
+    ) is True
+
+
+@pytest.mark.asyncio
+async def test_finish_anchor_skips_project_lock_delete(
+    db_session,
+) -> None:
+    """T7 — anchors never release a lock they never took."""
+    ws = await _make_workspace(db_session)
+    project_id = str(uuid.uuid4())
+    await acquire_lock(
+        db_session, workspace_id=ws, key=f"project:{project_id}"
+    )
+    released = await maybe_release_project_lock_on_finish(
+        db_session,
+        workspace_id=ws,
+        ticket_ref="ELS-ANCHOR",
+        outcome="blocked",
+        stage_next=None,
+        labels=["planning:anchor"],
+        project_id=project_id,
+    )
+    assert released is False
+    assert await release_lock(
+        db_session, workspace_id=ws, key=f"project:{project_id}"
+    ) is True
 
 
 # ---------------------------------------------------------------------------
