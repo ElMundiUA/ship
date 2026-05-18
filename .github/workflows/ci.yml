@@ -185,3 +185,55 @@ jobs:
                   sys.exit(1)
           print('imports OK; rubrics OK')
           "
+
+  # ---- Landing marketing smoke (Playwright) ---------------------------
+  # Secret-free browser checks on `next start` — independent of console
+  # wired suites on :3001.
+  landing-e2e:
+    name: playwright (landing smoke)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/landing/package-lock.json
+
+      - name: Install landing deps
+        working-directory: apps/landing
+        run: npm ci
+
+      - name: Install e2e deps
+        working-directory: e2e
+        run: npm ci
+
+      - name: Build landing
+        working-directory: apps/landing
+        run: npm run build
+
+      - name: Start landing and wait for port 3000
+        working-directory: apps/landing
+        run: |
+          npm run start &
+          for i in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:3000/ >/dev/null; then
+              echo "landing ready"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "landing did not become ready on :3000" >&2
+          exit 1
+
+      - name: Install Playwright Chromium
+        working-directory: e2e
+        run: npx playwright install --with-deps chromium
+
+      - name: Landing smoke
+        working-directory: e2e
+        env:
+          LANDING_BASE_URL: http://127.0.0.1:3000
+        run: npx playwright test --project=landing
