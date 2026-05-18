@@ -39,6 +39,7 @@ test.describe("console surfaces (wired, serial)", () => {
     await expect(
       page.getByRole("heading", { name: "Inbox", exact: true }),
     ).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId("inbox-lane-filters")).toBeVisible();
   });
 
   test("06 — navigator (agent chat)", async ({ page }) => {

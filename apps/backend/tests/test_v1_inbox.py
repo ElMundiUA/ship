@@ -147,6 +147,7 @@ async def test_list_empty_returns_zero_counts(v1_client, seed_workspace):
         "exception": 0,
         "stuck": 0,
         "blocker": 0,
+        "report": 0,
     }
     assert body["counts_by_status"] == {
         "new": 0,
@@ -240,7 +241,10 @@ async def test_list_pagination_cursor_round_trip(
     pages = 0
     totals: list[int] = []
     while True:
-        url = f"/v1/workspaces/{ws.id}/inbox?ownership=mine&limit=10"
+        url = (
+            f"/v1/workspaces/{ws.id}/inbox"
+            "?ownership=mine&limit=10&sort=created_desc"
+        )
         if cursor is not None:
             url += f"&cursor={cursor}"
         res = await v1_client.get(url, headers=_auth(raw))
@@ -322,8 +326,8 @@ async def test_counts_endpoint_groups_by_type_and_status(
     assert body["by_status"]["snoozed"] == 1
     assert body["by_status"]["resolved"] == 1
     assert body["by_status"]["dismissed"] == 0
-    # Actionable badge: new decision_needed + failure only (not improvement).
-    assert body["actionable_new"] == 3
+    # Actionable badge: new decision_needed + failure (improvement → decision_needed).
+    assert body["actionable_new"] == 4
     assert body["reports_new"] == 0
     # Cache hint set so the nav badge poller doesn't hammer it.
     assert "max-age=10" in res.headers.get("cache-control", "")
