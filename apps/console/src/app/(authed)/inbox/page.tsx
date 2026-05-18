@@ -19,8 +19,14 @@ import { redirect } from "next/navigation";
 import { ApiUnavailable } from "@/components/api-unavailable";
 import { PageBody, PageHeader } from "@/components/app-shell";
 import { MailboxFooter } from "@/components/inbox/mailbox-footer";
+import { MailboxKeyboardNav } from "@/components/inbox/mailbox-keyboard-nav";
 import { StaleBadge } from "@/components/inbox/stale-badge";
 import { MarkdownBlock } from "@/components/markdown-block";
+import { EmptyState } from "@/components/ui";
+import {
+  formatInboxHeadline,
+  formatIntakeReasonTooltip,
+} from "@/lib/inbox-copy";
 import { cn } from "@/lib/cn";
 import {
   ApiHttpError,
@@ -35,6 +41,7 @@ import { getResolvedWorkspaceId } from "@/lib/workspace-resolve.server";
 import {
   INBOX_LIST_DEFAULT_STATUSES,
   INBOX_TYPE_META,
+  ROW_KICKER,
   type InboxItem,
   type InboxItemDetail,
   type InboxListResponse,
@@ -209,6 +216,14 @@ export default async function InboxMailboxPage({
           </p>
         )}
 
+        <MailboxKeyboardNav
+          itemIds={list.items.map((i) => i.id)}
+          selectedId={selectedId}
+          buildHref={(id) =>
+            buildSelectHref({ id, ownership, workspaceScope: wsScope })
+          }
+        />
+
         <div className="grid gap-4 lg:grid-cols-[26rem_minmax(0,1fr)]">
           <MailboxList
             items={list.items}
@@ -250,10 +265,11 @@ function MailboxList({
       <OwnershipTabs current={ownership} workspaceScope={workspaceScope} />
 
       {items.length === 0 ? (
-        <div className="flex-1 px-4 py-10 text-center text-sm text-white/55">
-          {ownership === "mine"
-            ? "Nothing on your plate."
-            : "Inbox empty."}
+        <div className="flex flex-1 items-center justify-center p-4">
+          <EmptyState
+            title="Inbox empty."
+            body="Nothing waiting on you — agents working."
+          />
         </div>
       ) : (
         <ul className="divide-y divide-white/[0.06] overflow-y-auto">
@@ -347,17 +363,6 @@ function OwnershipTabs({
   );
 }
 
-const ROW_TONE: Record<InboxType, string> = {
-  clarification: "bg-sun",
-  approval: "bg-aqua",
-  improvement: "bg-lilac",
-  failure: "bg-coral",
-  blocker: "bg-coral",
-  exception: "bg-coral/60",
-  stuck: "bg-white/30",
-  report: "bg-white/15",
-};
-
 function MailboxRow({
   item,
   selected,
@@ -369,46 +374,58 @@ function MailboxRow({
   ownership: Ownership;
   workspaceScope?: string;
 }) {
-  const meta = INBOX_TYPE_META[item.type];
+  const kicker = ROW_KICKER[item.type];
   const isUnread = item.status === "new";
+  const headline = formatInboxHeadline(item);
+  const decisionCount = item.action_item_count ?? 0;
+  const intakeTip = formatIntakeReasonTooltip(item.intake_reason);
+
   return (
     <Link
       href={buildSelectHref({ id: item.id, ownership, workspaceScope })}
       className={cn(
-        "group relative flex items-start gap-3 px-4 py-3 transition",
-        selected
-          ? "bg-aqua/[0.08]"
-          : "hover:bg-white/[0.03]",
+        "group relative flex items-center gap-2.5 px-4 py-2 transition",
+        selected ? "bg-aqua/[0.08]" : "hover:bg-white/[0.03]",
       )}
-      aria-current={selected ? "true" : undefined}
+      aria-current={selected ? "page" : undefined}
+      title={intakeTip}
     >
       <span
         aria-hidden
         className={cn(
-          "mt-1 inline-block h-2 w-2 shrink-0 rounded-full",
-          isUnread ? ROW_TONE[item.type] : "bg-white/15",
+          "inline-block h-2 w-2 shrink-0 rounded-full",
+          isUnread ? kicker.tone : "bg-white/15",
         )}
       />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.18em] text-white/40">
-          <span>{meta.label.replace(/s$/, "")}</span>
+          <span>
+            <span aria-hidden>{kicker.glyph} </span>
+            {kicker.label}
+          </span>
           <StaleBadge
             createdAt={item.created_at}
             status={item.status}
             snoozedUntil={item.snoozed_until}
           />
+          {decisionCount > 0 && (
+            <span className="rounded-full border border-white/15 bg-white/[0.06] px-1.5 py-0.5 text-[9px] font-semibold text-white/70">
+              {decisionCount} {decisionCount === 1 ? "decision" : "decisions"}
+            </span>
+          )}
         </div>
         <p
           className={cn(
-            "mt-1 truncate text-sm",
-            selected ? "font-semibold text-white" : isUnread ? "font-semibold text-white/95" : "text-white/70",
+            "truncate text-sm leading-tight",
+            selected
+              ? "font-semibold text-white"
+              : isUnread
+                ? "font-semibold text-white/95"
+                : "text-white/70",
           )}
         >
-          {item.title}
+          {headline}
         </p>
-        {item.summary && item.summary.trim().toLowerCase() !== item.title.trim().toLowerCase() && (
-          <p className="mt-0.5 truncate text-xs text-white/50">{item.summary}</p>
-        )}
       </div>
     </Link>
   );
@@ -433,8 +450,11 @@ function MailboxPreview({
 }) {
   if (empty) {
     return (
-      <div className="flex min-h-[60vh] items-center justify-center rounded-xl border border-white/[0.08] bg-white/[0.015] px-6 text-center text-sm text-white/55">
-        Pick a workspace lens on the left — there&rsquo;s nothing here right now.
+      <div className="flex min-h-[60vh] items-center justify-center rounded-xl border border-white/[0.08] bg-white/[0.015] p-6">
+        <EmptyState
+          title="Inbox empty."
+          body="Nothing waiting on you — agents working."
+        />
       </div>
     );
   }
@@ -457,8 +477,13 @@ function MailboxPreview({
   const body = readBody(detail);
   const isClosed = detail.status === "resolved" || detail.status === "dismissed";
 
+  const previewHeadline = formatInboxHeadline(detail);
+
   return (
-    <div className="flex min-h-[60vh] flex-col rounded-xl border border-white/[0.08] bg-white/[0.015]">
+    <div
+      className="flex min-h-[60vh] flex-col rounded-xl border border-white/[0.08] bg-white/[0.015]"
+      data-mailbox-preview
+    >
       <header className="border-b border-white/[0.06] px-6 py-4">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] uppercase tracking-[0.18em] text-white/45">
           <span>{meta?.label ?? detail.type}</span>
@@ -475,7 +500,7 @@ function MailboxPreview({
             </>
           )}
         </div>
-        <h1 className="mt-1 text-lg font-semibold text-white">{detail.title}</h1>
+        <h1 className="mt-1 text-lg font-semibold text-white">{previewHeadline}</h1>
         {detail.owner && (
           <p className="mt-1 text-xs text-white/55">
             Owner:{" "}

@@ -8,13 +8,18 @@
  *     Posts ``action=answer`` with the operator's text.
  *   - ``decision`` — primary + secondary disposition buttons. The verb
  *     set per type is the same as the bigger ``/inbox/[id]`` page.
+ *   - ``checklist`` — one row per ``payload.action_items`` entry with
+ *     prompt + primary/secondary choices (daily digest shape).
  *
  * Closed items (``resolved`` / ``dismissed``) collapse to a one-line
  * confirmation row instead of the action surface.
  */
 
+import { ButtonGhost, ButtonPrimary } from "@/components/ui";
 import {
+  inboxActionItems,
   inboxFooterKind,
+  type InboxActionItem,
   type InboxItemDetail,
   type InboxType,
 } from "@/lib/inbox-types";
@@ -101,7 +106,19 @@ export function MailboxFooter({
     );
   }
 
-  const kind = inboxFooterKind(detail.type as InboxType);
+  const kind = inboxFooterKind(detail.type as InboxType, {
+    status: detail.status,
+    payload: detail.payload,
+  });
+  if (kind === "checklist") {
+    return (
+      <ChecklistFooter
+        workspaceId={workspaceId}
+        itemId={detail.id}
+        items={inboxActionItems(detail.payload)}
+      />
+    );
+  }
   if (kind === "acknowledge") {
     return (
       <PrimaryForm
@@ -130,10 +147,28 @@ export function MailboxFooter({
     );
   }
   return (
+    <DecisionFooter
+      workspaceId={workspaceId}
+      itemId={detail.id}
+      decision={decision}
+    />
+  );
+}
+
+function DecisionFooter({
+  workspaceId,
+  itemId,
+  decision,
+}: {
+  workspaceId: string;
+  itemId: string;
+  decision: Decision;
+}) {
+  return (
     <div className="flex flex-wrap items-center gap-2">
       <PrimaryForm
         workspaceId={workspaceId}
-        itemId={detail.id}
+        itemId={itemId}
         action={decision.primary.action}
         label={decision.primary.label}
       />
@@ -141,12 +176,65 @@ export function MailboxFooter({
         <SecondaryForm
           key={spec.action + spec.label}
           workspaceId={workspaceId}
-          itemId={detail.id}
+          itemId={itemId}
           action={spec.action}
           label={spec.label}
           style={spec.style}
         />
       ))}
+    </div>
+  );
+}
+
+function ChecklistFooter({
+  workspaceId,
+  itemId,
+  items,
+}: {
+  workspaceId: string;
+  itemId: string;
+  items: InboxActionItem[];
+}) {
+  return (
+    <ul className="space-y-4">
+      {items.map((row) => (
+        <li key={row.id} className="space-y-2">
+          <p className="text-sm text-white/85">{row.prompt}</p>
+          <ChecklistRow workspaceId={workspaceId} itemId={itemId} row={row} />
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function ChecklistRow({
+  workspaceId,
+  itemId,
+  row,
+}: {
+  workspaceId: string;
+  itemId: string;
+  row: InboxActionItem;
+}) {
+  const actionPath = `/api/inbox/${encodeURIComponent(itemId)}/disposition`;
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <form action={actionPath} method="POST" className="contents">
+        <input type="hidden" name="ws" value={workspaceId} />
+        <input type="hidden" name="action" value="resolve" />
+        <input type="hidden" name="return_to" value="/inbox" />
+        <input type="hidden" name="action_item_id" value={row.id} />
+        <input type="hidden" name="choice" value={row.primary.choice} />
+        <ButtonPrimary type="submit">{row.primary.label}</ButtonPrimary>
+      </form>
+      <form action={actionPath} method="POST" className="contents">
+        <input type="hidden" name="ws" value={workspaceId} />
+        <input type="hidden" name="action" value="dismiss" />
+        <input type="hidden" name="return_to" value="/inbox" />
+        <input type="hidden" name="action_item_id" value={row.id} />
+        <input type="hidden" name="choice" value={row.secondary.choice} />
+        <ButtonGhost type="submit">{row.secondary.label}</ButtonGhost>
+      </form>
     </div>
   );
 }
@@ -240,16 +328,28 @@ function ReplyForm({
         placeholder="Reply to the agent…"
         className="w-full rounded border border-white/10 bg-white/[0.04] px-2 py-1.5 text-sm text-white outline-none focus:border-aqua/40"
       />
-      <div className="flex items-center gap-2">
-        <button
-          type="submit"
-          className="inline-flex items-center gap-1.5 rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-4 py-1.5 text-sm font-bold text-ink shadow-glow transition hover:brightness-110"
-        >
-          Send
-        </button>
-        <DismissForm workspaceId={workspaceId} itemId={itemId} />
-      </div>
+      <ReplyActions workspaceId={workspaceId} itemId={itemId} />
     </form>
+  );
+}
+
+function ReplyActions({
+  workspaceId,
+  itemId,
+}: {
+  workspaceId: string;
+  itemId: string;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <button
+        type="submit"
+        className="inline-flex items-center gap-1.5 rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-4 py-1.5 text-sm font-bold text-ink shadow-glow transition hover:brightness-110"
+      >
+        Send
+      </button>
+      <DismissForm workspaceId={workspaceId} itemId={itemId} />
+    </div>
   );
 }
 

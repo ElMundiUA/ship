@@ -106,9 +106,69 @@ export const INBOX_TYPE_META: Record<
  *   - ``decision`` — primary + secondary disposition buttons. Used for
  *     everything that's a yes/no/dismiss decision.
  */
-export type InboxFooterKind = "acknowledge" | "reply" | "decision";
+export type InboxFooterKind = "acknowledge" | "reply" | "decision" | "checklist";
 
-export function inboxFooterKind(type: InboxType): InboxFooterKind {
+export type InboxActionItem = {
+  id: string;
+  prompt: string;
+  primary: { label: string; choice: string };
+  secondary: { label: string; choice: string };
+};
+
+/** Type kicker: glyph + label + dot tone for mailbox list rows. */
+export const ROW_KICKER: Record<
+  InboxType,
+  { glyph: string; label: string; tone: string }
+> = {
+  clarification: { glyph: "?", label: "CLARIFY", tone: "bg-sun" },
+  approval: { glyph: "★", label: "ATTENTION", tone: "bg-aqua" },
+  improvement: { glyph: "★", label: "ATTENTION", tone: "bg-lilac" },
+  failure: { glyph: "!", label: "FAILURE", tone: "bg-coral" },
+  blocker: { glyph: "!", label: "BLOCKER", tone: "bg-coral" },
+  exception: { glyph: "★", label: "ATTENTION", tone: "bg-coral/60" },
+  stuck: { glyph: "★", label: "ATTENTION", tone: "bg-white/30" },
+  report: { glyph: "≡", label: "REPORT", tone: "bg-white/15" },
+};
+
+export function inboxActionItems(
+  payload: Record<string, unknown> | undefined,
+): InboxActionItem[] {
+  const raw = payload?.action_items;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(isInboxActionItem);
+}
+
+function isInboxActionItem(value: unknown): value is InboxActionItem {
+  if (!value || typeof value !== "object") return false;
+  const row = value as Record<string, unknown>;
+  return (
+    typeof row.id === "string" &&
+    typeof row.prompt === "string" &&
+    row.primary !== null &&
+    typeof row.primary === "object" &&
+    typeof (row.primary as { label?: unknown }).label === "string" &&
+    typeof (row.primary as { choice?: unknown }).choice === "string" &&
+    row.secondary !== null &&
+    typeof row.secondary === "object" &&
+    typeof (row.secondary as { label?: unknown }).label === "string" &&
+    typeof (row.secondary as { choice?: unknown }).choice === "string"
+  );
+}
+
+export function inboxFooterKind(
+  type: InboxType,
+  detail?: {
+    status?: InboxStatus;
+    payload?: Record<string, unknown>;
+  },
+): InboxFooterKind {
+  if (
+    detail?.status !== "resolved" &&
+    detail?.status !== "dismissed" &&
+    inboxActionItems(detail?.payload).length > 0
+  ) {
+    return "checklist";
+  }
   if (type === "report") return "acknowledge";
   if (type === "clarification") return "reply";
   return "decision";
@@ -139,6 +199,8 @@ export type InboxItem = {
   snoozed_until: string | null;
   resolved_at: string | null;
   resolution: InboxResolution | null;
+  /** Count of ``payload.action_items`` for list-row decision chip. */
+  action_item_count?: number;
 };
 
 export type InboxItemDetail = InboxItem & {

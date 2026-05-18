@@ -153,6 +153,7 @@ class InboxItemOut(BaseModel):
     snoozed_until: datetime | None
     resolved_at: datetime | None
     resolution: str | None
+    action_item_count: int = 0
 
 
 class InboxItemEventOut(BaseModel):
@@ -292,6 +293,13 @@ def _to_owner_out(user: User | None) -> InboxOwnerOut | None:
     )
 
 
+def _action_item_count(payload: dict | None) -> int:
+    raw = (payload or {}).get("action_items")
+    if not isinstance(raw, list):
+        return 0
+    return len(raw)
+
+
 def _to_item_out(item: InboxItem, owner: User | None) -> InboxItemOut:
     return InboxItemOut(
         id=item.id,
@@ -311,6 +319,7 @@ def _to_item_out(item: InboxItem, owner: User | None) -> InboxItemOut:
         snoozed_until=item.snoozed_until,
         resolved_at=item.resolved_at,
         resolution=item.resolution,
+        action_item_count=_action_item_count(item.payload),
     )
 
 

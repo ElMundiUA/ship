@@ -113,6 +113,29 @@ async def _make_item(
 
 
 @pytest.mark.asyncio
+async def test_list_includes_action_item_count(v1_client, seed_workspace, db_session):
+    _, raw, ws = seed_workspace
+    await _make_item(
+        db_session,
+        ws,
+        type="report",
+        title="digest",
+        payload={
+            "action_items": [
+                {"id": "a", "prompt": "Q1"},
+                {"id": "b", "prompt": "Q2"},
+            ]
+        },
+    )
+    res = await v1_client.get(
+        f"/v1/workspaces/{ws.id}/inbox", headers=_auth(raw)
+    )
+    assert res.status_code == 200, res.text
+    row = res.json()["items"][0]
+    assert row["action_item_count"] == 2
+
+
+@pytest.mark.asyncio
 async def test_list_empty_returns_zero_counts(v1_client, seed_workspace):
     _, raw, ws = seed_workspace
     res = await v1_client.get(
