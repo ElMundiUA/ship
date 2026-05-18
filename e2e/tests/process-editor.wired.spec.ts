@@ -132,7 +132,9 @@ test.describe("process editor (wired, serial)", () => {
     });
   });
 
-  test("stage inspector edit surfaces review summary", async ({ page }) => {
+  test("stage inspector edit surfaces validation and dirty UI", async ({
+    page,
+  }) => {
     const ctx = skipUnlessReady();
     if (!ctx || !ctx.firstStateId) return;
 
@@ -146,16 +148,13 @@ test.describe("process editor (wired, serial)", () => {
     const stageName = page.getByLabel("Stage name", { exact: true });
     await expect(stageName).toBeVisible({ timeout: 30_000 });
     const original = await stageName.inputValue();
-    await stageName.fill(`${original} e2e`);
+    await stageName.fill("");
     await expect(page.getByText("Review before publishing")).toBeVisible({
       timeout: 10_000,
     });
-    const validationSummary = page.locator("details summary").filter({
-      hasText: /\d+ (error|warning)/,
+    await expect(page.getByText(/\d+ errors?/)).toBeVisible({
+      timeout: 10_000,
     });
-    if ((await validationSummary.count()) > 0) {
-      await expect(validationSummary.first()).toBeVisible();
-    }
     await stageName.fill(original);
   });
 
