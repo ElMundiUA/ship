@@ -1015,9 +1015,21 @@ function pushBranch({ branchName, ghToken, githubRepo }) {
     // before the agent works, so our HEAD never depends on remote
     // history; (2) nobody else writes to this branch — it's
     // owned by the agent for the duration of the run.
-    git(["push", "--force", remoteUrl, `${branchName}:${branchName}`]);
+    // Push ``HEAD:<branchName>`` (not ``${branchName}:${branchName}``)
+    // because some agent runtimes — Cursor's CLI in particular —
+    // do their own ``git checkout`` mid-run on a working-tree
+    // branch they synthesise themselves. By the time we get here
+    // the LOCAL ref ``${branchName}`` is still pinned to base,
+    // while HEAD carries the commits the agent actually made.
+    // ``hasNewCommits`` (which keys off HEAD) sees the commits and
+    // passes us through to push; ``branchName:branchName`` then
+    // sends the stale base ref and ``gh pr create`` returns "No
+    // commits between main and <branch>". Caught on Ship-on-Ship
+    // ELS-99 / ELS-142 2026-05-18 — agents wrote tests, made
+    // commits, runner pushed empty branch, PR creation failed.
+    git(["push", "--force", remoteUrl, `HEAD:refs/heads/${branchName}`]);
   } else {
-    git(["push", "--force", "-u", "origin", branchName]);
+    git(["push", "--force", "-u", "origin", `HEAD:refs/heads/${branchName}`]);
   }
   return branchName;
 }
