@@ -54,6 +54,10 @@ from backend.app.db.models.inbox import (
     InboxItemEvent,
     RunEscalation,
 )
+from backend.app.services.inbox.classification import (
+    category_from_type,
+    priority_for_item,
+)
 from backend.app.services.inbox.profiles import (
     EmitRule,
     INBOX_TYPES,
@@ -287,10 +291,13 @@ def _build_inbox_item(
         and payload.get("fsm_stage")
     ):
         auto_resolvable = True
+    category = category_from_type(effective_type)
     return InboxItem(
         workspace_id=workspace_id,
         repo_id=repo_id,
         type=effective_type,
+        category=category,
+        priority=priority_for_item(category=category, item_type=effective_type),
         source_table=source_table,
         source_id=source_id,
         play_key=play_key,

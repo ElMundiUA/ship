@@ -139,10 +139,15 @@ test.describe("console surfaces (wired, serial)", () => {
     const nav = page.locator("aside nav");
     const checks: [string, RegExp][] = [
       ["Process", /\/process$/],
-      ["Inbox", /\/inbox$/],
+      ["Reports", /\/reports$/],
       ["Knowledge", /\/knowledge$/],
       ["Audit log", /\/audit$/],
     ];
+    await expect(
+      nav.getByRole("link", { name: /^Inbox · \d+$/ }),
+    ).toBeVisible();
+    await nav.getByRole("link", { name: /^Inbox · \d+$/ }).click();
+    await expect(page).toHaveURL(/\/inbox$/);
     for (const [label, pathRe] of checks) {
       await nav.getByRole("link", { name: label, exact: true }).click();
       await expect(page).toHaveURL(pathRe);

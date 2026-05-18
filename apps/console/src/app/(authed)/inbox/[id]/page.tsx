@@ -1255,6 +1255,9 @@ function mockDetail(id: string): InboxItemDetail {
     snoozed_until: null,
     resolved_at: null,
     resolution: null,
+    category: "decision_needed",
+    priority: 8,
+    lane: "today",
     payload: {
       migration_id: "v17",
       drops: ["audit_v1"],

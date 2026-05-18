@@ -32,6 +32,25 @@ export const INBOX_STATUSES = [
 ] as const;
 export type InboxStatus = (typeof INBOX_STATUSES)[number];
 
+export const INBOX_CATEGORIES = [
+  "decision_needed",
+  "failure",
+  "attention",
+] as const;
+export type InboxCategory = (typeof INBOX_CATEGORIES)[number];
+
+export const INBOX_LANES = ["now", "today", "whenever"] as const;
+export type InboxLane = (typeof INBOX_LANES)[number];
+
+export const INBOX_LANE_META: Record<
+  InboxLane,
+  { label: string; tone: string }
+> = {
+  now: { label: "Now", tone: "text-coral" },
+  today: { label: "Today", tone: "text-sun" },
+  whenever: { label: "Whenever", tone: "text-white/55" },
+};
+
 export const INBOX_RESOLUTIONS = [
   "answered",
   "approved",
@@ -139,6 +158,9 @@ export type InboxItem = {
   snoozed_until: string | null;
   resolved_at: string | null;
   resolution: InboxResolution | null;
+  category: InboxCategory;
+  priority: number;
+  lane: InboxLane;
 };
 
 export type InboxItemDetail = InboxItem & {
@@ -160,9 +182,17 @@ export type InboxCountsResponse = {
   mine: number;
   unassigned: number;
   all_open: number;
+  actionable_new: number;
+  reports_new: number;
   by_type: Record<string, number>;
   by_status: Record<string, number>;
 };
+
+/** Actionable inbox categories for `/inbox` list fetches. */
+export const INBOX_ACTIONABLE_CATEGORIES: InboxCategory[] = [
+  "decision_needed",
+  "failure",
+];
 
 export type InboxItemEvent = {
   id: string;
