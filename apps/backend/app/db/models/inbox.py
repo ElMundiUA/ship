@@ -36,13 +36,15 @@ indexes, unique constraints) match the migration
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
     Index,
+    Interval,
+    SmallInteger,
     String,
     Text,
     UniqueConstraint,
@@ -274,7 +276,12 @@ class InboxItem(Base):
 
     ``resolution`` records *how* the item was closed and is one
     of ``answered`` / ``approved`` / ``rejected`` / ``accepted`` /
-    ``dismissed`` / ``retried`` / ``acknowledged``.
+    ``dismissed`` / ``retried`` / ``acknowledged`` / ``auto_recovered``
+    / ``stale`` (backfill-only values; enforced in app, not DB CHECK).
+
+    ``category`` is the v2 triage bucket (CHECK-constrained):
+    ``decision_needed`` / ``attention`` / ``failure`` / ``dismiss_silently``.
+    Lower ``priority`` means more urgent (10 beats 50).
 
     FK behaviour:
 
@@ -314,6 +321,12 @@ class InboxItem(Base):
             "source_table",
             "source_id",
             postgresql_where=text("source_table IS NOT NULL"),
+        ),
+        Index(
+            "ix_inbox_workspace_category_status",
+            "workspace_id",
+            "category",
+            "status",
         ),
     )
 
@@ -380,10 +393,29 @@ class InboxItem(Base):
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
     )
-    # answered | approved | rejected | accepted | dismissed | retried | acknowledged
+    # answered | approved | rejected | accepted | dismissed | retried |
+    # acknowledged | auto_recovered | stale
     resolution: Mapped[str | None] = mapped_column(
         String(length=32), nullable=True
     )
+    # decision_needed | attention | failure | dismiss_silently
+    category: Mapped[str] = mapped_column(
+        String(length=16),
+        nullable=False,
+        server_default=text("'attention'"),
+    )
+    priority: Mapped[int] = mapped_column(
+        SmallInteger,
+        nullable=False,
+        server_default=text("50"),
+    )
+    auto_resolvable: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default=text("false"),
+    )
+    stale_after: Mapped[timedelta | None] = mapped_column(Interval, nullable=True)
+    headline: Mapped[str | None] = mapped_column(String(length=80), nullable=True)
 
 
 class InboxItemEvent(Base):
@@ -474,6 +506,10 @@ class RunEscalation(Base):
     ``play_failed_repeatedly`` / ``requires_approval`` /
     ``etc.`` — the human-readable narrative lives in the linked
     :class:`InboxItem` itself.
+
+    ``resolved_at`` / ``resolution`` / ``resolved_by_user_id`` are set
+    when the linked inbox item is dispositioned (or by the taxonomy v2
+    backfill for auto-closed blockers).
     """
 
     __tablename__ = "run_escalations"
@@ -502,6 +538,17 @@ class RunEscalation(Base):
     )
 
     created_at: Mapped[datetime] = _ts_created()
+    resolved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    resolution: Mapped[str | None] = mapped_column(
+        String(length=32), nullable=True
+    )
+    resolved_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
 
 
 __all__ = [

@@ -388,6 +388,131 @@ async def test_no_activated_repo_refuses(db_session, monkeypatch) -> None:
     assert await count_active_locks(db_session, workspace_id=ws) == 0
 
 
+@pytest.mark.asyncio
+async def test_blocked_by_dependency_refuses_and_releases(
+    db_session, monkeypatch
+) -> None:
+    """When the Linear adapter reports an unresolved `blocks`
+    relation on the ticket, ``maybe_dispatch`` refuses with
+    ``blocked_by_dependency`` and drops the lock it grabbed."""
+    from backend.app.integrations.gateway.tracker import TicketRef
+    from backend.app.services import tracker_resolver as tracker_resolver_module
+
+    ws = await _make_workspace(db_session)
+    monkeypatch.setattr(
+        dispatcher.get_settings(),
+        "tracker_poll_fire",
+        True,
+        raising=False,
+    )
+
+    class _StubGateway:
+        async def get_ticket_snapshot(self, ticket: TicketRef):
+            return {"labels": [], "project_id": None}
+
+        async def get_ticket_blockers(self, ticket: TicketRef):
+            return [
+                {
+                    "identifier": "ELS-143",
+                    "ticket_ref": "uuid-1",
+                    "state_name": "In Progress",
+                    "state_type": "started",
+                    "completed": False,
+                },
+                {
+                    "identifier": "ELS-99",
+                    "ticket_ref": "uuid-2",
+                    "state_name": "Done",
+                    "state_type": "completed",
+                    "completed": True,
+                },
+            ]
+
+    class _Resolved:
+        kind = "linear"
+        gateway = _StubGateway()
+
+    async def _resolve(*_args, **_kwargs):
+        return _Resolved()
+
+    monkeypatch.setattr(
+        tracker_resolver_module, "resolve_for_workspace", _resolve
+    )
+
+    result = await maybe_dispatch(
+        db_session,
+        workspace_id=ws,
+        ticket_ref="ELS-144",
+        trigger_kind="tracker_poll",
+        fsm_stage="dev_implementation",
+    )
+    assert result.fired is False
+    assert result.reason == "blocked_by_dependency"
+    # Lock was released — workspace ends with zero active locks.
+    assert await count_active_locks(db_session, workspace_id=ws) == 0
+    # One audit row recorded with the unresolved blocker identifier.
+    audit_rows = (
+        await db_session.execute(
+            select(AuditLog).where(
+                AuditLog.workspace_id == ws,
+                AuditLog.action == "dispatch.blocked_by_dep",
+            )
+        )
+    ).scalars().all()
+    assert len(audit_rows) == 1
+    blockers = audit_rows[0].payload.get("blockers") or []
+    assert [b["identifier"] for b in blockers] == ["ELS-143"]
+
+
+@pytest.mark.asyncio
+async def test_no_blockers_does_not_refuse(
+    db_session, monkeypatch
+) -> None:
+    """All blockers in a terminal state (or empty list) must NOT
+    refuse — the gate is only meant to catch live dependencies."""
+    from backend.app.integrations.gateway.tracker import TicketRef
+    from backend.app.services import tracker_resolver as tracker_resolver_module
+
+    ws = await _make_workspace(db_session)
+    monkeypatch.setattr(
+        dispatcher.get_settings(),
+        "tracker_poll_fire",
+        True,
+        raising=False,
+    )
+
+    class _StubGateway:
+        async def get_ticket_snapshot(self, ticket: TicketRef):
+            return {"labels": [], "project_id": None}
+
+        async def get_ticket_blockers(self, ticket: TicketRef):
+            return []  # no relations
+
+    class _Resolved:
+        kind = "linear"
+        gateway = _StubGateway()
+
+    async def _resolve(*_args, **_kwargs):
+        return _Resolved()
+
+    monkeypatch.setattr(
+        tracker_resolver_module, "resolve_for_workspace", _resolve
+    )
+
+    result = await maybe_dispatch(
+        db_session,
+        workspace_id=ws,
+        ticket_ref="ELS-200",
+        trigger_kind="tracker_poll",
+        fsm_stage="planning",
+    )
+    # Falls through to the next refusal (no_repo since the fixture
+    # workspace has no activated repo) — the dependency gate did NOT
+    # short-circuit.
+    assert result.fired is False
+    assert result.reason != "blocked_by_dependency"
+
+
 # ---------------------------------------------------------------------------
 # Workspace-bundle dispatch (ELS-125) — separate cap, no compete with SDLC
 # ---------------------------------------------------------------------------

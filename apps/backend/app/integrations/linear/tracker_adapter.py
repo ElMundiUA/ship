@@ -1792,6 +1792,70 @@ class LinearTracker:
             "project_id": ((issue.get("project") or {}).get("id")) or None,
         }
 
+    async def get_ticket_blockers(
+        self, ticket: TicketRef
+    ) -> list[dict[str, Any]] | None:
+        """Issues that block this ticket (Linear `blocks` relation).
+
+        Returns a list of `{ticket_ref, identifier, state_name,
+        state_type, completed}` rows for every issue that is on the
+        "blocks → this" side of a Linear relation. The dispatcher uses
+        this to refuse a dispatch when any blocker is still in a
+        non-terminal state — so ELS-144 can't start dev work while the
+        migration in ELS-143 is unmerged.
+
+        ``completed`` is the bool the caller acts on. ``state_type``
+        being one of ``completed`` / ``canceled`` counts as resolved
+        (canceled = work no longer expected; the blocking dependency
+        is gone whether or not it shipped). Anything else — including
+        ``triage`` / ``backlog`` / ``started`` — is a live blocker.
+
+        Returns ``None`` for non-Linear tickets so dispatcher can no-op
+        without branching on kind. Returns an empty list when Linear
+        responded but the issue has no blockers.
+        """
+        if ticket.kind != "linear":
+            return None
+        query = """
+        query ShipTicketBlockers($id: String!) {
+          issue(id: $id) {
+            inverseRelations(first: 25) {
+              nodes {
+                type
+                issue {
+                  id
+                  identifier
+                  state { name type }
+                }
+              }
+            }
+          }
+        }
+        """
+        try:
+            data = await self._gql(query, {"id": ticket.id})
+        except Exception:
+            return None
+        nodes = (
+            ((data.get("issue") or {}).get("inverseRelations") or {}).get("nodes")
+            or []
+        )
+        out: list[dict[str, Any]] = []
+        for node in nodes:
+            if str(node.get("type") or "").lower() != "blocks":
+                continue
+            blocker = node.get("issue") or {}
+            state = blocker.get("state") or {}
+            state_type = str(state.get("type") or "").lower()
+            out.append({
+                "ticket_ref": blocker.get("id"),
+                "identifier": blocker.get("identifier"),
+                "state_name": state.get("name"),
+                "state_type": state_type,
+                "completed": state_type in ("completed", "canceled"),
+            })
+        return out
+
     async def list_comments(self, ticket: TicketRef) -> list[CommentRef]:
         """All comments on the issue, oldest first.
 
