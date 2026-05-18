@@ -141,6 +141,68 @@ async def test_finish_keeps_project_lock_for_in_flight_stage_next(
 
 
 @pytest.mark.asyncio
+async def test_sibling_dispatch_after_stall_release(
+    db_session, monkeypatch
+) -> None:
+    """T8 — stall release lets a sibling past ``project_busy``."""
+    ws = await _make_workspace(db_session)
+    project_id = str(uuid.uuid4())
+    await acquire_lock(
+        db_session, workspace_id=ws, key=f"project:{project_id}"
+    )
+    monkeypatch.setattr(
+        dispatcher.get_settings(),
+        "tracker_poll_fire",
+        True,
+        raising=False,
+    )
+
+    class _FakeGateway:
+        async def get_ticket_snapshot(self, _ticket):  # noqa: ANN001
+            return {"labels": [], "project_id": project_id}
+
+    class _FakeResolved:
+        kind = "linear"
+        gateway = _FakeGateway()
+
+    async def _fake_resolve(*_a, **_kw):  # noqa: ANN001
+        return _FakeResolved()
+
+    monkeypatch.setattr(
+        "backend.app.services.dispatcher.tracker_resolver_module.resolve_for_workspace",
+        _fake_resolve,
+    )
+
+    while_locked = await maybe_dispatch(
+        db_session,
+        workspace_id=ws,
+        ticket_ref="ELS-B",
+        trigger_kind="tracker_poll",
+        fsm_stage="planning",
+    )
+    assert while_locked.reason == "project_busy"
+
+    await maybe_release_project_lock_on_finish(
+        db_session,
+        workspace_id=ws,
+        ticket_ref="ELS-A",
+        outcome="blocked",
+        stage_next=None,
+        labels=[],
+        project_id=project_id,
+    )
+
+    after_release = await maybe_dispatch(
+        db_session,
+        workspace_id=ws,
+        ticket_ref="ELS-B",
+        trigger_kind="tracker_poll",
+        fsm_stage="planning",
+    )
+    assert after_release.reason != "project_busy"
+
+
+@pytest.mark.asyncio
 async def test_finish_anchor_skips_project_lock_delete(
     db_session,
 ) -> None:
