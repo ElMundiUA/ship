@@ -1,7 +1,7 @@
 """Add inbox_items.headline with backfill (ELS-145).
 
-Revision ID: 0069_inbox_items_headline
-Revises: 0068_routine_runs_fk_hotfix
+Revision ID: 0074_inbox_items_headline
+Revises: 0073_local_memory_adapters
 Create Date: 2026-05-18
 """
 
@@ -13,8 +13,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision: str = "0069_inbox_items_headline"
-down_revision: Union[str, None] = "0068_routine_runs_fk_hotfix"
+revision: str = "0074_inbox_items_headline"
+down_revision: Union[str, None] = "0073_local_memory_adapters"
 branch_labels: Union[str, tuple[str, ...], None] = None
 depends_on: Union[str, tuple[str, ...], None] = None
 

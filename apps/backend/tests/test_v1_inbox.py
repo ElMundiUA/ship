@@ -134,6 +134,7 @@ async def test_list_empty_returns_zero_counts(v1_client, seed_workspace):
         "exception": 0,
         "stuck": 0,
         "blocker": 0,
+        "report": 0,
     }
     assert body["counts_by_status"] == {
         "new": 0,

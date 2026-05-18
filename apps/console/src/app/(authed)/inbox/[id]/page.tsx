@@ -1331,6 +1331,7 @@ function mockDetail(id: string): InboxItemDetail {
     type: "approval",
     status: "new",
     title: "Approve schema migration to v17",
+    headline: "Approve schema migration to v17",
     summary:
       "Migration drops the legacy `audit_v1` table and adds three new indexes on inbox_items. The play paused before applying.",
     intake_handle: "release_manager",
