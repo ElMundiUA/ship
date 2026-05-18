@@ -43,7 +43,6 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
-    Integer,
     Interval,
     SmallInteger,
     String,
@@ -343,13 +342,6 @@ class InboxItem(Base):
     )
     # clarification | improvement | failure | approval | exception
     type: Mapped[str] = mapped_column(String(length=16), nullable=False)
-    # decision_needed | failure | attention — triage grouping (ELS-147)
-    category: Mapped[str] = mapped_column(
-        String(length=32), nullable=False, server_default=text("'decision_needed'")
-    )
-    priority: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default=text("0")
-    )
     # clarifications | improvements | NULL
     source_table: Mapped[str | None] = mapped_column(
         String(length=32), nullable=True
