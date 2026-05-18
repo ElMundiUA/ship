@@ -1258,6 +1258,7 @@ function mockDetail(id: string): InboxItemDetail {
     category: "decision_needed",
     priority: 8,
     lane: "today",
+    resolution_mode: "freeform_only",
     payload: {
       migration_id: "v17",
       drops: ["audit_v1"],

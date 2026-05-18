@@ -3306,6 +3306,29 @@ export function applyInboxDisposition(
   );
 }
 
+/** ELS-159 — operator's structured pick on an action_items-bearing row.
+ *
+ *  Either `selections` (subset of `payload.action_items[].id`) or
+ *  `freeform` must be non-empty. The backend routes each selection
+ *  per its `kind` (Linear comment for `choice`, ticket creation for
+ *  `checkbox`, no-op for `ack`) and appends the freeform note (if any)
+ *  as a comment on the source ticket.
+ */
+export function decideInboxItem(
+  workspaceId: string,
+  itemId: string,
+  body: {
+    selections: string[];
+    freeform?: string | null;
+  },
+  token?: string,
+): Promise<InboxItemDetail> {
+  return apiFetch<InboxItemDetail>(
+    `/v1/workspaces/${workspaceId}/inbox/${encodeURIComponent(itemId)}/decide`,
+    { method: "POST", body, token },
+  );
+}
+
 export type InboxDiscussResponse = {
   thread_id: string;
   inbox_item_id: string;

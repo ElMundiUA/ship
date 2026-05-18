@@ -3,12 +3,20 @@
 Pure helpers used at intake, list projection, and in tests. Lane rules
 mirror the ticket architecture: server-side classification, client-side
 lane chip filtering over the returned ``lane`` field.
+
+Inbox Decision UI (ELS-158, 2026-05-18) extends the row payload with
+a small structured contract — see :class:`ActionItem` /
+:func:`derive_resolution_mode`. Agent finish handlers populate
+``payload.action_items`` so the Console renders one-click pills /
+checkboxes instead of a free-text textarea every time.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
+
+from pydantic import BaseModel, Field, field_validator
 
 if TYPE_CHECKING:
     from backend.app.db.models.inbox import InboxItem
@@ -21,6 +29,120 @@ InboxLane = Literal["now", "today", "whenever"]
 ACTIONABLE_CATEGORIES: frozenset[str] = frozenset(
     {"decision_needed", "failure", "attention"}
 )
+
+# ---------------------------------------------------------------------------
+# Inbox Decision UI (ELS-158) — structured action_items payload contract.
+#
+# Lives under ``inbox_items.payload`` as ``action_items: list[ActionItem]``
+# plus ``resolution_mode: ResolutionMode``. No new columns; rows without
+# these fields fall back to ``freeform_only`` (legacy textarea path).
+# ---------------------------------------------------------------------------
+
+ActionItemKind = Literal["choice", "checkbox", "ack"]
+ResolutionMode = Literal[
+    "single_choice",   # clarification — pick 1 of N or freeform
+    "multi_select",    # retro / improvements — check 0..N + Apply
+    "ack_only",        # digest / read-only — Acknowledge button
+    "freeform_only",   # legacy fallback — textarea only
+]
+
+
+class ActionItem(BaseModel):
+    """One renderable control inside an inbox row.
+
+    Agent's finish handler emits these in ``payload.action_items``. The
+    Console renders them as pills (``kind=choice``), checkboxes
+    (``kind=checkbox``), or an Acknowledge button (``kind=ack``); the
+    /decide endpoint routes side-effects per kind.
+
+    ``target_project_id`` is the Linear project a resulting child
+    ticket should land in. The auto-merger leaves it ``None`` (use the
+    inbox row's source ticket's project); retro / learning-capture set
+    it explicitly per item because each action_item may belong in a
+    different project.
+    """
+
+    id: str = Field(..., min_length=1, max_length=64)
+    kind: ActionItemKind
+    label: str = Field(..., min_length=1, max_length=160)
+    hint: str | None = Field(default=None, max_length=400)
+    default: bool = False
+    target_project_id: str | None = Field(default=None, max_length=64)
+
+    @field_validator("id")
+    @classmethod
+    def _id_no_whitespace(cls, v: str) -> str:
+        if any(ch.isspace() for ch in v):
+            raise ValueError("ActionItem.id cannot contain whitespace")
+        return v
+
+
+def parse_action_items(payload: dict[str, Any] | None) -> list[ActionItem]:
+    """Best-effort: read ``payload.action_items`` and return parsed
+    rows. Skip invalid entries silently — UI / endpoint never crashes
+    on a malformed agent emission, just falls through to freeform."""
+    if not payload:
+        return []
+    raw = payload.get("action_items")
+    if not isinstance(raw, list):
+        return []
+    out: list[ActionItem] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            out.append(ActionItem.model_validate(entry))
+        except Exception:  # noqa: BLE001 — best-effort; bad row ignored
+            continue
+    return out
+
+
+def derive_resolution_mode(
+    payload: dict[str, Any] | None,
+    item_type: str | None = None,
+) -> ResolutionMode:
+    """Compute the resolution mode for a row.
+
+    Order of preference:
+
+    1. Explicit ``payload.resolution_mode`` set by the agent — trust it
+       if it's a known literal.
+    2. Infer from ``action_items`` shape:
+       - any ``kind=checkbox`` → ``multi_select``
+       - all ``kind=choice`` → ``single_choice``
+       - all ``kind=ack`` → ``ack_only``
+    3. Empty / unknown → ``freeform_only`` (legacy textarea fallback,
+       what the Console rendered pre-ELS-158).
+
+    Pure function; safe to call on every row projection.
+    """
+    if payload:
+        explicit = payload.get("resolution_mode")
+        if explicit in (
+            "single_choice",
+            "multi_select",
+            "ack_only",
+            "freeform_only",
+        ):
+            return explicit  # type: ignore[return-value]
+
+    items = parse_action_items(payload)
+    if items:
+        kinds = {it.kind for it in items}
+        if "checkbox" in kinds:
+            return "multi_select"
+        if kinds == {"choice"}:
+            return "single_choice"
+        if kinds == {"ack"}:
+            return "ack_only"
+        # mixed — default to multi_select so the UI shows all of them
+        return "multi_select"
+
+    # Daily digest / learning-capture should ideally emit ack_only,
+    # but pre-Phase-2 they don't carry any action_items, so
+    # ``freeform_only`` is the safer default. P2-3 will change this.
+    _ = item_type  # reserved for future per-type defaults
+    return "freeform_only"
 
 # Align with Console ``stale-badge`` ERR band (7d).
 LANE_WHENEVER_AGE_DAYS = 7

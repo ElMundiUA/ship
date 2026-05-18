@@ -19,6 +19,7 @@ import { redirect } from "next/navigation";
 import { ApiUnavailable } from "@/components/api-unavailable";
 import { PageBody, PageHeader } from "@/components/app-shell";
 import { InboxMailboxListClient } from "@/components/inbox/inbox-mailbox-list-client";
+import { InboxActionPanel } from "@/components/inbox/inbox-action-panel";
 import { MailboxFooter } from "@/components/inbox/mailbox-footer";
 import { MarkdownBlock } from "@/components/markdown-block";
 import { cn } from "@/lib/cn";
@@ -385,7 +386,14 @@ function MailboxPreview({
         )}
       </div>
 
-      <footer className="border-t border-white/[0.06] px-6 py-4">
+      <footer className="space-y-3 border-t border-white/[0.06] px-6 py-4">
+        <InboxActionPanel
+          workspaceId={workspaceId}
+          item={detail}
+        />
+        {/* Legacy MailboxFooter still hosts snooze / reassign / dismiss
+            controls; the primary decide flow now lives in the panel
+            above. */}
         <MailboxFooter detail={detail} workspaceId={workspaceId} />
       </footer>
     </div>

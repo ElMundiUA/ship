@@ -161,6 +161,7 @@ export type InboxItem = {
   category: InboxCategory;
   priority: number;
   lane: InboxLane;
+  resolution_mode: InboxResolutionMode;
 };
 
 export type InboxItemDetail = InboxItem & {
@@ -203,6 +204,24 @@ export const INBOX_ACTIONABLE_CATEGORIES: InboxCategory[] = [
   "failure",
   "attention",
 ];
+
+/** Inbox Decision UI (ELS-158) — structured action_items contract. */
+export type InboxActionItemKind = "choice" | "checkbox" | "ack";
+
+export type InboxActionItem = {
+  id: string;
+  kind: InboxActionItemKind;
+  label: string;
+  hint?: string | null;
+  default?: boolean;
+  target_project_id?: string | null;
+};
+
+export type InboxResolutionMode =
+  | "single_choice"
+  | "multi_select"
+  | "ack_only"
+  | "freeform_only";
 
 export type InboxItemEvent = {
   id: string;

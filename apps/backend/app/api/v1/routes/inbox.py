@@ -167,6 +167,11 @@ class InboxItemOut(BaseModel):
     category: str
     priority: int
     lane: str
+    # Inbox Decision UI (ELS-158): server-derived rendering hint so
+    # the Console picks pills / checkboxes / ack / freeform without
+    # re-implementing the parser. Falls back to ``freeform_only`` on
+    # legacy rows.
+    resolution_mode: str
 
 
 class InboxItemEventOut(BaseModel):
@@ -259,6 +264,19 @@ class InboxEventAppendIn(BaseModel):
     payload: dict = Field(default_factory=dict)
 
 
+class InboxDecideIn(BaseModel):
+    """ELS-159 — operator's pick(s) on an action_items-bearing row.
+
+    Either ``selections`` (subset of ``payload.action_items[].id``)
+    OR ``freeform`` (free-text override) must be non-empty. Both
+    together is fine — selected actions fire side-effects AND the
+    freeform note is appended as a comment on the source ticket.
+    """
+
+    selections: list[str] = Field(default_factory=list, max_length=32)
+    freeform: str | None = Field(default=None, max_length=10_000)
+
+
 # ---------------------------------------------------------------------------
 # Cursor helpers
 # ---------------------------------------------------------------------------
@@ -324,6 +342,10 @@ def _to_item_out(
     *,
     lane: str,
 ) -> InboxItemOut:
+    from backend.app.services.inbox.classification import (
+        derive_resolution_mode as _drm,
+    )
+
     return InboxItemOut(
         id=item.id,
         workspace_id=item.workspace_id,
@@ -345,6 +367,7 @@ def _to_item_out(
         category=item.category,
         priority=item.priority,
         lane=lane,
+        resolution_mode=_drm(item.payload, item_type=item.type),
     )
 
 
@@ -1045,6 +1068,293 @@ async def post_disposition(
             failure.get("error"),
         )
 
+    await session.flush()
+    await session.refresh(item)
+    return await _build_detail(session, item)
+
+
+# ---------------------------------------------------------------------------
+# DECIDE — Inbox Decision UI (ELS-159)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/{item_id}/decide", response_model=InboxItemDetail)
+async def post_decide(
+    workspace_id: uuid.UUID,
+    item_id: uuid.UUID,
+    body: InboxDecideIn,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> InboxItemDetail:
+    """Operator's structured pick on a row carrying ``action_items``.
+
+    Each selection id is matched against
+    ``inbox_items.payload.action_items[].id``. Side-effects route by
+    the matched item's ``kind``:
+
+    - ``kind=choice``  → post a Linear comment with ``label`` on the
+      source ticket and strip ``needs:clarification`` if present.
+    - ``kind=checkbox`` → create a new Linear ticket via the bound
+      tracker (``title=label``, ``body=hint``,
+      ``project_id=target_project_id`` falling back to the source
+      ticket's project).
+    - ``kind=ack`` → no side-effect; just mark resolved.
+
+    A non-empty ``freeform`` is appended as a comment on the source
+    ticket (in addition to any selected actions). Empty selections +
+    non-empty freeform mirrors the legacy quick-reply path.
+
+    **Idempotency:** if the item is already ``resolved`` / ``dismissed``,
+    return the current detail with HTTP 200 and write a no-op event
+    (``action='resolved'``, ``payload.is_replay=True``). Operator
+    double-clicks do not create duplicate tickets.
+    """
+    from backend.app.services.inbox.classification import parse_action_items
+
+    item = await _load_item(session, workspace_id, item_id)
+    await _require_owner_or_admin(
+        session, workspace_id, auth.user.id, item
+    )
+
+    selections = list(body.selections or [])
+    freeform = (body.freeform or "").strip() or None
+    if not selections and not freeform:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "decide_empty",
+                "message": (
+                    "Provide at least one selection id or a freeform note."
+                ),
+            },
+        )
+
+    # Idempotent replay: caller already resolved this row. Echo back.
+    if item.status in ("resolved", "dismissed"):
+        session.add(
+            InboxItemEvent(
+                item_id=item.id,
+                actor_user_id=auth.user.id,
+                actor_kind="user",
+                action="resolved",
+                payload={
+                    "selections": selections,
+                    "freeform": freeform,
+                    "is_replay": True,
+                },
+            )
+        )
+        await session.flush()
+        return await _build_detail(session, item)
+
+    parsed = parse_action_items(item.payload)
+    by_id = {ai.id: ai for ai in parsed}
+    unknown = [sid for sid in selections if sid not in by_id]
+    if unknown:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "decide_unknown_selection",
+                "message": (
+                    f"Selection ids not in this item's action_items: {unknown}"
+                ),
+                "known": list(by_id.keys()),
+            },
+        )
+
+    # Resolve the bound tracker once — side-effects per kind reuse it.
+    from backend.app.core.config import get_settings as _gs
+    from backend.app.integrations.gateway.tracker import TicketRef as _TR
+    from backend.app.services.tracker_resolver import (
+        resolve_for_workspace as _resolve,
+    )
+
+    resolved_tracker = await _resolve(
+        session=session, settings=_gs(), workspace_id=workspace_id
+    )
+    source_ticket_ref: str | None = (
+        (item.payload or {}).get("ticket_ref")
+        if isinstance(item.payload, dict)
+        else None
+    )
+
+    side_effects: list[dict[str, Any]] = []
+    created_ticket_refs: list[str] = []
+
+    for sid in selections:
+        ai = by_id[sid]
+        try:
+            if ai.kind == "choice":
+                if resolved_tracker is None or not source_ticket_ref:
+                    side_effects.append(
+                        {"id": sid, "kind": "choice", "result": "skipped_no_tracker"}
+                    )
+                    continue
+                target = _TR(
+                    kind=resolved_tracker.kind,
+                    workspace_hint=None,
+                    id=source_ticket_ref,
+                )
+                comment_body = f"**Answer:** {ai.label}"
+                if ai.hint:
+                    comment_body += f"\n\n{ai.hint}"
+                await resolved_tracker.gateway.comment(
+                    target, body=comment_body
+                )
+                # Strip needs:clarification if present (best-effort).
+                try:
+                    await resolved_tracker.gateway.remove_label(
+                        target, "needs:clarification"
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+                side_effects.append(
+                    {"id": sid, "kind": "choice", "result": "comment_posted"}
+                )
+            elif ai.kind == "checkbox":
+                if resolved_tracker is None:
+                    side_effects.append(
+                        {"id": sid, "kind": "checkbox", "result": "skipped_no_tracker"}
+                    )
+                    continue
+                create_fn = getattr(
+                    resolved_tracker.gateway, "create_ticket", None
+                )
+                if create_fn is None:
+                    side_effects.append(
+                        {"id": sid, "kind": "checkbox", "result": "skipped_no_create"}
+                    )
+                    continue
+                pid = ai.target_project_id
+                if not pid and source_ticket_ref:
+                    snap_fn = getattr(
+                        resolved_tracker.gateway,
+                        "get_ticket_snapshot",
+                        None,
+                    )
+                    if snap_fn is not None:
+                        snap = await snap_fn(
+                            _TR(
+                                kind=resolved_tracker.kind,
+                                workspace_hint=None,
+                                id=source_ticket_ref,
+                            )
+                        )
+                        if snap:
+                            pid = snap.get("project_id")
+                created = await create_fn(
+                    title=ai.label,
+                    body=ai.hint or "",
+                    project_id=pid,
+                )
+                ref_str = (
+                    created.display_id
+                    if hasattr(created, "display_id")
+                    else getattr(created, "id", None)
+                )
+                if ref_str:
+                    created_ticket_refs.append(str(ref_str))
+                side_effects.append(
+                    {
+                        "id": sid,
+                        "kind": "checkbox",
+                        "result": "ticket_created",
+                        "ticket_ref": ref_str,
+                    }
+                )
+            elif ai.kind == "ack":
+                side_effects.append({"id": sid, "kind": "ack", "result": "acknowledged"})
+        except Exception as exc:  # noqa: BLE001 — log + continue
+            logger.warning(
+                "inbox.decide side-effect failed item=%s selection=%s: %s",
+                item.id, sid, exc,
+            )
+            side_effects.append(
+                {"id": sid, "kind": ai.kind, "result": "error", "error": str(exc)[:200]}
+            )
+
+    # Freeform note — append as a Linear comment on the source ticket.
+    if freeform:
+        if resolved_tracker is not None and source_ticket_ref:
+            try:
+                await resolved_tracker.gateway.comment(
+                    _TR(
+                        kind=resolved_tracker.kind,
+                        workspace_hint=None,
+                        id=source_ticket_ref,
+                    ),
+                    body=freeform,
+                )
+                side_effects.append({"kind": "freeform", "result": "comment_posted"})
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "inbox.decide freeform comment failed item=%s: %s",
+                    item.id, exc,
+                )
+                side_effects.append(
+                    {"kind": "freeform", "result": "error", "error": str(exc)[:200]}
+                )
+        else:
+            side_effects.append({"kind": "freeform", "result": "stored_only"})
+
+    # Mark resolved. Resolution value derives from item type so existing
+    # consumers (status filter, badge color) keep working.
+    resolution = "answered"
+    if item.type in ("failure", "blocker", "exception"):
+        resolution = "acknowledged"
+    elif item.type == "improvement":
+        resolution = "accepted"
+    elif item.type == "approval":
+        resolution = "approved"
+
+    now = datetime.now(timezone.utc)
+    item.status = "resolved"
+    item.resolution = resolution
+    item.resolved_at = now
+    item.resolved_by_user_id = auth.user.id
+    # Drop the action_items from payload — they were one-shot.
+    if isinstance(item.payload, dict) and "action_items" in item.payload:
+        new_payload = dict(item.payload)
+        new_payload.pop("action_items", None)
+        new_payload["decided"] = {
+            "selections": selections,
+            "freeform": freeform,
+            "side_effects": side_effects,
+            "created_ticket_refs": created_ticket_refs,
+        }
+        item.payload = new_payload
+
+    session.add(
+        InboxItemEvent(
+            item_id=item.id,
+            actor_user_id=auth.user.id,
+            actor_kind="user",
+            action="resolved",
+            payload={
+                "via": "decide",
+                "selections": selections,
+                "freeform": freeform,
+                "side_effects": side_effects,
+                "created_ticket_refs": created_ticket_refs,
+            },
+        )
+    )
+    session.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=auth.user.id,
+            actor_token_id=auth.token.id if auth.token else None,
+            action="inbox.decide",
+            target_kind="inbox_item",
+            target_id=str(item.id),
+            payload={
+                "type": item.type,
+                "resolution": resolution,
+                "selections": selections,
+                "created_ticket_refs": created_ticket_refs,
+            },
+        )
+    )
     await session.flush()
     await session.refresh(item)
     return await _build_detail(session, item)
