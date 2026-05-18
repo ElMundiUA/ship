@@ -28,7 +28,7 @@ import logging
 import re
 import uuid
 from dataclasses import dataclass
-from typing import Final
+from typing import Any, Final
 
 import httpx
 from sqlalchemy import select, text
@@ -94,10 +94,21 @@ WORKFLOW_FILE: Final[str] = "ship-agent-run.yml"
 CASCADE_LIMIT: Final[int] = 3
 CASCADE_WINDOW_S: Final[int] = 60
 
+# FSM ``stage_next`` values that keep the per-project WIP lock while
+# the same ticket's SDLC chain is still in flight. Anything else on
+# ``ready_next_step`` (``merged``, ``planning_done``, …) releases at
+# finish so a stalled sibling can dispatch. Keys mirror
+# ``_STAGE_TO_ROUTINE`` plus ``code_review`` (bundle id, not legacy
+# ``pr_review``).
+PROJECT_LOCK_IN_FLIGHT_STAGE_NEXT: Final[frozenset[str]] = frozenset(
+    set(_STAGE_TO_ROUTINE) | {"code_review"}
+)
+
+_PLANNING_ANCHOR_LABEL: Final[str] = "planning:anchor"
+
 # Per-project lock TTL. Holds across the full ticket lifecycle until
-# the next ``pull_request.closed merged=true`` webhook releases it
-# (``apps/backend/app/api/v1/routes/github_app.py`` →
-# ``_release_project_lock_for_merged_pr``). 24h is the belt-and-
+# merge webhook or finish-time release (``maybe_release_project_lock_on_finish``,
+# ``github_app._release_project_lock_for_merged_pr``). 24h is the belt-and-
 # braces upper bound — for a non-anchor ticket that legitimately
 # takes that long, the operator already has a human PR-review in
 # flight and can extend via re-trigger. Without this fallback an
@@ -238,6 +249,126 @@ async def release_lock(
         {"ws": workspace_id, "key": key},
     )
     return (result.rowcount or 0) > 0
+
+
+def should_release_project_lock(
+    *,
+    outcome: str,
+    stage_next: str | None,
+    labels: list[str] | None = None,
+) -> bool:
+    """Whether ``/agent-runs/finish`` should drop ``project:<id>``.
+
+    Anchors never hold the project lock — callers still skip release
+    when ``planning:anchor`` is present. Stall / clarify / OOS ends
+    sibling starvation; ``ready_next_step`` keeps the lock only while
+    ``stage_next`` names the next in-flight bundle stage.
+    """
+    if _PLANNING_ANCHOR_LABEL in (labels or []):
+        return False
+    if outcome in ("blocked", "needs_clarification", "out_of_scope"):
+        return True
+    if outcome == "noop":
+        return True
+    if outcome != "ready_next_step":
+        return False
+    if not stage_next:
+        return True
+    return stage_next not in PROJECT_LOCK_IN_FLIGHT_STAGE_NEXT
+
+
+async def maybe_release_project_lock_on_finish(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    ticket_ref: str,
+    outcome: str,
+    stage_next: str | None,
+    labels: list[str] | None = None,
+    project_id: str | None = None,
+    settings: Any | None = None,
+) -> bool:
+    """Best-effort ``project:<linear_project_id>`` release after finish.
+
+    Returns ``True`` when a lock row was deleted. Idempotent when the
+    lock was already released (merge webhook, prior finish, TTL).
+    """
+    if not should_release_project_lock(
+        outcome=outcome, stage_next=stage_next, labels=labels
+    ):
+        return False
+
+    resolved_project_id = project_id
+    if resolved_project_id is None or labels is None:
+        try:
+            from backend.app.core.config import get_settings as _gs
+
+            _settings = settings if settings is not None else _gs()
+            resolved = await tracker_resolver_module.resolve_for_workspace(
+                session=session,
+                settings=_settings,
+                workspace_id=workspace_id,
+            )
+            if resolved is None:
+                return False
+            snap_fn = getattr(resolved.gateway, "get_ticket_snapshot", None)
+            if snap_fn is None:
+                return False
+            ticket = TicketRef(
+                kind=resolved.kind,
+                workspace_hint=None,
+                id=ticket_ref,
+            )
+            snap = await snap_fn(ticket)
+            if not snap:
+                return False
+            if labels is None:
+                labels = list(snap.get("labels") or [])
+            if _PLANNING_ANCHOR_LABEL in labels:
+                return False
+            if not resolved_project_id and snap.get("project_id"):
+                resolved_project_id = str(snap["project_id"])
+        except Exception as exc:  # noqa: BLE001 — best-effort
+            log.debug(
+                "project_lock finish release lookup failed ws=%s ticket=%s err=%s",
+                workspace_id,
+                ticket_ref,
+                exc,
+            )
+            return False
+
+    if not resolved_project_id:
+        return False
+
+    released = await release_lock(
+        session,
+        workspace_id=workspace_id,
+        key=f"project:{resolved_project_id}",
+    )
+    if released:
+        log.info(
+            "agent_run.finish → released project lock ws=%s ticket=%s project=%s outcome=%s stage_next=%s",
+            workspace_id,
+            ticket_ref,
+            resolved_project_id,
+            outcome,
+            stage_next,
+        )
+        session.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                action="dispatch.project_lock_released",
+                target_kind="ticket",
+                target_id=ticket_ref,
+                payload={
+                    "via": "agent_run.finish",
+                    "outcome": outcome,
+                    "stage_next": stage_next,
+                    "project_id": resolved_project_id,
+                },
+            )
+        )
+    return released
 
 
 async def sweep_expired_locks(

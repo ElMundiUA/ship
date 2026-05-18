@@ -3891,9 +3891,28 @@ async def finish_agent_run(
         import asyncio as _asyncio
         from backend.app.services.dispatcher import (
             maybe_dispatch,
+            maybe_release_project_lock_on_finish,
             release_lock,
         )
 
+        finish_snapshot = None
+        if resolved is not None:
+            ref = _ticket_ref_from(resolved.kind, payload.ticket_ref)
+            finish_snapshot = await _try_ticket_snapshot(resolved.gateway, ref)
+        await maybe_release_project_lock_on_finish(
+            session,
+            workspace_id=workspace_id,
+            ticket_ref=payload.ticket_ref,
+            outcome=payload.outcome,
+            stage_next=payload.stage_next,
+            labels=list((finish_snapshot or {}).get("labels") or []),
+            project_id=(
+                str((finish_snapshot or {})["project_id"])
+                if (finish_snapshot or {}).get("project_id")
+                else None
+            ),
+            settings=settings,
+        )
         await release_lock(
             session,
             workspace_id=workspace_id,
