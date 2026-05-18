@@ -18,7 +18,9 @@ if TYPE_CHECKING:
 InboxCategory = Literal["decision_needed", "failure", "attention"]
 InboxLane = Literal["now", "today", "whenever"]
 
-ACTIONABLE_CATEGORIES: frozenset[str] = frozenset({"decision_needed", "failure"})
+ACTIONABLE_CATEGORIES: frozenset[str] = frozenset(
+    {"decision_needed", "failure", "attention"}
+)
 
 # Align with Console ``stale-badge`` ERR band (7d).
 LANE_WHENEVER_AGE_DAYS = 7

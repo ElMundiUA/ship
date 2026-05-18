@@ -188,10 +188,20 @@ export type InboxCountsResponse = {
   by_status: Record<string, number>;
 };
 
-/** Actionable inbox categories for `/inbox` list fetches. */
+/** Categories shown in the `/inbox` list.
+ *
+ * Pre-2026-05-18 this was decision_needed + failure only — reports
+ * and stuck-rows lived on the separate `/reports` page. Operator
+ * feedback: split surface drained the main inbox of context and the
+ * report digests are the same kind of "scan-once, click-acknowledge"
+ * letters every other type is. `attention` is back; only
+ * `dismiss_silently` (env-warning info notices, etc.) stays gated to
+ * the noise page.
+ */
 export const INBOX_ACTIONABLE_CATEGORIES: InboxCategory[] = [
   "decision_needed",
   "failure",
+  "attention",
 ];
 
 export type InboxItemEvent = {
