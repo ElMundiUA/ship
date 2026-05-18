@@ -368,6 +368,144 @@ def test_inbox_taxonomy_v2_idempotent_reupgrade(taxonomy_db) -> None:
             assert _row(conn, item_id) == snapshot[key]
 
 
+def test_inbox_taxonomy_v2_wrong_fsm_stage_not_auto_resolved(taxonomy_db) -> None:
+    """Recovery audit with mismatched fsm_stage must not resolve the blocker."""
+    now = datetime.now(timezone.utc)
+    ticket_ref = "ELS-TEST-WRONG-FSM"
+    item_id = uuid.uuid4()
+
+    with _connect(taxonomy_db) as conn:
+        ws_id = _insert_workspace(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO inbox_items (
+                    id, workspace_id, type, title, payload, status,
+                    intake_reason, created_at
+                )
+                VALUES (%s, %s, 'blocker', 'Wrong FSM', %s::jsonb, 'new',
+                        'agent_run_blocked', %s)
+                """,
+                (
+                    item_id,
+                    ws_id,
+                    json.dumps(
+                        {
+                            "ticket_ref": ticket_ref,
+                            "fsm_stage": "dev_implementation",
+                        }
+                    ),
+                    now - timedelta(hours=6),
+                ),
+            )
+            cur.execute(
+                """
+                INSERT INTO audit_log (
+                    workspace_id, action, target_id, payload, created_at
+                )
+                VALUES (%s, 'agent_run.finish', %s, %s::jsonb, %s)
+                """,
+                (
+                    ws_id,
+                    ticket_ref,
+                    json.dumps(
+                        {
+                            "outcome": "ready_next_step",
+                            "ticket_ref": ticket_ref,
+                            "fsm_stage": "qa_manual",
+                        }
+                    ),
+                    now - timedelta(hours=1),
+                ),
+            )
+
+    _upgrade_taxonomy()
+
+    with _connect(taxonomy_db) as conn:
+        row = _row(conn, item_id)
+    assert row["status"] == "new"
+    assert row["resolution"] is None
+
+
+def test_inbox_taxonomy_v2_preserves_human_terminal_resolution(taxonomy_db) -> None:
+    """Pre-resolved rows keep operator resolution through upgrade."""
+    now = datetime.now(timezone.utc)
+    user_id = uuid.uuid4()
+    item_id = uuid.uuid4()
+
+    with _connect(taxonomy_db) as conn:
+        ws_id = _insert_workspace(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO users (id, email, display_name)
+                VALUES (%s, %s, 'terminal-test')
+                """,
+                (user_id, f"terminal-{item_id.hex[:8]}@example.com"),
+            )
+            cur.execute(
+                """
+                INSERT INTO inbox_items (
+                    id, workspace_id, type, title, payload, status,
+                    resolution, resolved_at, resolved_by_user_id, created_at
+                )
+                VALUES (%s, %s, 'blocker', 'Human resolved', '{}'::jsonb,
+                        'resolved', 'answered', %s, %s, %s)
+                """,
+                (item_id, ws_id, now, user_id, now),
+            )
+
+    _upgrade_taxonomy()
+
+    with _connect(taxonomy_db) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT status, resolution, resolved_by_user_id
+                  FROM inbox_items
+                 WHERE id = %s
+                """,
+                (item_id,),
+            )
+            status, resolution, resolved_by = cur.fetchone()
+    assert status == "resolved"
+    assert resolution == "answered"
+    assert resolved_by == user_id
+
+
+def test_inbox_taxonomy_v2_category_check_rejects_invalid(taxonomy_db) -> None:
+    """CHECK on category rejects values outside the v2 enum."""
+    import psycopg
+
+    with _connect(taxonomy_db) as conn:
+        ws_id = _insert_workspace(conn)
+        _seed_fixtures(conn, ws_id)
+
+    _upgrade_taxonomy()
+
+    with _connect(taxonomy_db) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id FROM inbox_items
+                 WHERE workspace_id = %s
+                 LIMIT 1
+                """,
+                (ws_id,),
+            )
+            (item_id,) = cur.fetchone()
+        with pytest.raises(psycopg.errors.CheckViolation):
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE inbox_items
+                       SET category = 'not_a_category'
+                     WHERE id = %s
+                    """,
+                    (item_id,),
+                )
+
+
 @pytest.mark.asyncio
 async def test_migration_head_includes_taxonomy_columns(db_session, _migrated) -> None:
     """Sanity: session-scoped head migration exposes new columns."""
