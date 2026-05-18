@@ -35,6 +35,17 @@ describe("formatInboxHeadline", () => {
       }),
     ).toBe("agent blocked: validation");
   });
+
+  it("uses list-row ticket_ref and fsm_stage without full payload", () => {
+    expect(
+      formatInboxHeadline({
+        title: "agent blocked: validation",
+        type: "blocker",
+        ticket_ref: "ELS-99",
+        fsm_stage: "validation",
+      }),
+    ).toBe("ELS-99 validation bounced — restart or skip?");
+  });
 });
 
 describe("formatIntakeReasonTooltip", () => {

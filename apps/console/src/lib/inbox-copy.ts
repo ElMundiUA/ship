@@ -29,6 +29,8 @@ const AGENT_BLOCKED = /^agent blocked:\s*(.+)$/i;
 
 type HeadlineInput = Pick<InboxItem, "title" | "type"> & {
   payload?: Record<string, unknown>;
+  ticket_ref?: string | null;
+  fsm_stage?: string | null;
 };
 
 /**
@@ -37,7 +39,9 @@ type HeadlineInput = Pick<InboxItem, "title" | "type"> & {
  */
 export function formatInboxHeadline(item: HeadlineInput): string {
   const title = item.title.trim();
-  const payload = item.payload ?? {};
+  const payload: Record<string, unknown> = { ...(item.payload ?? {}) };
+  if (item.ticket_ref) payload.ticket_ref = item.ticket_ref;
+  if (item.fsm_stage) payload.fsm_stage = item.fsm_stage;
   const blocked = title.match(AGENT_BLOCKED);
   if (!blocked) return title;
 

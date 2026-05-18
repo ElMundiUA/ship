@@ -201,6 +201,9 @@ export type InboxItem = {
   resolution: InboxResolution | null;
   /** Count of ``payload.action_items`` for list-row decision chip. */
   action_item_count?: number;
+  /** From payload — powers ``formatInboxHeadline`` on list rows. */
+  ticket_ref?: string | null;
+  fsm_stage?: string | null;
 };
 
 export type InboxItemDetail = InboxItem & {

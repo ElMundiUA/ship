@@ -154,6 +154,8 @@ class InboxItemOut(BaseModel):
     resolved_at: datetime | None
     resolution: str | None
     action_item_count: int = 0
+    ticket_ref: str | None = None
+    fsm_stage: str | None = None
 
 
 class InboxItemEventOut(BaseModel):
@@ -300,7 +302,18 @@ def _action_item_count(payload: dict | None) -> int:
     return len(raw)
 
 
+def _headline_fields(payload: dict | None) -> tuple[str | None, str | None]:
+    """Expose copy-transform fields on list rows without full JSONB payload."""
+    p = payload or {}
+    ref = p.get("ticket_ref")
+    stage = p.get("fsm_stage")
+    ticket_ref = ref.strip() if isinstance(ref, str) and ref.strip() else None
+    fsm_stage = stage.strip() if isinstance(stage, str) and stage.strip() else None
+    return ticket_ref, fsm_stage
+
+
 def _to_item_out(item: InboxItem, owner: User | None) -> InboxItemOut:
+    ticket_ref, fsm_stage = _headline_fields(item.payload)
     return InboxItemOut(
         id=item.id,
         workspace_id=item.workspace_id,
@@ -320,6 +333,8 @@ def _to_item_out(item: InboxItem, owner: User | None) -> InboxItemOut:
         resolved_at=item.resolved_at,
         resolution=item.resolution,
         action_item_count=_action_item_count(item.payload),
+        ticket_ref=ticket_ref,
+        fsm_stage=fsm_stage,
     )
 
 

@@ -136,6 +136,27 @@ async def test_list_includes_action_item_count(v1_client, seed_workspace, db_ses
 
 
 @pytest.mark.asyncio
+async def test_list_includes_headline_fields_from_payload(
+    v1_client, seed_workspace, db_session
+):
+    _, raw, ws = seed_workspace
+    await _make_item(
+        db_session,
+        ws,
+        type="blocker",
+        title="agent blocked: validation",
+        payload={"ticket_ref": "ELS-99", "fsm_stage": "validation"},
+    )
+    res = await v1_client.get(
+        f"/v1/workspaces/{ws.id}/inbox", headers=_auth(raw)
+    )
+    assert res.status_code == 200, res.text
+    row = res.json()["items"][0]
+    assert row["ticket_ref"] == "ELS-99"
+    assert row["fsm_stage"] == "validation"
+
+
+@pytest.mark.asyncio
 async def test_list_empty_returns_zero_counts(v1_client, seed_workspace):
     _, raw, ws = seed_workspace
     res = await v1_client.get(
