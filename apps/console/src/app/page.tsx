@@ -24,7 +24,11 @@ import {
   listInboxItems,
   listWorkspaces,
 } from "@/lib/api/client";
-import type { InboxCountsResponse, InboxListResponse } from "@/lib/inbox-types";
+import {
+  INBOX_ACTIONABLE_CATEGORIES,
+  type InboxCountsResponse,
+  type InboxListResponse,
+} from "@/lib/inbox-types";
 import type { ApiWorkspace } from "@/lib/api/types";
 import { getSessionToken } from "@/lib/api/session";
 import { getResolvedWorkspaceId } from "@/lib/workspace-resolve.server";
@@ -180,9 +184,16 @@ async function loadLiveContext(
         listActivatedRepos(workspace.id, token).catch(
           () => [] as ApiActivatedRepo[],
         ),
-        listInboxItems(workspace.id, { statuses: ["new"], limit: 5 }, token).catch(
-          () => null as InboxListResponse | null,
-        ),
+        listInboxItems(
+          workspace.id,
+          {
+            statuses: ["new"],
+            categories: INBOX_ACTIONABLE_CATEGORIES,
+            sort: "priority_desc_created_asc",
+            limit: 5,
+          },
+          token,
+        ).catch(() => null as InboxListResponse | null),
         getInboxCounts(workspace.id, token).catch(
           () => null as InboxCountsResponse | null,
         ),
