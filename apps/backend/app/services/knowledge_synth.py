@@ -47,6 +47,7 @@ from backend.app.db.models.agent_memory import (
 from backend.app.db.models.agent_surface import Improvement
 from backend.app.db.models.inbox import InboxItem
 from backend.app.db.models.tenancy import AuditLog, Workspace
+from backend.app.services.inbox.headline import derive_headline
 from backend.app.services.agent.client import AgentClient, ChatMessage
 from backend.app.services.agent.embedding import embed_text
 from backend.app.services.knowledge_harvest import NOTE_KIND
@@ -372,8 +373,6 @@ async def _synthesise_bucket(
     # handler (services/inbox/side_effects.py) reads
     # source_table='bucket_articles' + payload.kind='auto_routed_draft'
     # to decide between publish (accept) and archive (dismiss).
-    from backend.app.services.inbox.headline import derive_headline
-
     summary_excerpt = decision.body_md.strip().splitlines()
     summary = " ".join(summary_excerpt[:3])[:1000] if summary_excerpt else None
     draft_title = (
