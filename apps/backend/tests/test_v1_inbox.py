@@ -378,6 +378,61 @@ async def test_list_includes_lane_and_category_fields(
     assert items[0]["priority"] == 10
 
 
+@pytest.mark.asyncio
+async def test_list_sort_priority_desc_created_asc(
+    v1_client, seed_workspace, db_session
+):
+    """AC4: higher priority first; ties broken by older created_at."""
+    _, raw, ws = seed_workspace
+    now = datetime.now(timezone.utc)
+    older = now - timedelta(hours=2)
+    newer = now - timedelta(hours=1)
+    low_old = await _make_item(
+        db_session,
+        ws,
+        type="improvement",
+        category="decision_needed",
+        priority=5,
+        created_at=older,
+    )
+    high_new = await _make_item(
+        db_session,
+        ws,
+        type="failure",
+        category="failure",
+        priority=10,
+        created_at=newer,
+    )
+    tie_old = await _make_item(
+        db_session,
+        ws,
+        type="clarification",
+        category="decision_needed",
+        priority=8,
+        created_at=older,
+    )
+    tie_new = await _make_item(
+        db_session,
+        ws,
+        type="approval",
+        category="decision_needed",
+        priority=8,
+        created_at=newer,
+    )
+    res = await v1_client.get(
+        f"/v1/workspaces/{ws.id}/inbox",
+        params={
+            "ownership": "all",
+            "sort": "priority_desc_created_asc",
+        },
+        headers=_auth(raw),
+    )
+    assert res.status_code == 200
+    ids = [item["id"] for item in res.json()["items"]]
+    assert ids.index(str(high_new.id)) < ids.index(str(low_old.id))
+    assert ids.index(str(tie_old.id)) < ids.index(str(tie_new.id))
+
+
 # ---------------------------------------------------------------------------
 # 6. detail with events
 # ---------------------------------------------------------------------------
