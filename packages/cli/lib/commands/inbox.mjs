@@ -34,6 +34,12 @@ import {
   resolveContext,
 } from "../agent_api.mjs";
 
+async function readStdinString() {
+  const chunks = [];
+  for await (const chunk of process.stdin) chunks.push(chunk);
+  return Buffer.concat(chunks).toString("utf8");
+}
+
 
 const VALID_TYPES = new Set([
   "report",
@@ -96,6 +102,34 @@ async function inboxCreateCommand(ctx, args) {
     console.error("Pass --body <markdown> or --body-file <path|->");
     process.exit(1);
   }
+  // ELS-164 — optional structured payload (action_items / resolution_mode
+  // for the Inbox Decision UI). When provided, it's merged into the
+  // request's ``payload`` field; the backend stitches it into the
+  // InboxItem's JSONB so the Console renders pills / checkboxes
+  // instead of a textarea.
+  let extraPayload = {};
+  if (opts.payloadFile) {
+    const fs = await import("node:fs/promises");
+    let raw;
+    try {
+      raw = opts.payloadFile === "-"
+        ? await readStdinString()
+        : await fs.readFile(opts.payloadFile, "utf8");
+    } catch (e) {
+      console.error(`--payload-file: cannot read: ${e.message}`);
+      process.exit(1);
+    }
+    try {
+      extraPayload = JSON.parse(raw);
+      if (!extraPayload || typeof extraPayload !== "object" || Array.isArray(extraPayload)) {
+        throw new Error("--payload-file must be a JSON object");
+      }
+    } catch (e) {
+      console.error(`--payload-file: ${e.message}`);
+      process.exit(1);
+    }
+  }
+
   const { baseUrl, token, workspaceId } = await resolveContext(opts, ctx);
 
   const result = await apiRequest(
@@ -109,6 +143,7 @@ async function inboxCreateCommand(ctx, args) {
       body,
       summary: opts.summary || null,
       ticket_ref: opts.ticketRef || null,
+      payload: extraPayload,
     },
   );
 
@@ -128,6 +163,7 @@ function parseCreateArgs(args) {
     bodyFile: null,
     summary: null,
     ticketRef: null,
+    payloadFile: null,
     workspace: null,
     baseUrl: null,
     json: false,
@@ -139,6 +175,7 @@ function parseCreateArgs(args) {
       consumeStringFlag(copy, "--title", out, "title") ||
       consumeStringFlag(copy, "--summary", out, "summary") ||
       consumeStringFlag(copy, "--ticket-ref", out, "ticketRef") ||
+      consumeStringFlag(copy, "--payload-file", out, "payloadFile") ||
       consumeStringFlag(copy, "--workspace", out, "workspace") ||
       consumeStringFlag(copy, "--base-url", out, "baseUrl") ||
       consumeBodyFlags(copy, out)

@@ -268,6 +268,12 @@ The comment MUST be **explicit questions**, not a status report
 (see `system.md` `outcome=needs_clarification` rules). Operator
 should know exactly what to answer.
 
+In addition to the markdown comment, the finish payload MUST
+include a structured `action_items` array with one
+`kind:"choice"` entry per option you listed in each question's
+"Options:" line. The Console renders these as pill-buttons so the
+operator clicks once instead of typing — see ELS-158/162.
+
 ```json
 {
   "outcome": "needs_clarification",
@@ -279,9 +285,31 @@ should know exactly what to answer.
     "signals": {...as above},
     "stall_reasons": [
       "migrations: `apps/backend/migrations/versions/0102_add_billing.py` touched"
-    ]
+    ],
+    "action_items": [
+      {"id": "q1-yes-apply",           "kind": "choice", "label": "yes-apply-on-merge"},
+      {"id": "q1-hold-for-staging",    "kind": "choice", "label": "hold-for-staging-first"},
+      {"id": "q1-revert-from-PR",      "kind": "choice", "label": "revert-from-PR"}
+    ],
+    "resolution_mode": "single_choice"
   }
 }
+```
+
+If you have BOTH Q1 and Q2 (e.g. migration + concurrent-PR
+overlap), use `resolution_mode: "multi_select"` and emit every
+option from every question in one flat list — each id prefixed
+with the question slug (`q1-…`, `q2-…`). The Console groups them
+visually:
+
+```json
+"action_items": [
+  {"id":"q1-yes-apply", "kind":"choice", "label":"yes-apply-on-merge"},
+  {"id":"q1-hold",      "kind":"choice", "label":"hold-for-staging-first"},
+  {"id":"q2-merge-272-first",   "kind":"choice", "label":"merge-this-PR-first"},
+  {"id":"q2-wait-for-siblings", "kind":"choice", "label":"wait-for-siblings"}
+],
+"resolution_mode": "multi_select"
 ```
 
 **Reserve `stall` for**: migrations touched, concurrent-PR conflict,

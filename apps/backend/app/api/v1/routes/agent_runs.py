@@ -1047,6 +1047,47 @@ async def get_next_task(
                             "ticket_ref": ticket_ref,
                             "fire_count": fire_count,
                             "url": str(pick.get("url") or "") or None,
+                            # ELS-163 — recovery options as one-click
+                            # pills in the Inbox Decision UI. The
+                            # /decide endpoint posts each label as a
+                            # comment on the source ticket; the
+                            # operator is signalling intent — Ship
+                            # doesn't auto-execute these yet (P2-2
+                            # follow-up will wire side-effects). For
+                            # now the comment is the contract.
+                            "action_items": [
+                                {
+                                    "id": "retry-stage",
+                                    "kind": "choice",
+                                    "label": "Retry this stage",
+                                    "hint": (
+                                        "Clear refire cap and re-dispatch "
+                                        f"{state}. Use only if you fixed "
+                                        "whatever was making it bounce."
+                                    ),
+                                },
+                                {
+                                    "id": "send-back-to-dev",
+                                    "kind": "choice",
+                                    "label": "Send back to dev_implementation",
+                                    "hint": (
+                                        "Dev rewrites against fresh main. "
+                                        "Use if the bounces are about "
+                                        "broken code, not broken pipeline."
+                                    ),
+                                },
+                                {
+                                    "id": "pause-routine",
+                                    "kind": "choice",
+                                    "label": "Pause routine — I'll handle manually",
+                                    "hint": (
+                                        "Mark ack'd; ticket stays where it "
+                                        "is. You move it past this stage "
+                                        "by hand."
+                                    ),
+                                },
+                            ],
+                            "resolution_mode": "single_choice",
                         },
                         status="new",
                         category="failure",
