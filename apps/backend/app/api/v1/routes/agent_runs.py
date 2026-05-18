@@ -1099,6 +1099,80 @@ def _collect_project_sections(payload: "FinishIn") -> list["ProjectSectionPatch"
     return out
 
 
+async def _release_project_lock_for_ticket(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    resolved: Any,
+    ticket_ref: str,
+    reason: str,
+) -> None:
+    """Free the ``project:<linear_project_id>`` lock when a ticket's
+    chain reaches a terminal-non-merge state.
+
+    The dispatcher's per-project WIP cap holds the lock for 24h
+    (``PROJECT_LOCK_TTL_S``) on the assumption that work continues
+    until PR merge releases it. That assumption breaks when the
+    chain stalls without a merge — outcome=blocked, =needs_clarification,
+    =out_of_scope — and the lock then blocks every other ticket in
+    the project for the remainder of its 24h TTL. Caught on
+    Ship-on-Ship/ELS-142 2026-05-18: ELS-142 dev_implementation
+    finished blocked at 00:35 (gh pr create failed on empty
+    commits), lock held until next day; for 6h the backstop
+    scan looped ``dispatch.project_busy`` for every other ticket
+    in QA Debt. Release the lock on terminal-non-merge outcomes
+    so siblings can dispatch.
+
+    Best-effort: missing project_id, missing snapshot fn, tracker
+    hiccup — all log and return without raising.
+    """
+    if not ticket_ref or resolved is None:
+        return
+    snap_fn = getattr(resolved.gateway, "get_ticket_snapshot", None)
+    if snap_fn is None:
+        return
+    try:
+        snap = await snap_fn(
+            TicketRef(kind=resolved.kind, workspace_hint=None, id=ticket_ref)
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(
+            "project_lock release: snapshot failed ws=%s ticket=%s err=%s",
+            workspace_id, ticket_ref, exc,
+        )
+        return
+    project_id = (snap or {}).get("project_id")
+    if not project_id:
+        return
+    deleted = (
+        await session.execute(
+            text(
+                "DELETE FROM agent_dispatch_locks "
+                "WHERE workspace_id = :ws AND key = :k RETURNING 1"
+            ),
+            {"ws": workspace_id, "k": f"project:{project_id}"},
+        )
+    ).all()
+    if deleted:
+        logger.info(
+            "agent_run.finish (%s) → released project lock "
+            "ws=%s ticket=%s project=%s",
+            reason, workspace_id, ticket_ref, project_id,
+        )
+        session.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                action="dispatch.project_lock_released",
+                target_kind="ticket",
+                target_id=ticket_ref,
+                payload={
+                    "via": reason,
+                    "project_id": str(project_id),
+                },
+            )
+        )
+
+
 async def _recent_finish_count_for_stage(
     session: AsyncSession,
     *,
@@ -3583,6 +3657,13 @@ async def finish_agent_run(
             )
         )
         actions.append("inbox:clarification")
+        await _release_project_lock_for_ticket(
+            session,
+            workspace_id=workspace_id,
+            resolved=resolved,
+            ticket_ref=payload.ticket_ref,
+            reason="needs_clarification",
+        )
 
     elif payload.outcome == "blocked":
         # No ticket move — operator sees the blocker via inbox. Snapshot
@@ -3612,6 +3693,13 @@ async def finish_agent_run(
             )
         )
         actions.append("inbox:blocker")
+        await _release_project_lock_for_ticket(
+            session,
+            workspace_id=workspace_id,
+            resolved=resolved,
+            ticket_ref=payload.ticket_ref,
+            reason="blocked",
+        )
 
     elif payload.outcome == "out_of_scope":
         if not payload.ticket_ref:
@@ -3627,6 +3715,13 @@ async def finish_agent_run(
         # it resolves the state by literal name, not via FSM map.
         await resolved.gateway.transition(ref, to_state="Done")
         actions.append("tracker:transition:Done")
+        await _release_project_lock_for_ticket(
+            session,
+            workspace_id=workspace_id,
+            resolved=resolved,
+            ticket_ref=payload.ticket_ref,
+            reason="out_of_scope",
+        )
 
     session.add(
         AuditLog(
