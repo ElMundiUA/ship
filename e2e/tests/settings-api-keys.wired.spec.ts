@@ -182,6 +182,7 @@ test.describe("settings: API keys (wired, serial)", () => {
     const minted = rowsAfterMint.find((t) => t.name === patName);
     expect(minted?.id).toBeTruthy();
     const tokenId = minted!.id;
+    mintedTokenIds.push(tokenId);
 
     await page.goto(apiKeysUrl(ws.id));
     const row = page.locator("tr").filter({ hasText: patName });
