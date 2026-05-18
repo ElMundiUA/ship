@@ -23,7 +23,7 @@
  */
 
 import { useRouter } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { cn } from "@/lib/cn";
 import { decideInboxItem } from "@/lib/api/client";
@@ -79,6 +79,8 @@ export function InboxActionPanel({ workspaceId, item, onResolved }: Props) {
   const [freeformOpen, setFreeformOpen] = useState(mode === "freeform_only");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const freeformRef = useRef<HTMLInputElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
 
   const isTerminal = item.status === "resolved" || item.status === "dismissed";
 
@@ -105,8 +107,94 @@ export function InboxActionPanel({ workspaceId, item, onResolved }: Props) {
     }
   };
 
+  // ELS-167 keyboard shortcuts:
+  //   1-9 → pick / toggle the Nth visible item
+  //   Space → toggle current checkbox (multi_select)
+  //   Enter → Apply / Acknowledge / Send freeform
+  //   e → open + focus freeform input
+  //   Esc → blur freeform / collapse it
+  //
+  // We deliberately listen on `document` so the operator doesn't have
+  // to click the panel first. Bail out when the focused element is an
+  // editable surface ELSEWHERE on the page (e.g., a Linear textarea
+  // inside the preview pane) — only the freeform input on this panel
+  // is "ours".
+  useEffect(() => {
+    if (isTerminal) return;
+
+    function shouldHijack(target: EventTarget | null): boolean {
+      if (!(target instanceof HTMLElement)) return true;
+      // Our own freeform input is intentional — Enter still submits.
+      if (target === freeformRef.current) return true;
+      // Any OTHER editable surface owns its keystrokes.
+      const tag = target.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") {
+        return false;
+      }
+      if (target.isContentEditable) return false;
+      return true;
+    }
+
+    function onKey(e: KeyboardEvent) {
+      if (busy) return;
+      if (!shouldHijack(e.target)) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+      // Freeform input case — only Enter submits, Esc collapses.
+      if (e.target === freeformRef.current) {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          freeformRef.current?.blur();
+          if (mode !== "freeform_only") setFreeformOpen(false);
+        }
+        return; // Enter is handled by the input's onKeyDown
+      }
+
+      // `e` → open freeform and focus it.
+      if (e.key === "e" || e.key === "E") {
+        e.preventDefault();
+        setFreeformOpen(true);
+        // Defer focus until input mounts after state flush.
+        requestAnimationFrame(() => freeformRef.current?.focus());
+        return;
+      }
+
+      // Digit picks the Nth visible action_item.
+      if (e.key >= "1" && e.key <= "9") {
+        const idx = parseInt(e.key, 10) - 1;
+        if (idx < 0 || idx >= items.length) return;
+        const ai = items[idx];
+        if (mode === "single_choice" && ai.kind === "choice") {
+          e.preventDefault();
+          void submit([ai.id]);
+        } else if (mode === "multi_select") {
+          e.preventDefault();
+          const next = new Set(picked);
+          if (next.has(ai.id)) next.delete(ai.id);
+          else next.add(ai.id);
+          setPicked(next);
+        }
+        return;
+      }
+
+      // Enter → Apply / Acknowledge.
+      if (e.key === "Enter") {
+        e.preventDefault();
+        if (mode === "multi_select") {
+          if (picked.size > 0) void submit(Array.from(picked));
+        } else if (mode === "ack_only") {
+          void submit(items.length ? [items[0].id] : [], "");
+        }
+        return;
+      }
+    }
+
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [busy, isTerminal, items, mode, picked, submit]);
+
   return (
-    <div className="space-y-3">
+    <div ref={panelRef} className="space-y-3">
       {mode === "single_choice" && (
         <SingleChoiceRow
           items={items.filter((i) => i.kind === "choice")}
@@ -144,12 +232,30 @@ export function InboxActionPanel({ workspaceId, item, onResolved }: Props) {
         disabled={busy || isTerminal}
         onSubmit={() => submit(Array.from(picked), freeform)}
         forced={mode === "freeform_only"}
+        inputRef={freeformRef}
       />
+
+      {!isTerminal && (mode === "single_choice" || mode === "multi_select" || mode === "ack_only") && (
+        <KeyboardHint mode={mode} />
+      )}
 
       {error && (
         <p className="text-[11px] font-semibold text-coral">{error}</p>
       )}
     </div>
+  );
+}
+
+function KeyboardHint({ mode }: { mode: InboxResolutionMode }) {
+  const parts: string[] = [];
+  if (mode === "single_choice") parts.push("1-9 pick");
+  if (mode === "multi_select") parts.push("1-9 toggle", "⏎ Apply");
+  if (mode === "ack_only") parts.push("⏎ Acknowledge");
+  parts.push("e edit");
+  return (
+    <p className="text-[10px] font-mono uppercase tracking-wider text-white/30">
+      {parts.join(" · ")}
+    </p>
   );
 }
 
@@ -175,15 +281,20 @@ function SingleChoiceRow({
   }
   return (
     <div className="flex flex-wrap gap-2">
-      {items.map((i) => (
+      {items.map((i, idx) => (
         <button
           key={i.id}
           type="button"
           disabled={disabled}
           onClick={() => onPick(i.id)}
           title={i.hint || undefined}
-          className="rounded-full border border-white/15 bg-white/[0.04] px-3 py-1 text-xs font-semibold text-white transition hover:border-aqua hover:bg-aqua/15 hover:text-aqua disabled:opacity-40"
+          className="group inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/[0.04] px-3 py-1 text-xs font-semibold text-white transition hover:border-aqua hover:bg-aqua/15 hover:text-aqua disabled:opacity-40"
         >
+          {idx < 9 && (
+            <span className="font-mono text-[9px] font-bold text-white/40 group-hover:text-aqua/70">
+              {idx + 1}
+            </span>
+          )}
           {i.label}
         </button>
       ))}
@@ -220,7 +331,7 @@ function MultiSelectList({
   return (
     <div className="space-y-2">
       <ul className="space-y-1">
-        {items.map((i) => (
+        {items.map((i, idx) => (
           <li
             key={i.id}
             className={cn(
@@ -236,6 +347,11 @@ function MultiSelectList({
               disabled={disabled}
               className="mt-0.5 h-3.5 w-3.5 cursor-pointer accent-aqua disabled:cursor-not-allowed"
             />
+            {idx < 9 && (
+              <span className="mt-0.5 inline-block w-4 select-none font-mono text-[9px] font-bold text-white/30">
+                {idx + 1}
+              </span>
+            )}
             <label
               htmlFor={`ai-${i.id}`}
               className={cn(
@@ -280,6 +396,7 @@ function FreeformRow({
   disabled,
   onSubmit,
   forced,
+  inputRef,
 }: {
   open: boolean;
   setOpen: (v: boolean) => void;
@@ -288,12 +405,16 @@ function FreeformRow({
   disabled: boolean;
   onSubmit: () => void;
   forced: boolean;
+  inputRef?: React.MutableRefObject<HTMLInputElement | null>;
 }) {
   if (!open && !forced) {
     return (
       <button
         type="button"
-        onClick={() => setOpen(true)}
+        onClick={() => {
+          setOpen(true);
+          requestAnimationFrame(() => inputRef?.current?.focus());
+        }}
         className="text-[11px] font-semibold uppercase tracking-wide text-white/55 transition hover:text-white"
       >
         ▸ Or answer in your own words
@@ -303,6 +424,7 @@ function FreeformRow({
   return (
     <div className="flex items-center gap-2">
       <input
+        ref={inputRef}
         type="text"
         value={value}
         onChange={(e) => setValue(e.target.value)}
