@@ -23,6 +23,7 @@ import { InboxActionPanel } from "@/components/inbox/inbox-action-panel";
 import { MailboxFooter } from "@/components/inbox/mailbox-footer";
 import { MarkdownBlock } from "@/components/markdown-block";
 import { cn } from "@/lib/cn";
+import { relativeTime } from "@/lib/format";
 import {
   ApiHttpError,
   getInboxItem,
@@ -348,6 +349,13 @@ function MailboxPreview({
       <header className="border-b border-white/[0.06] px-6 py-4">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] uppercase tracking-[0.18em] text-white/45">
           <span>{meta?.label ?? detail.type}</span>
+          <span className="text-white/15">·</span>
+          <span
+            className="text-white/55 normal-case tracking-normal"
+            title={new Date(detail.created_at).toLocaleString()}
+          >
+            received {relativeTime(detail.created_at)}
+          </span>
           {isClosed && (
             <>
               <span className="text-white/15">·</span>
