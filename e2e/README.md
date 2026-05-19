@@ -28,7 +28,7 @@ Secret-free headless checks for **`apps/landing`** (marketing site on port **300
 ```bash
 npm run landing:build
 npm run landing:start   # separate terminal — listens on :3000
-cd e2e && npm ci && npx playwright install chromium
+cd e2e && npm ci --workspaces=false && npx playwright install chromium
 npx playwright test --project=landing
 # or from repo root:
 npm run e2e:landing
