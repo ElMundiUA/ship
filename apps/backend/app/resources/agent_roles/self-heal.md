@@ -33,16 +33,41 @@ tick gets the next thing.
 `GET /v1/workspaces/{ws}/audit-log?action=agent_run.dispatch&limit=50`
 plus `?action=agent_run.finish&limit=50`. Cross-reference: any
 ticket with `agent_run.dispatch` older than the lock TTL (60 min)
-that has NO matching `agent_run.finish`?
+that has **zero** `agent_run.finish` rows in the same window? That
+is a true orphaned dispatch.
 
-- That's an orphaned dispatch — the runner crashed or the agent
-  exited without calling `/finish`. Lock self-expires (TTL guard),
-  but the **ticket state** is in limbo: stage label says one
-  thing, no PR exists.
-- Fix: post one Linear comment summarising what was attempted
-  (from the agent's last comment if any), and either (a) move
-  the ticket back to the previous stage if no artefact landed, or
-  (b) leave it for the operator and inbox-letter a blocker.
+**Disambiguate before titling the letter.** A ticket can also
+finish `outcome=blocked` repeatedly — the agent IS calling
+`/finish`, the chain is just stuck on a real blocker. Pre-fix the
+classifier filed both states as "orphaned code_review dispatch
+(no agent_run.finish)" — misleading the operator into checking
+runner health when the actual problem was a developer agent
+unable to converge on a fix (Ship-on-Ship/ELS-111 2026-05-19,
+5 reviewer passes, same AC3 blocker, mis-titled as orphan).
+
+Classify by counting finishes for the same ticket in the lookback:
+
+- `finish_count == 0` → **orphaned dispatch.** Runner crashed /
+  exited mid-run / agent exited without calling `/finish`. Title:
+  `"{TICKET}: orphaned {stage} dispatch (runner exit without finish)"`.
+  Fix: post one Linear comment summarising what was attempted, and
+  either (a) move the ticket back to the previous stage if no
+  artefact landed, or (b) leave it for the operator and inbox-
+  letter a blocker.
+
+- `finish_count > 0` AND all finishes are `outcome=blocked` →
+  **agent stuck in a real blocker loop** (not orphaned). Title:
+  `"{TICKET}: {stage} blocked {N}× — agent not converging"`. Body:
+  paste the reviewer/agent's last 1-2 blocker descriptions verbatim
+  so the operator sees what the agent keeps missing. Fix: surface
+  to operator with action_items per the schema above; do NOT
+  retitle this as orphaned.
+
+- `finish_count > 0` AND at least one is `ready_next_step` →
+  the chain DID make progress. Skip; this is normal in-flight.
+
+The wrong label costs the operator a debugging detour — pick the
+correct one or skip the row.
 
 ### Phase 2 — Stuck Linear tickets
 
