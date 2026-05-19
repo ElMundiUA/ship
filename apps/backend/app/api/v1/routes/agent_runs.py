@@ -1290,22 +1290,35 @@ async def _recent_finish_count_for_stage(
     human". A mix with a success in the middle means the ticket
     progressed and we're on a fresh iteration.
 
+    **Cross-stage reset (ELS-FSM 2026-05-19):** the pre-fix query
+    filtered the audit pull by ``fsm_stage`` for ALL rows, so a
+    ``validation`` finish with ``outcome=ready_next_step`` (which
+    cascaded into ``code_review``) was invisible to the code_review
+    cap counter — the cap stayed armed across the cross-stage
+    success. Caught on Ship-on-Ship/ELS-7 2026-05-18: an
+    auto_merge bounce chain hit cap=3 even though intervening
+    validation+code_review finishes had `ready_next_step`. Fix:
+    same-stage filter for blocked rows (cap is per-stage), but
+    accept ANY-stage ``ready_next_step`` for the same ticket as a
+    reset signal.
+
     Counts rows with both ``target_id == ticket_ref`` (canonical) and
     ``payload.ticket_ref == ticket_ref`` (legacy) — keeps the cap
     honest across a deploy boundary.
     """
     cutoff = datetime.now(timezone.utc) - window
-    # Pull both ``agent_run.finish`` rows AND
-    # ``agent_run.clarification_resolved`` markers for this (ws,
-    # stage, ticket) within the window, newest first. Walk until we
-    # hit either an ``outcome=ready_next_step`` finish OR a
-    # clarification-resolved marker — both reset the counter. Only
-    # the consecutive blocked / needs_clarification finishes BEFORE
-    # that reset count.
+    # Pull ANY-stage finish + clarification-resolved markers for this
+    # (workspace, ticket) within the window, newest first. The walk
+    # below decides per-row:
+    #   - ``clarification_resolved`` → reset (operator answered)
+    #   - any-stage ``ready_next_step`` → reset (chain advanced)
+    #   - same-stage non-success → increment counter
+    #   - cross-stage non-success → skip (different cap bucket)
     stmt = (
         select(
             AuditLog.action,
             AuditLog.payload["outcome"].astext,
+            AuditLog.payload["fsm_stage"].astext,
             AuditLog.id,
         )
         .where(
@@ -1318,21 +1331,24 @@ async def _recent_finish_count_for_stage(
                 (AuditLog.target_id == ticket_ref)
                 | (AuditLog.payload["ticket_ref"].astext == ticket_ref)
             ),
-            AuditLog.payload["fsm_stage"].astext == fsm_stage,
         )
         .order_by(AuditLog.created_at.desc())
     )
     rows = (await session.execute(stmt)).all()
     consecutive_blocked = 0
-    for action, outcome, _ in rows:
-        # Either a successful finish or an operator-answered
-        # clarification resets the counter — both mean "the chain
-        # made forward progress; the stretch of blocked attempts
-        # before this point is no longer the current loop".
+    for action, outcome, row_stage, _ in rows:
+        # Either a successful finish (any stage — the chain moved
+        # forward) or an operator-answered clarification resets the
+        # counter. The pre-fix per-stage filter missed cross-stage
+        # successes and over-counted the cap.
         if action == "agent_run.clarification_resolved":
             break
         if outcome == "ready_next_step":
             break
+        if row_stage != fsm_stage:
+            # Non-success finish on a different stage doesn't add to
+            # this stage's cap; skip it without resetting either.
+            continue
         consecutive_blocked += 1
     return consecutive_blocked
 
