@@ -68,20 +68,38 @@ async def _insert_lock(
     key,
     run_id=None,
     age_minutes=70,
-) -> uuid.UUID:
-    """Insert a lock with `claimed_at` aged into the past."""
-    claimed_at = datetime.now(timezone.utc) - timedelta(minutes=age_minutes)
-    expires_at = claimed_at + timedelta(hours=24)
+    claimed_at: datetime | None = None,
+) -> tuple[uuid.UUID, datetime]:
+    """Insert a lock with ``claimed_at`` aged into the past.
+
+    Production locks omit ``run_id`` (audit_log.id is bigint; lock.run_id
+    is uuid — see dispatcher ELS-149 note). Tests use the project_id
+    fallback in the sweeper unless explicitly passing a uuid run_id.
+    """
+    when = claimed_at or (
+        datetime.now(timezone.utc) - timedelta(minutes=age_minutes)
+    )
+    expires_at = when + timedelta(hours=24)
     lock = AgentDispatchLock(
         workspace_id=workspace_id,
         key=key,
-        claimed_at=claimed_at,
+        claimed_at=when,
         expires_at=expires_at,
         run_id=run_id,
     )
     db_session.add(lock)
     await db_session.flush()
-    return lock.id
+    return lock.id, when
+
+
+async def _align_dispatch_to_lock(
+    db_session, *, dispatch_id: int, claimed_at: datetime
+) -> None:
+    """Place the owning dispatch audit row in the sweeper's ±5 min window."""
+    await db_session.execute(
+        text("UPDATE audit_log SET created_at = :ts WHERE id = :id"),
+        {"ts": claimed_at, "id": dispatch_id},
+    )
 
 
 @pytest.mark.asyncio
@@ -89,23 +107,18 @@ async def test_stale_lock_with_dead_chain_is_released(db_session) -> None:
     """The canonical leak case: project_lock 60+ min old, no recent
     agent activity for the owning ticket → sweep releases + audits."""
     ws = await _make_workspace(db_session)
-    run_id = await _insert_dispatch_audit(
+    dispatch_id = await _insert_dispatch_audit(
         db_session, workspace_id=ws, ticket_ref="PAC-32"
     )
-    # Backdate the dispatch row so the activity-window check fails too.
-    await db_session.execute(
-        text(
-            "UPDATE audit_log SET created_at = NOW() - INTERVAL '90 minutes' "
-            "WHERE id = :id"
-        ),
-        {"id": run_id},
-    )
-    await _insert_lock(
+    _lock_id, claimed_at = await _insert_lock(
         db_session,
         workspace_id=ws,
         key="project:proj-xyz",
-        run_id=run_id,
+        run_id=None,
         age_minutes=70,
+    )
+    await _align_dispatch_to_lock(
+        db_session, dispatch_id=dispatch_id, claimed_at=claimed_at
     )
 
     released = await sweep_dangling_project_locks(db_session)
@@ -132,7 +145,7 @@ async def test_stale_lock_with_dead_chain_is_released(db_session) -> None:
     payload = sweep_rows[0].payload
     assert payload["lock_key"] == "project:proj-xyz"
     assert payload["reason"] == "no_recent_activity"
-    assert payload["owning_run_id"] == str(run_id)
+    assert payload["owning_run_id"] == str(dispatch_id)
     assert sweep_rows[0].target_id == "PAC-32"
 
 
@@ -143,18 +156,23 @@ async def test_stale_lock_with_active_chain_is_left_alone(
     """A long-running chain (recent ``agent_run.dispatch`` on the
     same ticket) means the lock is still load-bearing — don't release."""
     ws = await _make_workspace(db_session)
-    run_id = await _insert_dispatch_audit(
-        db_session, workspace_id=ws, ticket_ref="PAC-99"
+    dispatch_id = await _insert_dispatch_audit(
+        db_session,
+        workspace_id=ws,
+        ticket_ref="PAC-99",
+        project_id="proj-active",
     )
-    # The owning dispatch is old, but a more recent dispatch on the
-    # same ticket (cascade) keeps the chain alive.
-    await db_session.execute(
-        text(
-            "UPDATE audit_log SET created_at = NOW() - INTERVAL '70 minutes' "
-            "WHERE id = :id"
-        ),
-        {"id": run_id},
+    _lock_id, claimed_at = await _insert_lock(
+        db_session,
+        workspace_id=ws,
+        key="project:proj-active",
+        run_id=None,
+        age_minutes=70,
     )
+    await _align_dispatch_to_lock(
+        db_session, dispatch_id=dispatch_id, claimed_at=claimed_at
+    )
+    # Recent dispatch on the same ticket keeps the chain alive.
     db_session.add(
         AuditLog(
             workspace_id=ws,
@@ -168,14 +186,6 @@ async def test_stale_lock_with_active_chain_is_left_alone(
         )
     )
     await db_session.flush()
-
-    await _insert_lock(
-        db_session,
-        workspace_id=ws,
-        key="project:proj-active",
-        run_id=run_id,
-        age_minutes=70,
-    )
 
     released = await sweep_dangling_project_locks(db_session)
     assert released == 0
@@ -195,22 +205,18 @@ async def test_non_stale_lock_is_skipped(db_session) -> None:
     """A young lock (claimed_at < 60 min ago) is below the floor and
     must be ignored even if the chain looks idle."""
     ws = await _make_workspace(db_session)
-    run_id = await _insert_dispatch_audit(
-        db_session, workspace_id=ws, ticket_ref="PAC-1"
+    dispatch_id = await _insert_dispatch_audit(
+        db_session, workspace_id=ws, ticket_ref="PAC-1", project_id="proj-young"
     )
-    await db_session.execute(
-        text(
-            "UPDATE audit_log SET created_at = NOW() - INTERVAL '90 minutes' "
-            "WHERE id = :id"
-        ),
-        {"id": run_id},
-    )
-    await _insert_lock(
+    _lock_id, claimed_at = await _insert_lock(
         db_session,
         workspace_id=ws,
         key="project:proj-young",
-        run_id=run_id,
+        run_id=None,
         age_minutes=15,  # well under the 60-min floor
+    )
+    await _align_dispatch_to_lock(
+        db_session, dispatch_id=dispatch_id, claimed_at=claimed_at
     )
 
     released = await sweep_dangling_project_locks(db_session)
