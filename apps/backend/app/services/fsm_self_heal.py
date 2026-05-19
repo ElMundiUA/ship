@@ -409,28 +409,42 @@ async def _looks_like_runner_fail_loop(
     ticket in the same window, that path owns the operator
     surfacing — bail.
     """
-    # ``agent_run.refire_capped`` fires once per 24h cap window (the
-    # picker has an ``already_capped`` short-circuit). Use the wider
-    # window for the exclusion check, not the 4h runner-fail window,
-    # so a cap that triggered 8h ago still suppresses C2 — the
-    # refire-cap blocker letter is still open and the ticket is
-    # still in cap purgatory.
-    cap_exclusion_cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
-    refire_capped = (
+    cutoff = datetime.now(timezone.utc) - RUNNER_FAIL_WINDOW
+    # Picker-null exclusion. The dispatcher's ``_next_task`` walks
+    # several gates before handing the ticket to the runner; when one
+    # of them rejects, it releases the lock and emits a
+    # ``dispatch.project_lock_released`` audit row with
+    # ``payload.via`` set to ``picker_<reason>``:
+    #
+    #   - ``picker_refire_capped`` — refire cap hit
+    #   - ``picker_overlay_frozen`` — Linear project is still in the
+    #     ``planning`` state (Drafts)
+    #   - ``picker_priority_skipped`` — workspace priority filter
+    #     excluded the ticket
+    #
+    # In all of these cases the runner DID start, called
+    # ``_next_task``, got told "no ticket for you", and exited cleanly
+    # without ``/finish``. C2's counter sees N dispatches + 0 finishes
+    # and would file a duplicate ``runner_fail_loop`` letter — but the
+    # refire-cap path / project-priority path / overlay path already
+    # owns operator-side surfacing for those tickets. Bail when ANY
+    # picker-null release happened for this ticket inside the C2
+    # window.
+    picker_null = (
         await session.execute(
             select(AuditLog.id)
             .where(
                 AuditLog.workspace_id == workspace_id,
-                AuditLog.action == "agent_run.refire_capped",
+                AuditLog.action == "dispatch.project_lock_released",
                 AuditLog.target_id == ticket_ref,
-                AuditLog.created_at >= cap_exclusion_cutoff,
+                AuditLog.created_at >= cutoff,
+                AuditLog.payload["via"].astext.like("picker_%"),
             )
             .limit(1)
         )
     ).first()
-    if refire_capped is not None:
+    if picker_null is not None:
         return False
-    cutoff = datetime.now(timezone.utc) - RUNNER_FAIL_WINDOW
     dispatch_count = (
         await session.execute(
             select(AuditLog.id)

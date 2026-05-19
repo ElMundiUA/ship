@@ -171,50 +171,95 @@ async def test_finishes_via_payload_ticket_ref_also_count(
     )
 
 
+def _picker_null_release(
+    workspace_id, ticket_ref: str, *, ago: timedelta, via: str,
+) -> AuditLog:
+    """``dispatch.project_lock_released`` row emitted by
+    ``_release_project_lock_for_ticket`` when the picker rejected
+    the ticket. ``via`` shape: ``picker_<reason>``."""
+    return AuditLog(
+        workspace_id=workspace_id,
+        action="dispatch.project_lock_released",
+        target_kind="ticket",
+        target_id=ticket_ref,
+        created_at=datetime.now(timezone.utc) - ago,
+        payload={"via": via, "project_id": "test-project-id"},
+    )
+
+
+@pytest.mark.parametrize(
+    "via",
+    [
+        "picker_refire_capped",
+        "picker_overlay_frozen",
+        "picker_priority_skipped",
+    ],
+)
 @pytest.mark.asyncio
-async def test_refire_capped_ticket_is_excluded_from_runner_fail(
-    db_session, seed_workspace
+async def test_picker_null_release_excludes_ticket_from_runner_fail(
+    db_session, seed_workspace, via,
 ) -> None:
-    """False-positive shape caught on Ship-on-Ship 2026-05-19 right
-    after C2 first deploy. ELS-117 / ELS-119 / ELS-146 / ELS-155 each
-    had 3+ ``agent_run.dispatch`` rows with zero matching ``finish``
-    in the 4h window — looks like a runner-fail to C2's counter —
-    but actually the workflow *did* fire, shipctl called
-    ``_next_task``, and the picker returned null because
-    ``agent_run.refire_capped`` had already triggered. The runner
-    exited correctly with no work to do; not a crash. The refire-cap
-    path owns the operator surfacing with its own blocker letter,
-    so C2 must bail."""
+    """False-positive shapes caught on Ship-on-Ship 2026-05-19 right
+    after C2 first deploys:
+
+    - ``picker_refire_capped`` — ELS-117/119/146 (cap exhausted,
+      operator already has refire-cap letter with action_items)
+    - ``picker_overlay_frozen`` — ELS-155 (Linear project in
+      ``planning`` state / Drafts, picker freezes by design)
+    - ``picker_priority_skipped`` — same operator-driven gate
+
+    All three look identical to C2's counter (N dispatches, 0
+    finishes) but the runner ISN'T crashing — the picker is
+    legitimately bailing. The corresponding paths already file
+    their own operator-facing artefacts; C2 duplicating is noise.
+    Bail when ANY ``picker_*`` lock release exists in the 4h C2
+    window."""
     _, _, ws = seed_workspace
-    # The shape that would normally trip C2: 3 dispatches, 0 finishes.
     for i in range(3):
         db_session.add(
-            _dispatch_row(ws.id, "ELS-117", ago=timedelta(hours=1 + i))
+            _dispatch_row(ws.id, "ELS-555", ago=timedelta(hours=1 + i))
         )
-    # The refire-cap audit row that owns the operator surfacing.
-    # Fires once per 24h cap window — older than the 4h C2 window,
-    # but still within 24h.
+        db_session.add(
+            _picker_null_release(
+                ws.id, "ELS-555",
+                ago=timedelta(hours=1 + i, minutes=-1),  # lock released after dispatch
+                via=via,
+            )
+        )
+    await db_session.flush()
+
+    assert (
+        await _looks_like_runner_fail_loop(db_session, ws.id, "ELS-555")
+        is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_picker_null_outside_window_does_not_exclude(
+    db_session, seed_workspace,
+) -> None:
+    """Picker bails that fell out of the 4h window must NOT suppress
+    real runner-fail detection — a ticket that hit cap last week
+    and now genuinely has a crashing runner should still surface."""
+    _, _, ws = seed_workspace
+    # 3 fresh dispatches w/o finish in the 4h window — runner-fail shape
+    for i in range(3):
+        db_session.add(
+            _dispatch_row(ws.id, "ELS-556", ago=timedelta(hours=1 + i))
+        )
+    # Picker bail from 5h ago — outside the window
     db_session.add(
-        AuditLog(
-            workspace_id=ws.id,
-            action="agent_run.refire_capped",
-            target_kind="ticket",
-            target_id="ELS-117",
-            created_at=datetime.now(timezone.utc) - timedelta(hours=8),
-            payload={
-                "fsm_stage": "code_review",
-                "fire_count": 3,
-                "limit": 3,
-                "window_hours": 24,
-            },
+        _picker_null_release(
+            ws.id, "ELS-556",
+            ago=timedelta(hours=5),
+            via="picker_refire_capped",
         )
     )
     await db_session.flush()
 
-    # C2 must NOT fire — refire-cap owns this ticket.
     assert (
-        await _looks_like_runner_fail_loop(db_session, ws.id, "ELS-117")
-        is False
+        await _looks_like_runner_fail_loop(db_session, ws.id, "ELS-556")
+        is True
     )
 
 
