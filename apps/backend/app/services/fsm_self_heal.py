@@ -395,8 +395,35 @@ async def _looks_like_runner_fail_loop(
     The signal we want: ``dispatches > finishes`` in the window, with
     ``dispatches >= 3``. We don't try to pair specific dispatches with
     specific finishes; the count delta is enough.
+
+    **Refire-cap exclusion (2026-05-19, post first deploy).** False
+    positive caught on Ship-on-Ship/ELS-117..146/155: the workflow
+    *did* fire, shipctl *did* call ``_next_task``, but the picker
+    returned null because the ticket's refire cap was already
+    exhausted (``agent_run.refire_capped`` had fired earlier). The
+    runner exited before ``/finish`` not because it crashed, but
+    because there was no task to do. The pre-existing
+    ``refire_capped`` blocker letter already carries the same three
+    action_items; a duplicate ``runner_fail_loop`` letter from us is
+    inbox noise. If we see ``agent_run.refire_capped`` for this
+    ticket in the same window, that path owns the operator
+    surfacing — bail.
     """
     cutoff = datetime.now(timezone.utc) - RUNNER_FAIL_WINDOW
+    refire_capped = (
+        await session.execute(
+            select(AuditLog.id)
+            .where(
+                AuditLog.workspace_id == workspace_id,
+                AuditLog.action == "agent_run.refire_capped",
+                AuditLog.target_id == ticket_ref,
+                AuditLog.created_at >= cutoff,
+            )
+            .limit(1)
+        )
+    ).first()
+    if refire_capped is not None:
+        return False
     dispatch_count = (
         await session.execute(
             select(AuditLog.id)
