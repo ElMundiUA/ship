@@ -648,15 +648,14 @@ export function RepoCard({
               </>
             ) : seedState === "update_available" ? (
               <>
-                Re-seed bumps the workflow file, schedule trigger, and
-                FSM doc to <code className="text-white/60">v{current}</code>.
-                Idempotent — review the PR diff before merging.
+                Re-seed updates Ship's workflow and config files to{" "}
+                <code className="text-white/60">v{current}</code>. Review
+                the PR diff like any other change — it's idempotent.
               </>
             ) : (
               <>
-                Ready to bootstrap. Opens the infra PR with canonical Plays,
-                <code className="text-white/60">.ship/config.yml</code>, the
-                tracker FSM, and the post-merge knowledge bootstrap workflow.
+                Ready to turn Ship on. We&apos;ll open one pull request that
+                wires Ship to this repo — review and merge like any other PR.
               </>
             )}
           </div>
@@ -711,8 +710,8 @@ export function RepoCard({
             {seedSaving
               ? "Opening PR..."
               : seedState === "update_available"
-                ? "Update Ship version →"
-                : "Set up Ship →"}
+                ? "Open re-seed PR"
+                : "Open seed PR"}
           </button>
         </div>
         {seedError && (
@@ -1037,7 +1036,7 @@ function ActivationModal({
           PR opened &middot; #{seed.pr_number}
         </p>
         <h2 className="mt-2 font-display text-2xl font-bold leading-tight text-white">
-          Want me to turn Ship on for you?
+          Merge the PR now?
         </h2>
         <p className="mt-3 text-[13px] leading-relaxed text-white/75">
           The pull request is open in{" "}

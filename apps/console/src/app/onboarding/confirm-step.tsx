@@ -213,10 +213,10 @@ export async function ConfirmStep({
           </span>
         </summary>
         <p className="mt-3 text-[12px] leading-relaxed text-white/65">
-          Ship installs the same standard set of automations
-          (&ldquo;Plays&rdquo;) in every repo &mdash; they&apos;re what
-          turn on inbox triage, scheduled checks, and the agent that
-          picks up tickets. Plus one tiny workflow file under{" "}
+          Ship installs the same standard set of automations in every
+          repo &mdash; they&apos;re what turn on inbox triage,
+          scheduled checks, and the agent that picks up tickets. Plus
+          one tiny workflow file under{" "}
           <code className="rounded bg-white/5 px-1 text-aqua">
             .github/workflows/
           </code>{" "}

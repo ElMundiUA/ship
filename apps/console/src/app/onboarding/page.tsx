@@ -878,16 +878,16 @@ function GitHubStep({
         <ul className="mt-7 grid grid-cols-1 gap-3 text-xs text-white/65 md:grid-cols-3">
           {[
             [
-              "Scoped install",
-              "Pick exactly the repos Ship can see. Default is selected, never all-repos.",
+              "Your source stays in your repo",
+              "Ship reads PRs and metadata through the GitHub App — it never copies code off your runner.",
             ],
             [
-              "Per-install tokens",
-              "We mint a fresh installation token per request and cache it for ~1h.",
+              "Agents run in your CI on your dime",
+              "Every agent call dispatches inside GitHub Actions, paid by your API keys. Ship orchestrates; you control the spend.",
             ],
             [
-              "Webhook-armed",
-              "PR / workflow_run / installation events stream to /v1/webhooks/github.",
+              "Audited by default",
+              "Every action — secrets pushed, tickets moved, PRs merged — lands in a per-workspace audit log.",
             ],
           ].map(([t, b]) => (
             <li
@@ -936,9 +936,8 @@ function ReposStep({
       </h1>
       <p className="mt-3 max-w-2xl text-sm leading-relaxed text-white/70">
         We pulled this list straight from your GitHub App installation. Tick
-        the ones you want Ship to work with. Every repo gets the same
-        canonical Plays bundle — you&apos;ll review it on the Confirm step
-        before opening the bootstrap PR.
+        the ones you want Ship to work with. Every repo gets the same setup
+        — you&apos;ll review it on the Confirm step before opening the PR.
       </p>
 
       {justInstalled && (
@@ -1185,9 +1184,8 @@ function TrackerStep({
 
       {reposJustWired && (
         <div className="mt-5 rounded-xl border border-aqua/30 bg-aqua/[0.06] px-4 py-3 text-xs text-white/85">
-          <strong className="text-aqua">Repos wired.</strong> Each one will
-          install the canonical Plays bundle on the Confirm step — review
-          before opening the bootstrap PR.
+          <strong className="text-aqua">Repos wired.</strong> Each one gets
+          the same Ship setup PR — review before merge.
         </div>
       )}
       {linearStatus === "connected" && (

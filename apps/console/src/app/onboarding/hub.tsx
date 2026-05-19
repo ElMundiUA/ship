@@ -128,7 +128,7 @@ export function OnboardingHub({
       key: "bootstrap",
       title: "Bootstrap state",
       blurb:
-        "Per-repo seed PRs and bundle drift. Open a re-seed PR when a repo's Ship version goes stale.",
+        "Per-repo Ship setup. Open a re-seed PR when a repo's version goes stale.",
       status: bootstrapStatus({
         not_seeded: not_seeded.length,
         update_available: update_available.length,
