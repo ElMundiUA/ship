@@ -77,4 +77,6 @@ def test_stale_item_is_lane_whenever() -> None:
 
 
 def test_actionable_categories_constant() -> None:
-    assert ACTIONABLE_CATEGORIES == frozenset({"decision_needed", "failure"})
+    assert ACTIONABLE_CATEGORIES == frozenset(
+        {"decision_needed", "failure", "attention"}
+    )
