@@ -3900,31 +3900,33 @@ async def finish_agent_run(
         # ``via=agent_run.finish`` audit per release) couldn't fire.
 
     elif payload.outcome == "blocked":
-        # Two sub-cases:
+        # Three sub-cases:
         #
         # (A) ``stage_next`` is set — the agent picked a cascade target
-        #     (e.g. reviewer bouncing to dev_implementation). The cascade
-        #     matrix handles the re-dispatch downstream. No inbox row,
-        #     no label change; the picker reads the new ``stage:*`` label
-        #     once :func:`tracker.transition` runs further below.
+        #     explicitly. The cascade matrix below picks it up; nothing
+        #     to do here.
         #
-        # (B) ``stage_next`` is null — the agent finished blocked with
-        #     no cascade target. For REVIEW-style stages (where the
-        #     reviewer/validation/auto-merger agent is the gate and
-        #     a missing stage_next means "human needs to act"), this
-        #     is the dominant FSM bottleneck: picker re-fires the same
-        #     stage every tick until the 24h refire cap kicks in.
-        #     Measured on Ship-on-Ship 2026-05-12..19: 77% of
-        #     ``code_review`` blocks were null-next. Treat as
-        #     effectively ``needs_clarification``: stamp the label so
-        #     the picker skips + file a blocker inbox row immediately.
+        # (B) ``stage_next`` is null AND review-style stage AND we
+        #     haven't already auto-cascaded this ticket out of
+        #     blocked+no_next twice in the window → silently rewrite
+        #     ``stage_next`` to ``dev_implementation``. Reviewer-side
+        #     blockers default to "dev re-runs and fixes" — that's the
+        #     reviewer.md prompt contract (commit a045e38). If the
+        #     agent still emits no cascade target the server applies
+        #     the default rather than bothering the operator. Belt and
+        #     braces: refire-cap (3 same-stage blocks in 24h) and
+        #     dev_not_converging (3 review-blocks + 2 dev cycles)
+        #     catch the longer loops downstream.
         #
-        #     For non-review stages (dev_implementation transient
-        #     refire-loops), the picker's existing refire cap handles
-        #     the budget and we don't want an inbox row per dev retry
-        #     — keeps the legacy "transient blocked finishes stay in
-        #     audit log only" behavior intact (see
-        #     test_blocked_finish_does_not_create_inbox_row).
+        # (C) ``stage_next`` is null AND we've already auto-cascaded
+        #     this ticket twice in the 4h window → the auto-cascade
+        #     isn't fixing the underlying problem. File a blocker
+        #     letter once so the operator can investigate (refire-cap
+        #     will also fire on the third same-stage block — this
+        #     letter is the lower-latency early warning).
+        #
+        # (D) Non-review stages (dev_implementation transient blocks)
+        #     stay inbox-quiet — refire-cap handles the budget.
         _BLOCKED_NO_NEXT_REVIEW_STAGES = {
             "code_review", "pr_review", "validation",
             "qa_manual", "qa_automation", "auto_merge",
@@ -3935,74 +3937,113 @@ async def finish_agent_run(
             and payload.ticket_ref
             and payload.fsm_stage in _BLOCKED_NO_NEXT_REVIEW_STAGES
         ):
-            ref = _ticket_ref_from(resolved.kind, payload.ticket_ref)
-            add_signal = getattr(resolved.gateway, "add_signal_label", None)
-            if add_signal is not None:
-                try:
-                    await add_signal(ref, key="needs_clarification")
-                    actions.append("tracker:label:needs_clarification")
-                except Exception as exc:  # noqa: BLE001 — best-effort
-                    logger.info(
-                        "blocked+no_next label add failed ws=%s ticket=%s: %s",
-                        workspace_id, payload.ticket_ref, exc,
+            # Count prior auto-cascades for this ticket in 4h. We tag
+            # each one with ``actions=["cascade:blocked_no_next_auto"]``
+            # in the finish audit, so a SQL count of that marker tells
+            # us how many times the server has already retried.
+            auto_cascade_cutoff = datetime.now(timezone.utc) - timedelta(hours=4)
+            prior_autos = (
+                await session.execute(
+                    select(AuditLog.id)
+                    .where(
+                        AuditLog.workspace_id == workspace_id,
+                        AuditLog.action == "agent_run.finish",
+                        AuditLog.created_at >= auto_cascade_cutoff,
+                        (
+                            (AuditLog.target_id == payload.ticket_ref)
+                            | (
+                                AuditLog.payload["ticket_ref"].astext
+                                == payload.ticket_ref
+                            )
+                        ),
+                        AuditLog.payload["auto_cascade_from_no_next"].astext
+                        == "true",
                     )
-            session.add(
-                InboxItem(
-                    workspace_id=workspace_id,
-                    repo_id=None,
-                    type="blocker",
-                    title=(
-                        f"{payload.ticket_ref}: {payload.fsm_stage or 'agent'} "
-                        f"blocked without cascade target"
-                    )[:300],
-                    summary=(
-                        f"Agent finished outcome=blocked with stage_next=null "
-                        f"at fsm_stage={payload.fsm_stage}. Picker can't route "
-                        f"the fix anywhere; ticket sits idle until you act."
-                    )[:2000],
-                    payload={
-                        "ticket_ref": payload.ticket_ref,
-                        "fsm_stage": payload.fsm_stage,
-                        "run_id": payload.run_id,
-                        "resolution_mode": "single_choice",
-                        "action_items": [
-                            {
-                                "id": "send_to_dev",
-                                "kind": "choice",
-                                "label": "Send to dev_implementation",
-                                "hint": (
-                                    "Agent should re-run dev to fix the "
-                                    "blockers listed in its comment."
-                                ),
-                            },
-                            {
-                                "id": "send_to_validation",
-                                "kind": "choice",
-                                "label": "Send to validation",
-                                "hint": (
-                                    "QA missed something; re-validate against "
-                                    "this commit."
-                                ),
-                            },
-                            {
-                                "id": "mark_handled",
-                                "kind": "choice",
-                                "label": "Already handled",
-                                "hint": (
-                                    "Operator fixed it manually or the PR "
-                                    "is no longer relevant."
-                                ),
-                            },
-                        ],
-                    },
-                    status="new",
-                    intake_handle=None,
-                    intake_reason="blocked_without_cascade",
                 )
-            )
-            actions.append("inbox:blocker:blocked_no_next")
-        # else: stage_next is set — cascade matrix handles re-dispatch;
-        # nothing to do here. (Lock release happens via
+            ).all()
+            if len(prior_autos) < 2:
+                # Path (B): silent auto-cascade. Rewrite stage_next so
+                # the cascade matrix downstream fires dev_implementation
+                # for this ticket. Tag the action + audit row so prior-
+                # autos query above can find this run on the next pass.
+                # NOTE: we mutate ``payload`` because pydantic v2 lets
+                # us — the cascade matrix reads ``payload.stage_next``
+                # below.
+                payload.stage_next = "dev_implementation"
+                actions.append("cascade:blocked_no_next_auto")
+                logger.info(
+                    "blocked+no_next auto-cascade ws=%s ticket=%s stage=%s",
+                    workspace_id, payload.ticket_ref, payload.fsm_stage,
+                )
+            else:
+                # Path (C): auto-cascade exhausted, escalate. File a
+                # blocker letter with the same action_items the
+                # operator had before — but only AFTER the auto-
+                # cascade failed twice, not on every blocked+no_next.
+                ref = _ticket_ref_from(resolved.kind, payload.ticket_ref)
+                add_signal = getattr(
+                    resolved.gateway, "add_signal_label", None,
+                )
+                if add_signal is not None:
+                    try:
+                        await add_signal(ref, key="needs_clarification")
+                        actions.append("tracker:label:needs_clarification")
+                    except Exception as exc:  # noqa: BLE001
+                        logger.info(
+                            "blocked+no_next label add failed ws=%s "
+                            "ticket=%s: %s",
+                            workspace_id, payload.ticket_ref, exc,
+                        )
+                session.add(
+                    InboxItem(
+                        workspace_id=workspace_id,
+                        repo_id=None,
+                        type="blocker",
+                        title=(
+                            f"{payload.ticket_ref}: {payload.fsm_stage} "
+                            f"keeps blocking despite auto-retries"
+                        )[:300],
+                        summary=(
+                            f"Server auto-cascaded {payload.ticket_ref} "
+                            f"from {payload.fsm_stage} to "
+                            f"dev_implementation twice in the last 4h; "
+                            f"the reviewer is still blocking. Either "
+                            f"the dev agent isn't converging on the fix "
+                            f"or the reviewer's block needs operator "
+                            f"input."
+                        )[:2000],
+                        payload={
+                            "ticket_ref": payload.ticket_ref,
+                            "fsm_stage": payload.fsm_stage,
+                            "run_id": payload.run_id,
+                            "auto_cascade_attempts": len(prior_autos),
+                            "resolution_mode": "single_choice",
+                            "action_items": [
+                                {
+                                    "id": "applied_manually",
+                                    "kind": "choice",
+                                    "label": "Applied reviewer fix manually",
+                                },
+                                {
+                                    "id": "override_force_merge",
+                                    "kind": "choice",
+                                    "label": "Override reviewer / force merge",
+                                },
+                                {
+                                    "id": "mark_handled",
+                                    "kind": "choice",
+                                    "label": "Already handled",
+                                },
+                            ],
+                        },
+                        status="new",
+                        intake_handle=f"blocked-cascade-exhausted:{payload.ticket_ref}",
+                        intake_reason="blocked_cascade_exhausted",
+                    )
+                )
+                actions.append("inbox:blocker:cascade_exhausted")
+        # else: stage_next is set OR non-review stage — cascade matrix
+        # / refire-cap handle the rest. (Lock release happens via
         # ``maybe_release_project_lock_on_finish`` below.)
 
     elif payload.outcome == "out_of_scope":
@@ -4053,6 +4094,12 @@ async def finish_agent_run(
                 # snapshot and exited noop with ``ticket_ref:null``
                 # (askslayer/PAC-20,21,22,23 2026-05-15).
                 "description": payload.description,
+                # Marker for the blocked+no_next auto-cascade counter
+                # (path (B) above). Read by the next /finish call to
+                # decide whether to keep auto-cascading or escalate.
+                "auto_cascade_from_no_next": (
+                    "cascade:blocked_no_next_auto" in actions
+                ),
             },
         )
     )
