@@ -18,16 +18,13 @@ import { redirect } from "next/navigation";
 
 import { ApiUnavailable } from "@/components/api-unavailable";
 import { PageBody, PageHeader } from "@/components/app-shell";
-import { MailboxFooter } from "@/components/inbox/mailbox-footer";
-import { MailboxKeyboardNav } from "@/components/inbox/mailbox-keyboard-nav";
-import { StaleBadge } from "@/components/inbox/stale-badge";
+import { InboxMailboxListClient } from "@/components/inbox/inbox-mailbox-list-client";
+import { InboxActionPanel } from "@/components/inbox/inbox-action-panel";
 import { MarkdownBlock } from "@/components/markdown-block";
 import { EmptyState } from "@/components/ui";
-import {
-  formatInboxHeadline,
-  formatIntakeReasonTooltip,
-} from "@/lib/inbox-copy";
+import { formatInboxHeadline } from "@/lib/inbox-copy";
 import { cn } from "@/lib/cn";
+import { relativeTime } from "@/lib/format";
 import {
   ApiHttpError,
   getInboxItem,
@@ -39,10 +36,9 @@ import {
 } from "@/lib/api/session-cache.server";
 import { getResolvedWorkspaceId } from "@/lib/workspace-resolve.server";
 import {
+  INBOX_ACTIONABLE_CATEGORIES,
   INBOX_LIST_DEFAULT_STATUSES,
   INBOX_TYPE_META,
-  ROW_KICKER,
-  type InboxItem,
   type InboxItemDetail,
   type InboxListResponse,
   type InboxType,
@@ -128,7 +124,9 @@ async function load(
       workspace.id,
       {
         ownership: parsed.ownership,
+        categories: INBOX_ACTIONABLE_CATEGORIES,
         statuses: INBOX_LIST_DEFAULT_STATUSES,
+        sort: "priority_desc_created_asc",
         limit: PAGE_LIMIT,
       },
       token,
@@ -216,20 +214,15 @@ export default async function InboxMailboxPage({
           </p>
         )}
 
-        <MailboxKeyboardNav
-          itemIds={list.items.map((i) => i.id)}
-          selectedId={selectedId}
-          buildHref={(id) =>
-            buildSelectHref({ id, ownership, workspaceScope: wsScope })
-          }
-        />
-
         <div className="grid gap-4 lg:grid-cols-[26rem_minmax(0,1fr)]">
-          <MailboxList
+          <InboxMailboxListClient
             items={list.items}
             ownership={ownership}
             selectedId={selectedId}
             workspaceScope={wsScope}
+            ownershipTabs={
+              <OwnershipTabs current={ownership} workspaceScope={wsScope} />
+            }
           />
 
           <MailboxPreview
@@ -245,69 +238,6 @@ export default async function InboxMailboxPage({
   );
 }
 
-// ---------------------------------------------------------------------------
-// Left pane: the list
-// ---------------------------------------------------------------------------
-
-function MailboxList({
-  items,
-  ownership,
-  selectedId,
-  workspaceScope,
-}: {
-  items: InboxItem[];
-  ownership: Ownership;
-  selectedId: string | null;
-  workspaceScope?: string;
-}) {
-  return (
-    <div className="flex min-h-[60vh] flex-col rounded-xl border border-white/[0.08] bg-white/[0.015]">
-      <OwnershipTabs current={ownership} workspaceScope={workspaceScope} />
-
-      {items.length === 0 ? (
-        <div className="flex flex-1 items-center justify-center p-4">
-          <EmptyState
-            title="Inbox empty"
-            body="Nothing waiting on you — agents working."
-          />
-        </div>
-      ) : (
-        <ul
-          data-testid="inbox-mailbox-rows"
-          className="divide-y divide-white/[0.06] overflow-y-auto"
-        >
-          {items.map((item) => (
-            <li key={item.id}>
-              <MailboxRow
-                item={item}
-                selected={item.id === selectedId}
-                ownership={ownership}
-                workspaceScope={workspaceScope}
-              />
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-
-function buildSelectHref({
-  id,
-  ownership,
-  workspaceScope,
-}: {
-  id: string;
-  ownership: Ownership;
-  workspaceScope?: string;
-}): string {
-  const params = new URLSearchParams();
-  params.set("selected", id);
-  if (ownership !== "all") params.set("ownership", ownership);
-  if (workspaceScope) params.set("ws", workspaceScope);
-  const qs = params.toString();
-  return qs ? `/inbox?${qs}` : "/inbox";
-}
 
 function buildOwnershipHref({
   ownership,
@@ -366,74 +296,6 @@ function OwnershipTabs({
   );
 }
 
-function MailboxRow({
-  item,
-  selected,
-  ownership,
-  workspaceScope,
-}: {
-  item: InboxItem;
-  selected: boolean;
-  ownership: Ownership;
-  workspaceScope?: string;
-}) {
-  const kicker = ROW_KICKER[item.type];
-  const isUnread = item.status === "new";
-  const headline = formatInboxHeadline(item);
-  const decisionCount = item.action_item_count ?? 0;
-  const intakeTip = formatIntakeReasonTooltip(item.intake_reason);
-
-  return (
-    <Link
-      href={buildSelectHref({ id: item.id, ownership, workspaceScope })}
-      className={cn(
-        "group relative flex items-center gap-2.5 px-4 py-2 transition",
-        selected ? "bg-aqua/[0.08]" : "hover:bg-white/[0.03]",
-      )}
-      aria-current={selected ? "page" : undefined}
-      title={intakeTip}
-    >
-      <span
-        aria-hidden
-        className={cn(
-          "inline-block h-2 w-2 shrink-0 rounded-full",
-          isUnread ? kicker.tone : "bg-white/15",
-        )}
-      />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.18em] text-white/40">
-          <span>
-            <span aria-hidden>{kicker.glyph} </span>
-            {kicker.label}
-          </span>
-          <StaleBadge
-            createdAt={item.created_at}
-            status={item.status}
-            snoozedUntil={item.snoozed_until}
-          />
-          {decisionCount > 0 && (
-            <span className="rounded-full border border-white/15 bg-white/[0.06] px-1.5 py-0.5 text-[9px] font-semibold text-white/70">
-              {decisionCount} {decisionCount === 1 ? "decision" : "decisions"}
-            </span>
-          )}
-        </div>
-        <p
-          className={cn(
-            "truncate text-sm leading-tight",
-            selected
-              ? "font-semibold text-white"
-              : isUnread
-                ? "font-semibold text-white/95"
-                : "text-white/70",
-          )}
-        >
-          {headline}
-        </p>
-      </div>
-    </Link>
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Right pane: the preview
 // ---------------------------------------------------------------------------
@@ -479,17 +341,26 @@ function MailboxPreview({
   const meta = INBOX_TYPE_META[detail.type as InboxType];
   const body = readBody(detail);
   const isClosed = detail.status === "resolved" || detail.status === "dismissed";
-
   const previewHeadline = formatInboxHeadline(detail);
 
   return (
-    <div
-      className="flex min-h-[60vh] flex-col rounded-xl border border-white/[0.08] bg-white/[0.015]"
-      data-mailbox-preview
-    >
+    // Self-sized: header + body + footer stack tightly. Short letters
+    // (a 3-line refire-cap blocker) no longer leave a 600px void
+    // between the body and the action buttons. Long bodies cap at
+    // ~70vh and scroll internally so the footer stays in the
+    // viewport without forcing the operator to scroll past empty
+    // space first.
+    <div className="flex flex-col rounded-xl border border-white/[0.08] bg-white/[0.015]">
       <header className="border-b border-white/[0.06] px-6 py-4">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] uppercase tracking-[0.18em] text-white/45">
           <span>{meta?.label ?? detail.type}</span>
+          <span className="text-white/15">·</span>
+          <span
+            className="text-white/55 normal-case tracking-normal"
+            title={new Date(detail.created_at).toLocaleString()}
+          >
+            received {relativeTime(detail.created_at)}
+          </span>
           {isClosed && (
             <>
               <span className="text-white/15">·</span>
@@ -526,7 +397,7 @@ function MailboxPreview({
         </p>
       </header>
 
-      <div className="flex-1 overflow-y-auto px-6 py-5">
+      <div className="max-h-[70vh] overflow-y-auto px-6 py-5">
         {body ? (
           <MarkdownBlock>{body}</MarkdownBlock>
         ) : (
@@ -534,8 +405,19 @@ function MailboxPreview({
         )}
       </div>
 
-      <footer className="border-t border-white/[0.06] px-6 py-4">
-        <MailboxFooter detail={detail} workspaceId={workspaceId} />
+      <footer className="space-y-3 border-t border-white/[0.06] px-6 py-4">
+        {/* InboxActionPanel renders the structured action_items the
+            backend filed with the letter (decision pills / Apply /
+            Acknowledge depending on resolution_mode). The legacy
+            MailboxFooter ("Mark handled" + "Dismiss" + reply textarea)
+            was retired 2026-05-20 — operator feedback: those buttons
+            are duplicate noise when every letter already ships its
+            own structured controls. If a letter lacks action_items
+            the panel falls through to the freeform textarea path. */}
+        <InboxActionPanel
+          workspaceId={workspaceId}
+          item={detail}
+        />
       </footer>
     </div>
   );

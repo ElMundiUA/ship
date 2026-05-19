@@ -81,7 +81,7 @@ export async function ConfirmStep({
       <p className="font-mono text-[11px] uppercase tracking-[0.3em] text-aqua/85">
         Step 5 of 5 &middot; Activate Ship
       </p>
-      <h1 className="mt-2 font-display text-4xl font-bold leading-tight">
+      <h1 className="mt-2 font-display text-2xl font-bold leading-tight">
         Turn Ship on in your repos.
       </h1>
       <p className="mt-3 max-w-2xl text-sm leading-relaxed text-white/70">
@@ -146,7 +146,7 @@ export async function ConfirmStep({
               )}
 
               {actionable.length === 0 && upToDate.length === 0 && !loadError && (
-                <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-xs text-white/70">
+                <div className="mt-3 rounded-xl border border-white/[0.08] bg-white/[0.02] px-4 py-3 text-xs text-white/70">
                   No repos picked yet. Go back to <em>Repos</em> and pick
                   the ones you want Ship to work with first.
                 </div>
@@ -195,7 +195,7 @@ export async function ConfirmStep({
           read the Plays catalogue before clicking "Activate". The
           ``<details>`` is here so power users can sanity-check what
           actually lands in the PR without leaving the wizard. */}
-      <details className="mt-8 group/bundle rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+      <details className="mt-8 group/bundle rounded-2xl border border-white/[0.08] bg-white/[0.02] p-5">
         <summary className="cursor-pointer list-none [&::-webkit-details-marker]:hidden">
           <span className="inline-flex items-center gap-2 text-[12px] text-white/65 hover:text-white">
             <span
@@ -213,10 +213,10 @@ export async function ConfirmStep({
           </span>
         </summary>
         <p className="mt-3 text-[12px] leading-relaxed text-white/65">
-          Ship installs the same standard set of automations
-          (&ldquo;Plays&rdquo;) in every repo &mdash; they&apos;re what
-          turn on inbox triage, scheduled checks, and the agent that
-          picks up tickets. Plus one tiny workflow file under{" "}
+          Ship installs the same standard set of automations in every
+          repo &mdash; they&apos;re what turn on inbox triage,
+          scheduled checks, and the agent that picks up tickets. Plus
+          one tiny workflow file under{" "}
           <code className="rounded bg-white/5 px-1 text-aqua">
             .github/workflows/
           </code>{" "}
@@ -272,7 +272,7 @@ export async function ConfirmStep({
           the clickable stepper above offers the same hop in the
           same gesture, only consistent with every other cross-step
           jump. */}
-      <div className="mt-8 flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-5">
+      <div className="mt-8 flex flex-wrap items-center justify-between gap-3 border-t border-white/[0.08] pt-5">
         <span className="text-[11px] text-white/45">
           {total > 0
             ? `${total} repo${total === 1 ? "" : "s"} ready. You stay in control — every change goes through a PR you can review.`

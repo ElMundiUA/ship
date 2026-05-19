@@ -116,6 +116,31 @@ class CronLockId(IntEnum):
     # than 20 min. Conservative cadence + idempotent dispatch (same
     # lock as the poller's path) makes the overlap safe.
     FSM_SCAN_BACKSTOP = 1016
+    # Inbox stale-row dismiss (ELS-144) — rows with ``stale_after`` past
+    # ``created_at + stale_after`` and ``status=new`` become dismissed.
+    INBOX_STALE_SWEEP = 1017
+    # Agent-dispatch lock sweeper (ELS-149) — releases dangling
+    # ``project:*`` locks when the dispatched workflow_run finished
+    # but never wrote ``agent_run.finish`` (crashed agent, GH dispatch
+    # without workflow, etc.). Without this the 24h TTL blocks every
+    # sibling ticket in the project for hours.
+    AGENT_DISPATCH_LOCK_SWEEP = 1018
+    # Inbox action_items backfill (ELS-165) — parses legacy
+    # clarification rows' markdown bodies into structured
+    # ``payload.action_items`` so the Decision UI renders pills.
+    # Idempotent; only touches rows missing the structured payload.
+    INBOX_ACTION_ITEMS_BACKFILL = 1019
+    # Pull-request cache reconciler (askslayer/visitor 2026-05-19).
+    # ``pull_requests`` is a webhook-fed cache — if the webhook misses
+    # an event or the install is paused, rows go stale at
+    # ``state=open`` long after GitHub has merged or closed them.
+    # ``_mirror_stuck_prs_to_inbox`` then regenerates "stuck PR" inbox
+    # items on every dashboard render that the operator cannot
+    # dismiss (next render brings them back). This job polls GitHub
+    # for any row at ``state=open`` whose ``updated_at_external`` is
+    # >3d old and refreshes the cache. Idempotent — already-current
+    # rows are no-ops.
+    PR_CACHE_RECONCILE = 1020
 
 
 # ---------------------------------------------------------------------------

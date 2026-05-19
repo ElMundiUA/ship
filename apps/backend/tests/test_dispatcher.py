@@ -35,9 +35,134 @@ from backend.app.services.dispatcher import (
     count_active_locks,
     maybe_dispatch,
     maybe_dispatch_workspace_bundle,
+    maybe_release_project_lock_on_finish,
     release_lock,
+    should_release_project_lock,
     sweep_expired_locks,
 )
+
+
+# ---------------------------------------------------------------------------
+# Project lock finish release — pure matrix + DB integration
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("outcome", "stage_next", "labels", "expected"),
+    [
+        ("blocked", None, [], True),
+        ("needs_clarification", None, [], True),
+        ("out_of_scope", None, [], True),
+        ("noop", None, [], True),
+        ("ready_next_step", "dev_implementation", [], False),
+        ("ready_next_step", "qa_manual", [], False),
+        ("ready_next_step", "validation", [], False),
+        ("ready_next_step", "merged", [], True),
+        ("ready_next_step", "planning_done", [], True),
+        ("ready_next_step", None, [], True),
+        ("ready_next_step", "dev_implementation", ["planning:anchor"], False),
+        ("blocked", None, ["planning:anchor"], False),
+    ],
+)
+def test_should_release_project_lock_matrix(
+    outcome: str,
+    stage_next: str | None,
+    labels: list[str],
+    expected: bool,
+) -> None:
+    assert (
+        should_release_project_lock(
+            outcome=outcome, stage_next=stage_next, labels=labels
+        )
+        is expected
+    )
+
+
+@pytest.mark.asyncio
+async def test_finish_release_deletes_project_lock_and_audits(
+    db_session,
+) -> None:
+    """T1 — stall outcome drops ``project:<id>`` and writes audit."""
+    ws = await _make_workspace(db_session)
+    project_id = str(uuid.uuid4())
+    await acquire_lock(
+        db_session, workspace_id=ws, key=f"project:{project_id}"
+    )
+    released = await maybe_release_project_lock_on_finish(
+        db_session,
+        workspace_id=ws,
+        ticket_ref="ELS-1",
+        outcome="blocked",
+        stage_next=None,
+        labels=[],
+        project_id=project_id,
+    )
+    assert released is True
+    assert await release_lock(
+        db_session, workspace_id=ws, key=f"project:{project_id}"
+    ) is False
+    audit = (
+        await db_session.execute(
+            select(AuditLog).where(
+                AuditLog.workspace_id == ws,
+                AuditLog.action == "dispatch.project_lock_released",
+            )
+        )
+    ).scalar_one()
+    assert audit.target_id == "ELS-1"
+    assert audit.payload["via"] == "agent_run.finish"
+    assert audit.payload["outcome"] == "blocked"
+    assert audit.payload["project_id"] == project_id
+
+
+@pytest.mark.asyncio
+async def test_finish_keeps_project_lock_for_in_flight_stage_next(
+    db_session,
+) -> None:
+    """T4 — ``ready_next_step`` + in-flight ``stage_next`` keeps the row."""
+    ws = await _make_workspace(db_session)
+    project_id = str(uuid.uuid4())
+    await acquire_lock(
+        db_session, workspace_id=ws, key=f"project:{project_id}"
+    )
+    released = await maybe_release_project_lock_on_finish(
+        db_session,
+        workspace_id=ws,
+        ticket_ref="ELS-2",
+        outcome="ready_next_step",
+        stage_next="dev_implementation",
+        labels=[],
+        project_id=project_id,
+    )
+    assert released is False
+    assert await release_lock(
+        db_session, workspace_id=ws, key=f"project:{project_id}"
+    ) is True
+
+
+@pytest.mark.asyncio
+async def test_finish_anchor_skips_project_lock_delete(
+    db_session,
+) -> None:
+    """T7 — anchors never release a lock they never took."""
+    ws = await _make_workspace(db_session)
+    project_id = str(uuid.uuid4())
+    await acquire_lock(
+        db_session, workspace_id=ws, key=f"project:{project_id}"
+    )
+    released = await maybe_release_project_lock_on_finish(
+        db_session,
+        workspace_id=ws,
+        ticket_ref="ELS-ANCHOR",
+        outcome="blocked",
+        stage_next=None,
+        labels=["planning:anchor"],
+        project_id=project_id,
+    )
+    assert released is False
+    assert await release_lock(
+        db_session, workspace_id=ws, key=f"project:{project_id}"
+    ) is True
 
 
 # ---------------------------------------------------------------------------
@@ -386,6 +511,131 @@ async def test_no_activated_repo_refuses(db_session, monkeypatch) -> None:
     assert result.reason == "no_repo"
     # Lock was released — workspace ends with zero active locks.
     assert await count_active_locks(db_session, workspace_id=ws) == 0
+
+
+@pytest.mark.asyncio
+async def test_blocked_by_dependency_refuses_and_releases(
+    db_session, monkeypatch
+) -> None:
+    """When the Linear adapter reports an unresolved `blocks`
+    relation on the ticket, ``maybe_dispatch`` refuses with
+    ``blocked_by_dependency`` and drops the lock it grabbed."""
+    from backend.app.integrations.gateway.tracker import TicketRef
+    from backend.app.services import tracker_resolver as tracker_resolver_module
+
+    ws = await _make_workspace(db_session)
+    monkeypatch.setattr(
+        dispatcher.get_settings(),
+        "tracker_poll_fire",
+        True,
+        raising=False,
+    )
+
+    class _StubGateway:
+        async def get_ticket_snapshot(self, ticket: TicketRef):
+            return {"labels": [], "project_id": None}
+
+        async def get_ticket_blockers(self, ticket: TicketRef):
+            return [
+                {
+                    "identifier": "ELS-143",
+                    "ticket_ref": "uuid-1",
+                    "state_name": "In Progress",
+                    "state_type": "started",
+                    "completed": False,
+                },
+                {
+                    "identifier": "ELS-99",
+                    "ticket_ref": "uuid-2",
+                    "state_name": "Done",
+                    "state_type": "completed",
+                    "completed": True,
+                },
+            ]
+
+    class _Resolved:
+        kind = "linear"
+        gateway = _StubGateway()
+
+    async def _resolve(*_args, **_kwargs):
+        return _Resolved()
+
+    monkeypatch.setattr(
+        tracker_resolver_module, "resolve_for_workspace", _resolve
+    )
+
+    result = await maybe_dispatch(
+        db_session,
+        workspace_id=ws,
+        ticket_ref="ELS-144",
+        trigger_kind="tracker_poll",
+        fsm_stage="dev_implementation",
+    )
+    assert result.fired is False
+    assert result.reason == "blocked_by_dependency"
+    # Lock was released — workspace ends with zero active locks.
+    assert await count_active_locks(db_session, workspace_id=ws) == 0
+    # One audit row recorded with the unresolved blocker identifier.
+    audit_rows = (
+        await db_session.execute(
+            select(AuditLog).where(
+                AuditLog.workspace_id == ws,
+                AuditLog.action == "dispatch.blocked_by_dep",
+            )
+        )
+    ).scalars().all()
+    assert len(audit_rows) == 1
+    blockers = audit_rows[0].payload.get("blockers") or []
+    assert [b["identifier"] for b in blockers] == ["ELS-143"]
+
+
+@pytest.mark.asyncio
+async def test_no_blockers_does_not_refuse(
+    db_session, monkeypatch
+) -> None:
+    """All blockers in a terminal state (or empty list) must NOT
+    refuse — the gate is only meant to catch live dependencies."""
+    from backend.app.integrations.gateway.tracker import TicketRef
+    from backend.app.services import tracker_resolver as tracker_resolver_module
+
+    ws = await _make_workspace(db_session)
+    monkeypatch.setattr(
+        dispatcher.get_settings(),
+        "tracker_poll_fire",
+        True,
+        raising=False,
+    )
+
+    class _StubGateway:
+        async def get_ticket_snapshot(self, ticket: TicketRef):
+            return {"labels": [], "project_id": None}
+
+        async def get_ticket_blockers(self, ticket: TicketRef):
+            return []  # no relations
+
+    class _Resolved:
+        kind = "linear"
+        gateway = _StubGateway()
+
+    async def _resolve(*_args, **_kwargs):
+        return _Resolved()
+
+    monkeypatch.setattr(
+        tracker_resolver_module, "resolve_for_workspace", _resolve
+    )
+
+    result = await maybe_dispatch(
+        db_session,
+        workspace_id=ws,
+        ticket_ref="ELS-200",
+        trigger_kind="tracker_poll",
+        fsm_stage="planning",
+    )
+    # Falls through to the next refusal (no_repo since the fixture
+    # workspace has no activated repo) — the dependency gate did NOT
+    # short-circuit.
+    assert result.fired is False
+    assert result.reason != "blocked_by_dependency"
 
 
 # ---------------------------------------------------------------------------

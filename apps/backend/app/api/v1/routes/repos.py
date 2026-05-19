@@ -69,6 +69,12 @@ class AvailableRepoOut(BaseModel):
     html_url: str
     description: str | None
     activated: bool
+    # Multi-workspace per install (migration 0076): a repo activated
+    # in a sibling workspace under the same org. ``None`` = free to
+    # activate here; a string = workspace slug that already owns it
+    # (operator sees "already in <ws>" + the picker disables the row
+    # so two workspaces don't fight for one PR cache stream).
+    claimed_by_workspace_slug: str | None = None
 
 
 class ActivatedRepoOut(BaseModel):
@@ -147,8 +153,12 @@ async def _resolve_installation(
 
 
 def _summary_to_out(
-    summary: RepoSummary, *, activated_ids: set[int]
+    summary: RepoSummary,
+    *,
+    activated_ids: set[int],
+    claimed_elsewhere: dict[int, str] | None = None,
 ) -> AvailableRepoOut:
+    claimed_by = (claimed_elsewhere or {}).get(summary.external_id)
     return AvailableRepoOut(
         external_id=summary.external_id,
         full_name=summary.full_name,
@@ -159,6 +169,7 @@ def _summary_to_out(
         html_url=summary.html_url,
         description=summary.description,
         activated=summary.external_id in activated_ids,
+        claimed_by_workspace_slug=claimed_by,
     )
 
 
@@ -204,6 +215,32 @@ async def list_available_repos(
         row[0] for row in (await session.execute(activated_stmt)).all()
     }
 
+    # Cross-workspace claim map (migration 0076 — multi-workspace per
+    # install). A repo activated in a sibling workspace under the same
+    # GitHub App install gets surfaced as ``claimed_by_workspace_slug``
+    # so the picker can disable it and the operator doesn't accidentally
+    # double-wire the same PR stream into two workspaces. Filtered by
+    # the current install's GitHub ``installation_id`` so only true
+    # sibling claims surface — not unrelated installs.
+    from backend.app.db.models.tenancy import Workspace as _Workspace
+    claim_stmt = (
+        select(WorkspaceRepo.external_id, _Workspace.slug)
+        .join(
+            GitHubInstallation,
+            WorkspaceRepo.installation_id == GitHubInstallation.id,
+        )
+        .join(_Workspace, WorkspaceRepo.workspace_id == _Workspace.id)
+        .where(
+            GitHubInstallation.installation_id == install.installation_id,
+            WorkspaceRepo.workspace_id != workspace_id,
+            WorkspaceRepo.provider == "github",
+        )
+    )
+    claimed_elsewhere: dict[int, str] = {
+        ext_id: slug
+        for ext_id, slug in (await session.execute(claim_stmt)).all()
+    }
+
     gateway = GitHubCodeHost(install.installation_id, settings=settings)
     try:
         summaries = await gateway.list_repo_summaries()
@@ -220,7 +257,12 @@ async def list_available_repos(
             ),
         ) from exc
 
-    return [_summary_to_out(s, activated_ids=activated_ids) for s in summaries]
+    return [
+        _summary_to_out(
+            s, activated_ids=activated_ids, claimed_elsewhere=claimed_elsewhere
+        )
+        for s in summaries
+    ]
 
 
 @router.get("", response_model=list[ActivatedRepoOut])
@@ -294,6 +336,50 @@ async def activate_repos(
                 f"installation: {sorted(unknown)}"
             ),
         )
+
+    # Cross-workspace claim guard (migration 0076). Reject activations
+    # for repos already activated in a sibling workspace under the
+    # same install — the picker disables them client-side but we
+    # also gate server-side so a stale picker payload or a direct
+    # API call can't double-wire the same PR stream.
+    if desired_ids:
+        from backend.app.db.models.tenancy import Workspace as _Workspace
+        claim_rows = (
+            await session.execute(
+                select(WorkspaceRepo.external_id, _Workspace.slug)
+                .join(
+                    GitHubInstallation,
+                    WorkspaceRepo.installation_id == GitHubInstallation.id,
+                )
+                .join(_Workspace, WorkspaceRepo.workspace_id == _Workspace.id)
+                .where(
+                    GitHubInstallation.installation_id == install.installation_id,
+                    WorkspaceRepo.workspace_id != workspace_id,
+                    WorkspaceRepo.provider == "github",
+                    WorkspaceRepo.external_id.in_(desired_ids),
+                )
+            )
+        ).all()
+        if claim_rows:
+            collisions = {
+                ext_id: slug for ext_id, slug in claim_rows
+            }
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "repo_claimed_elsewhere",
+                    "message": (
+                        "Some repos are already activated in a sibling "
+                        "workspace under the same GitHub App install. "
+                        "Deactivate them there first, or pick different "
+                        "repos."
+                    ),
+                    "collisions": [
+                        {"external_id": ext_id, "workspace_slug": slug}
+                        for ext_id, slug in sorted(collisions.items())
+                    ],
+                },
+            )
 
     existing_stmt = select(WorkspaceRepo).where(
         WorkspaceRepo.workspace_id == workspace_id,
@@ -388,201 +474,6 @@ async def activate_repos(
     return [_row_to_out(r) for r in rows]
 
 
-# ---------------------------------------------------------------------------
-# One-shot knowledge seed (Phase 2a)
-#
-# Counterpart to ``install_bundle`` but for ``.ship/knowledge/*.md``
-# starter buckets. The bucket-selection UI lives in the onboarding
-# wizard (step 4, checkboxes for ``code-style`` / ``ui-runbook``); the
-# endpoint opens a single PR that drops the selected markdown files at
-# the Ship-scanned path. Idempotent by convention: merging a second
-# PR over the same file is a no-op *review* (no content change unless
-# the tenant edited the seed).
-# ---------------------------------------------------------------------------
-
-
-class KnowledgeSeedIn(BaseModel):
-    """Body for ``POST /workspaces/{ws}/repos/{repo_id}/knowledge_seed``."""
-
-    # Knowledge-starter slugs to seed. ``None`` means "seed everything
-    # the catalog ships today" — matches the "Select all" default on
-    # the wizard checkbox group.
-    selection: list[str] | None = Field(
-        default=None,
-        description=(
-            "Knowledge-starter slugs to commit (e.g. ['code-style']). "
-            "Defaults to seeding every starter in the catalog."
-        ),
-    )
-
-
-class KnowledgeSeedOut(BaseModel):
-    pr_url: str
-    pr_number: int
-    branch: str
-    files: list[str]
-    selection: list[str]
-
-
-@router.post("/{repo_id}/knowledge_seed", response_model=KnowledgeSeedOut)
-async def knowledge_seed(
-    workspace_id: uuid.UUID,
-    repo_id: uuid.UUID,
-    payload: KnowledgeSeedIn | None = None,
-    auth: AuthContext = Depends(get_current_auth),
-    session: AsyncSession = Depends(get_session),
-    settings: Settings = Depends(get_settings),
-) -> KnowledgeSeedOut:
-    """Open a PR that seeds ``.ship/knowledge/<slug>.md`` starter buckets.
-
-    Admin-only. Reuses ``commit_bundle_pr`` so the review experience
-    is identical to a preset bundle install — one branch, one PR, one
-    merge. After merge, the knowledge lister picks up the new files
-    on the next workspace read (no cache invalidation needed).
-    """
-    raise HTTPException(
-        status_code=status.HTTP_410_GONE,
-        detail={
-            "code": "repo_knowledge_deprecated",
-            "message": (
-                "Repo-backed .ship/knowledge PR seeding is deprecated. "
-                "Use workspace-level Knowledge buckets stored in Ship's database."
-            ),
-        },
-    )
-
-    from backend.app.db.models.integrations import GitHubInstallation
-    from backend.app.integrations.github.workflows import (
-        WorkflowDispatchError,
-        commit_bundle_pr,
-    )
-    from backend.app.services import catalog as catalog_service
-
-    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
-
-    repo_row = (
-        await session.execute(
-            select(WorkspaceRepo).where(
-                WorkspaceRepo.id == repo_id,
-                WorkspaceRepo.workspace_id == workspace_id,
-            )
-        )
-    ).scalars().first()
-    if repo_row is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Repo not found in this workspace.",
-        )
-
-    install_row = (
-        await session.execute(
-            select(GitHubInstallation).where(
-                GitHubInstallation.id == repo_row.installation_id
-            )
-        )
-    ).scalars().first()
-    if install_row is None:
-        raise HTTPException(
-            status_code=status.HTTP_412_PRECONDITION_FAILED,
-            detail={
-                "code": "github_app_missing",
-                "message": (
-                    "Ship's GitHub App isn't installed for the workspace. "
-                    "Reconnect it before opening a knowledge-seed PR."
-                ),
-            },
-        )
-
-    requested = payload.selection if payload and payload.selection else None
-    try:
-        files = catalog_service.knowledge_starter_files(requested)
-    except catalog_service.CatalogError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=str(exc),
-        ) from exc
-
-    if not files:
-        raise HTTPException(
-            status_code=status.HTTP_412_PRECONDITION_FAILED,
-            detail={
-                "code": "empty_knowledge_selection",
-                "message": (
-                    "Selection resolved to zero starter files — pick at "
-                    "least one knowledge bucket."
-                ),
-            },
-        )
-
-    # ``selection`` for the audit row — reverse-map the resolved paths
-    # back to slugs so the log is readable even if future versions
-    # rename the on-disk layout.
-    selected_slugs = [
-        path.removeprefix(".ship/knowledge/").removesuffix(".md")
-        for path, _ in files
-    ]
-
-    return_url = (
-        f"{settings.console_url.rstrip('/')}/?ws={workspace_id}"
-        f"&installed=knowledge&reason=back_from_pr"
-    )
-    try:
-        result = await commit_bundle_pr(
-            repo_row,
-            install_row,
-            files=files,
-            title=(
-                "Ship: seed starter knowledge buckets "
-                f"({', '.join(selected_slugs)})"
-            ),
-            branch_label="knowledge-seed",
-            pr_body_header=(
-                "This PR drops Ship's starter knowledge buckets into "
-                "`.ship/knowledge/`. Merge once; edit the markdown files "
-                "in-place afterwards to match your team's conventions — "
-                "Ship always reads the latest committed content.\n\n"
-                f"**Buckets**: {', '.join('`' + s + '`' for s in selected_slugs)}"
-            ),
-            settings=settings,
-            return_url=return_url,
-        )
-    except WorkflowDispatchError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail={
-                "code": "knowledge_seed_failed",
-                "upstream_status": exc.status_code,
-                "message": exc.message[:512],
-            },
-        ) from exc
-
-    session.add(
-        AuditLog(
-            workspace_id=workspace_id,
-            actor_user_id=auth.user.id,
-            actor_token_id=auth.token.id if auth.token else None,
-            action="repo.knowledge_seed",
-            target_kind="workspace_repo",
-            target_id=str(repo_row.id),
-            payload={
-                "selection": selected_slugs,
-                "files": [p for p, _ in files],
-                "pr_number": result.pr_number,
-                "pr_url": result.pr_url,
-                "branch": result.branch,
-            },
-        )
-    )
-    await session.flush()
-
-    return KnowledgeSeedOut(
-        pr_url=result.pr_url,
-        pr_number=result.pr_number,
-        branch=result.branch,
-        files=[p for p, _ in files],
-        selection=selected_slugs,
-    )
-
 
 # ---------------------------------------------------------------------------
 # Per-repo preset picker (B9)
@@ -664,7 +555,7 @@ async def update_repo(
 # ---------------------------------------------------------------------------
 # Wizard v2 unified seed PR (iter 5)
 #
-# Single-shot replacement for ``install_bundle`` + ``knowledge_seed``:
+# Single-shot replacement for ``install_bundle`` + the retired knowledge seed:
 # one PR carrying the preset workflows, ``.ship/config.yml``, bootstrap
 # workflow, and the tracker FSM doc. Also mints the long-
 # lived ``SHIP_RUN_TOKEN`` Actions secret *before* opening the PR so
@@ -677,28 +568,10 @@ async def update_repo(
 class WizardSeedIn(BaseModel):
     """Body for ``POST /workspaces/{ws}/repos/{repo_id}/wizard_seed``."""
 
-    # P5-06 deprecation: every wizard run now seeds the canonical
-    # :data:`backend.app.services.lane_recipes.DEFAULT_BUNDLE`
-    # regardless of what the caller passes. Field is retained so
-    # legacy clients (CLI versions in flight, tests not yet rebased,
-    # the FE during the Wave-8c cut-over) don't 422 the moment they
-    # POST a body. Drop once Wave 8c lands and the FE stops sending
-    # it.
-    presets: list[str] | None = Field(
-        default=None,
-        description=(
-            "DEPRECATED (P5-06). Ignored — the wizard always seeds "
-            "DEFAULT_BUNDLE now. Field retained for legacy CLI / "
-            "FE clients during the Wave-8c cut-over."
-        ),
-    )
-    knowledge_slugs: list[str] | None = Field(
-        default=None,
-        description=(
-            "Deprecated compatibility field. Wizard seed ignores it; "
-            "knowledge is generated post-merge by the bootstrap workflow."
-        ),
-    )
+    # ELS-178 (W2) — `presets` + `knowledge_slugs` retired 2026-05-19.
+    # Wizard always seeds DEFAULT_BUNDLE; knowledge surface moved to
+    # workspace-level buckets. BFF no longer sends either.
+
     # The tracker kind to render into the FSM doc. Normally derived
     # from the repo's tracker binding, but the wizard lets the user
     # preview the seed before saving the binding — the request body
@@ -720,65 +593,31 @@ class WizardSeedIn(BaseModel):
     rotate_run_token: bool = False
 
 
-class WizardSeedCodeownersSummary(BaseModel):
-    """CODEOWNERS → routing summary block of :class:`WizardSeedOut`.
-
-    Wave-8c FE renders this directly: the post-wizard "what we wired"
-    panel reads ``rules_count`` ("we found N CODEOWNERS rules") and
-    ``unresolved_owners`` ("but couldn't match these usernames to a
-    workspace member yet").
-    """
-
-    file_found: bool
-    rules_count: int
-    routing_rules_created: int
-    unresolved_owners: list[str]
-
-
-class WizardSeedIntelHandle(BaseModel):
-    """Legacy repo-intel harvest handle on :class:`WizardSeedOut`.
-
-    Retained for old clients and the manual refresh endpoint. The wizard seed
-    path now returns ``None`` because post-merge bootstrap owns repo analysis.
-
-    Two modes:
-
-    - Inline (``enqueued=False``): no redis worker configured (dev),
-      the wizard ran the harvest synchronously and ``intel_id`` is
-      the freshly-inserted :class:`RepoIntel.id`.
-    - Queued (``enqueued=True``): arq worker handles the job;
-      ``job_id`` is the arq id the FE polls. ``intel_id`` is ``None``
-      until the worker writes the row.
-    """
-
-    enqueued: bool
-    job_id: str | None = None
-    intel_id: uuid.UUID | None = None
-
-
 class WizardSeedOut(BaseModel):
-    """Response shape for ``POST .../wizard_seed`` (extended in P5-06).
+    """Response shape for ``POST .../wizard_seed``.
 
-    Fields added in P5-06 (``codeowners``, ``intel``,
-    ``synthetic_lanes_created``) are all defaulted so legacy FE
-    builds that ignore them keep deserialising. Wave-8c FE binds
-    against them once the new Inbox / Coverage panels ship.
+    ELS-178 (W2) — `codeowners`, `intel`, `synthetic_lanes_created`,
+    `presets`, `knowledge_slugs` retired 2026-05-19. The wizard route
+    stopped populating them long ago (always None / 0 / []); the
+    accompanying type classes (`WizardSeedCodeownersSummary`,
+    `WizardSeedIntelHandle`) + the `wizard_seed_routing` service +
+    the synthetic-lane sync flavor went with them.
     """
 
     pr_url: str
     pr_number: int
     branch: str
     files: list[str]
-    presets: list[str]
-    knowledge_slugs: list[str]
     tracker_kind: str | None = None
     run_token_prefix: str | None = None
     run_token_rotated: bool = False
-    # ── P5-06 additions ──────────────────────────────────────────
-    codeowners: WizardSeedCodeownersSummary | None = None
-    intel: WizardSeedIntelHandle | None = None
-    # ── P5-07 addition ───────────────────────────────────────────
-    synthetic_lanes_created: int = 0
+    # ELS-182 (W6) — true once the seed PR has been merged (either via
+    # the App's installation token in the activation modal or by the
+    # operator on github.com). Populated by /wizard_seed/latest from
+    # a sibling ``pr_merge.tracker_done`` audit row matched on
+    # pr_number — the live endpoint always returns False because the
+    # PR is fresh.
+    merged: bool = False
 
 
 class WizardSeedActivateIn(BaseModel):
@@ -802,19 +641,6 @@ class WizardSeedActivateOut(BaseModel):
     sha: str | None = None
     message: str | None = None
 
-
-class KnowledgeBootstrapIn(BaseModel):
-    force: bool = False
-
-
-class KnowledgeBootstrapOut(BaseModel):
-    status: str
-    pr_url: str | None = None
-    pr_number: int | None = None
-    branch: str | None = None
-    files: list[str] = Field(default_factory=list)
-    intel_version: int | None = None
-    articles_written: int = 0
 
 
 class RoutineRunClaimIn(BaseModel):
@@ -983,6 +809,42 @@ async def wizard_seed(
             )
         ).scalars().first()
         if last_seed is not None:
+            # ELS-181 (W5/B3) — even on idempotent short-circuit, repair
+            # SHIP_WORKSPACE_ID. The secret was added in commit 2e488df;
+            # repos seeded before that bump (and still on _BUNDLE_VERSION)
+            # would otherwise never get it pushed because we skip the
+            # full setup path. put_repo_secret is idempotent at GH side.
+            try:
+                from backend.app.db.models.integrations import (
+                    GitHubInstallation,
+                )
+                from backend.app.integrations.github.actions_secrets import (
+                    put_repo_secret,
+                )
+
+                install_row_short = (
+                    await session.execute(
+                        select(GitHubInstallation).where(
+                            GitHubInstallation.id == repo_row.installation_id
+                        )
+                    )
+                ).scalars().first()
+                if install_row_short is not None:
+                    await put_repo_secret(
+                        repo_row,
+                        install_row_short,
+                        name="SHIP_WORKSPACE_ID",
+                        plaintext=str(workspace_id),
+                        settings=settings,
+                        client=None,
+                    )
+            except Exception:  # noqa: BLE001 — best-effort repair
+                logger.warning(
+                    "wizard_seed short-circuit: SHIP_WORKSPACE_ID re-push "
+                    "skipped for repo=%s — operator may need to wizard-reseed",
+                    repo_row.full_name,
+                )
+
             seed_pr_url = (last_seed.payload or {}).get("pr_url")
             seed_pr_number = (last_seed.payload or {}).get("pr_number")
             try:
@@ -995,12 +857,9 @@ async def wizard_seed(
                 pr_number=seed_pr_number_int,
                 branch=str(seed_branch),
                 files=[],
-                presets=["default"],
-                knowledge_slugs=[],
                 tracker_kind=(last_seed.payload or {}).get("tracker_kind"),
                 run_token_prefix=repo_row.run_token_prefix,
                 run_token_rotated=False,
-                synthetic_lanes_created=0,
             )
 
     # ── Workspace defaults gate ──────────────────────────────────
@@ -1259,8 +1118,9 @@ async def wizard_seed(
         "**Knowledge**: indexed server-side after merge — Ship's webhook "
         "consumes the new `.ship/config.yml` and updates the workspace "
         "knowledge index out-of-band.\n\n"
-        "Merge once. The single `.github/workflows/ship-trigger-schedule.yml` "
-        "workflow drives every Ship routine on its cron tick."
+        "Merge once. The `.github/workflows/ship-agent-run.yml` workflow "
+        "handles every Ship agent dispatch — Linear state changes trigger "
+        "it via Ship's webhook, no cron required."
     )
     try:
         result = await commit_bundle_pr(
@@ -1283,11 +1143,6 @@ async def wizard_seed(
             },
         ) from exc
 
-    # Post-merge bootstrap/config sync owns all repo-analysis side effects.
-    codeowners_summary: WizardSeedCodeownersSummary | None = None
-    synthetic_lanes_created = 0
-    intel_handle = None
-
     # Stamp the bundle version so the dashboard can tell "up to date"
     # from "upgrade available" next render.
     repo_row.installed_bundle_version = _BUNDLE_VERSION
@@ -1301,8 +1156,6 @@ async def wizard_seed(
             target_kind="workspace_repo",
             target_id=str(repo_row.id),
             payload={
-                "presets": cleaned,
-                "knowledge_slugs": bundle.knowledge_slugs,
                 "tracker_kind": tracker_kind,
                 "tracker_source": (
                     "body"
@@ -1318,17 +1171,6 @@ async def wizard_seed(
                 "run_token_prefix": repo_row.run_token_prefix,
                 "bundle_version": _BUNDLE_VERSION,
                 "bundle_hash": bundle.bundle_hash,
-                "synthetic_lanes_created": synthetic_lanes_created,
-                "codeowners": (
-                    codeowners_summary.model_dump()
-                    if codeowners_summary is not None
-                    else None
-                ),
-                "intel": (
-                    intel_handle.model_dump(mode="json")
-                    if intel_handle is not None
-                    else None
-                ),
             },
         )
     )
@@ -1339,181 +1181,11 @@ async def wizard_seed(
         pr_number=result.pr_number,
         branch=result.branch,
         files=[p for p, _ in bundle.files],
-        presets=cleaned,
-        knowledge_slugs=bundle.knowledge_slugs,
         tracker_kind=tracker_kind,
         run_token_prefix=repo_row.run_token_prefix,
         run_token_rotated=rotated,
-        codeowners=codeowners_summary,
-        intel=intel_handle,
-        synthetic_lanes_created=synthetic_lanes_created,
     )
 
-
-@router.post(
-    "/{repo_id}/knowledge/bootstrap",
-    response_model=KnowledgeBootstrapOut,
-)
-async def bootstrap_repo_knowledge(
-    workspace_id: uuid.UUID,
-    repo_id: uuid.UUID,
-    payload: KnowledgeBootstrapIn | None = None,
-    auth: AuthContext = Depends(get_current_auth),
-    session: AsyncSession = Depends(get_session),
-    settings: Settings = Depends(get_settings),
-) -> KnowledgeBootstrapOut:
-    """Analyze the merged repo and open PR 2 with generated knowledge docs."""
-    raise HTTPException(
-        status_code=status.HTTP_410_GONE,
-        detail={
-            "code": "repo_knowledge_deprecated",
-            "message": (
-                "Generated repository knowledge PRs are deprecated. "
-                "Ship Knowledge is workspace-scoped and stored in the database."
-            ),
-        },
-    )
-
-    from backend.app.db.models.repo_intel import RepoIntelTriggeredBy
-    from backend.app.integrations.github.workflows import (
-        WorkflowDispatchError,
-        commit_bundle_pr,
-    )
-    from backend.app.services.generated_knowledge import (
-        render_generated_knowledge_files,
-    )
-    from backend.app.services.repo_intel import (
-        get_current_intel,
-        harvest_repo_intel,
-    )
-
-    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
-    payload = payload or KnowledgeBootstrapIn()
-
-    repo_row = (
-        await session.execute(
-            select(WorkspaceRepo).where(
-                WorkspaceRepo.id == repo_id,
-                WorkspaceRepo.workspace_id == workspace_id,
-            )
-        )
-    ).scalars().first()
-    if repo_row is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Repo not found in this workspace.",
-        )
-
-    if not payload.force:
-        previous = (
-            await session.execute(
-                select(AuditLog)
-                .where(
-                    AuditLog.workspace_id == workspace_id,
-                    AuditLog.action == "repo.knowledge_bootstrap",
-                    AuditLog.target_kind == "workspace_repo",
-                    AuditLog.target_id == str(repo_row.id),
-                )
-                .order_by(AuditLog.created_at.desc())
-                .limit(1)
-            )
-        ).scalar_one_or_none()
-        if previous is not None:
-            prev_payload = previous.payload or {}
-            if prev_payload.get("status") == "knowledge_pr_opened":
-                return KnowledgeBootstrapOut(
-                    status="already_done",
-                    pr_url=prev_payload.get("pr_url"),
-                    pr_number=prev_payload.get("pr_number"),
-                    branch=prev_payload.get("branch"),
-                    files=list(prev_payload.get("files") or []),
-                    intel_version=prev_payload.get("intel_version"),
-                    articles_written=int(prev_payload.get("articles_written") or 0),
-                )
-
-    install_row = (
-        await session.execute(
-            select(GitHubInstallation).where(
-                GitHubInstallation.id == repo_row.installation_id
-            )
-        )
-    ).scalars().first()
-    if install_row is None:
-        raise HTTPException(
-            status_code=status.HTTP_412_PRECONDITION_FAILED,
-            detail={
-                "code": "github_app_missing",
-                "message": "Ship's GitHub App is not installed for this repo.",
-            },
-        )
-
-    report = await harvest_repo_intel(
-        session=session,
-        workspace_id=workspace_id,
-        repo_id=repo_row.id,
-        triggered_by=RepoIntelTriggeredBy.BOOTSTRAP,
-        settings=settings,
-    )
-    intel = await get_current_intel(session, repo_row.id)
-    if intel is None:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={
-                "code": "repo_intel_missing",
-                "message": "Bootstrap analyzed the repo but did not produce repo intel.",
-            },
-        )
-
-    files = render_generated_knowledge_files(repo=repo_row, intel=intel)
-    body_header = (
-        "This PR adds Ship-generated repository knowledge files.\n\n"
-        f"Generated from repo intel version `{intel.version}` after the wizard "
-        "seed PR was merged. Review these docs, edit anything too generic, "
-        "then merge to index them into Ship knowledge search."
-    )
-    try:
-        pr = await commit_bundle_pr(
-            repo_row,
-            install_row,
-            files=files,
-            title="Ship: generated repository knowledge",
-            branch_label="knowledge-bootstrap",
-            pr_body_header=body_header,
-            settings=settings,
-        )
-    except WorkflowDispatchError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail={
-                "code": "knowledge_bootstrap_failed",
-                "upstream_status": exc.status_code,
-                "message": exc.message[:512],
-            },
-        ) from exc
-
-    result_payload = {
-        "status": "knowledge_pr_opened",
-        "pr_url": pr.pr_url,
-        "pr_number": pr.pr_number,
-        "branch": pr.branch,
-        "files": [path for path, _ in files],
-        "intel_version": intel.version,
-        "articles_written": report.knowledge_articles_written,
-    }
-    session.add(
-        AuditLog(
-            workspace_id=workspace_id,
-            actor_user_id=auth.user.id,
-            actor_token_id=auth.token.id if auth.token else None,
-            action="repo.knowledge_bootstrap",
-            target_kind="workspace_repo",
-            target_id=str(repo_row.id),
-            payload=result_payload,
-        )
-    )
-    await session.flush()
-
-    return KnowledgeBootstrapOut(**result_payload)
 
 
 @router.post(
@@ -1779,32 +1451,42 @@ async def get_latest_wizard_seed(
         )
 
     payload = row.payload or {}
-    codeowners_payload = payload.get("codeowners")
-    codeowners = (
-        WizardSeedCodeownersSummary(**codeowners_payload)
-        if isinstance(codeowners_payload, dict)
-        else None
-    )
-    intel_payload = payload.get("intel")
-    intel = (
-        WizardSeedIntelHandle(**intel_payload)
-        if isinstance(intel_payload, dict)
-        else None
-    )
+
+    # ELS-182 (W6) — detect whether the seed PR has merged so the Done
+    # page badge flips without sessionStorage's help. We look for a
+    # sibling ``pr_merge.tracker_done`` audit row whose pr_number
+    # matches. Cheap: one indexed query on (workspace_id, action,
+    # created_at).
+    seed_pr_number = int(payload.get("pr_number") or 0)
+    merged = False
+    if seed_pr_number:
+        from sqlalchemy import cast as _sa_cast, Integer as _SaInteger
+
+        merged_row = (
+            await session.execute(
+                select(AuditLog.id)
+                .where(
+                    AuditLog.workspace_id == workspace_id,
+                    AuditLog.action == "pr_merge.tracker_done",
+                    _sa_cast(
+                        AuditLog.payload["pr_number"].astext, _SaInteger
+                    )
+                    == seed_pr_number,
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        merged = merged_row is not None
 
     return WizardSeedOut(
         pr_url=payload.get("pr_url") or "",
-        pr_number=int(payload.get("pr_number") or 0),
+        pr_number=seed_pr_number,
         branch=payload.get("branch") or "",
         files=list(payload.get("files") or []),
-        presets=list(payload.get("presets") or []),
-        knowledge_slugs=list(payload.get("knowledge_slugs") or []),
         tracker_kind=payload.get("tracker_kind"),
         run_token_prefix=payload.get("run_token_prefix"),
         run_token_rotated=bool(payload.get("run_token_rotated") or False),
-        codeowners=codeowners,
-        intel=intel,
-        synthetic_lanes_created=int(payload.get("synthetic_lanes_created") or 0),
+        merged=merged,
     )
 
 

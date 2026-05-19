@@ -80,7 +80,7 @@ export function WorkspaceDefaultsPanel({
 
   return (
     <section
-      className="rounded-2xl border border-white/10 bg-white/[0.03] p-5 shadow-card"
+      className="rounded-2xl border border-white/[0.08] bg-white/[0.02] p-5 shadow-card"
       data-testid="onboarding-confirm-workspace-defaults"
     >
       <header className="flex flex-wrap items-center justify-between gap-3">
@@ -179,7 +179,7 @@ export function WorkspaceDefaultsPanel({
                 setSaving(false);
               }
             }}
-            className="rounded-lg border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs text-white"
+            className="rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-1.5 text-xs text-white"
           >
             <option value="">— pick —</option>
             {AGENT_PROFILES.map((p) => (
@@ -231,7 +231,7 @@ function Row({
   children?: React.ReactNode;
 }) {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-white/10 bg-white/[0.02] px-3 py-2">
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-white/[0.08] bg-white/[0.02] px-3 py-2">
       <div className="flex min-w-0 items-center gap-3">
         <span
           className={`rounded-full px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-widest ${

@@ -645,6 +645,37 @@ class ToolBox:
                 },
             ),
             ToolSpec(
+                name="propose_mass_plan",
+                description=(
+                    "Extract a structured project + epics + dependencies "
+                    "plan from a requirements PDF the user has attached. "
+                    "Use this when the user uploads a PRD / spec / RFC "
+                    "and asks you to plan a project, scope out epics, "
+                    "or break work into phases. The Console renders the "
+                    "preview as a card the user edits + commits.\n\n"
+                    "Returns ``{proposal_id, project_name, epic_count, "
+                    "dep_count, summary}``. Tell the user: \"Here's a "
+                    "draft plan — open the preview, edit if needed, and "
+                    "hit Commit.\" Do NOT verbose-dump the proposal in "
+                    "the chat reply — the preview card is the surface."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "attachment_id": {
+                            "type": "string",
+                            "description": (
+                                "UUID of the chat attachment containing "
+                                "the requirements doc. Must be of kind "
+                                "``pdf``."
+                            ),
+                        },
+                    },
+                    "required": ["attachment_id"],
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
                 name="project_update",
                 description=(
                     "Mutate an existing project. Two sub-ops, set "
@@ -1704,6 +1735,7 @@ class ToolBox:
             "project_create": self._tool_project_create,
             "project_find_or_create": self._tool_project_find_or_create,
             "inbox_create": self._tool_inbox_create,
+            "propose_mass_plan": self._tool_propose_mass_plan,
             "project_update": self._tool_project_update,
             # Legacy dispatch keys for tests that call the sub-ops
             # directly. Not in specs() — invisible to the LLM.
@@ -2450,6 +2482,22 @@ class ToolBox:
         else:
             summary_text = summary
 
+        if type_ == "exception":
+            from backend.app.core.sentry import record_inbox_exception_breadcrumb
+
+            record_inbox_exception_breadcrumb(
+                source="agent_tool.inbox_create",
+                title=title_clean,
+                summary=summary_text,
+            )
+            return _json_result(
+                {
+                    "type": type_,
+                    "status": "breadcrumb_only",
+                    "title": title_clean,
+                }
+            )
+
         item = InboxItem(
             workspace_id=self._workspace_id,
             repo_id=self._active_repo_id,
@@ -2478,6 +2526,129 @@ class ToolBox:
                 "type": item.type,
                 "status": item.status,
                 "title": item.title,
+            }
+        )
+
+    async def _tool_propose_mass_plan(self, args: dict[str, Any]) -> str:
+        """ELS-171 / M4 — extract a mass-planning proposal from an
+        attached PDF and persist it as a draft.
+
+        Resolves the attachment by id, reads its bytes via the
+        configured storage backend, calls the vision extractor
+        (M1), persists the result as a ``planning_proposal`` row
+        the Console renders as a preview card.
+
+        Returns a JSON blob the agent uses to compose its reply.
+        Crucially carries ``proposal_id`` so the Console knows
+        which row to load.
+        """
+        from sqlalchemy import select as _select
+
+        from backend.app.db.models.agent_surface import ChatAttachment
+        from backend.app.db.models.planning_proposals import PlanningProposal
+        from backend.app.services.attachments.storage import (
+            get_default_storage,
+        )
+        from backend.app.services.planning.requirements_extraction import (
+            extract_proposal_from_pdf,
+        )
+
+        attachment_id = _require_str(args, "attachment_id")
+        try:
+            att_uuid = uuid.UUID(attachment_id)
+        except ValueError as exc:
+            raise ToolInvocationError(
+                f"attachment_id must be a UUID, got {attachment_id!r}"
+            ) from exc
+
+        att = (
+            await self._session.execute(
+                _select(ChatAttachment).where(
+                    ChatAttachment.id == att_uuid,
+                    ChatAttachment.workspace_id == self._workspace_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if att is None:
+            raise ToolInvocationError(
+                f"attachment {attachment_id!r} not found in this workspace"
+            )
+        if att.kind != "pdf":
+            raise ToolInvocationError(
+                f"attachment {attachment_id!r} is kind={att.kind!r}; "
+                "propose_mass_plan needs a PDF"
+            )
+
+        api_key = (self._settings.anthropic_api_key or "").strip()
+        if not api_key:
+            raise ToolInvocationError(
+                "Workspace has no ANTHROPIC_API_KEY configured; mass-plan "
+                "extraction needs vision access."
+            )
+
+        try:
+            pdf_bytes = await get_default_storage().read(att.storage_path)
+        except Exception as exc:  # noqa: BLE001 — surface to operator
+            raise ToolInvocationError(
+                f"Could not read PDF bytes: {exc}"
+            ) from exc
+
+        try:
+            result = await extract_proposal_from_pdf(
+                pdf_bytes, api_key=api_key
+            )
+        except ValueError as exc:
+            raise ToolInvocationError(str(exc)) from exc
+
+        # Persist as a draft so the Console preview pane can load it.
+        proposal_row = PlanningProposal(
+            workspace_id=self._workspace_id,
+            thread_id=self._thread_id,
+            source_kind="pdf",
+            source_ref=str(att.id),
+            payload=result.proposal.model_dump(),
+            created_by=self._user_id,
+        )
+        self._session.add(proposal_row)
+        await self._session.flush()
+
+        # M8 — cost audit row.
+        from backend.app.db.models.tenancy import AuditLog as _AL
+
+        self._session.add(
+            _AL(
+                workspace_id=self._workspace_id,
+                actor_user_id=self._user_id,
+                actor_token_id=None,
+                action="mass_planning.extraction.cost",
+                target_kind="planning_proposal",
+                target_id=str(proposal_row.id),
+                payload={
+                    "input_tokens": result.input_tokens,
+                    "output_tokens": result.output_tokens,
+                    "file_bytes": result.file_bytes,
+                    "duration_ms": result.duration_ms,
+                    "model_id": result.model_id,
+                    "fallback_used": result.fallback_used,
+                    "epic_count": len(result.proposal.epics),
+                },
+            )
+        )
+        await self._session.flush()
+
+        epic_count = len(result.proposal.epics)
+        dep_count = sum(len(e.depends_on) for e in result.proposal.epics)
+        return _json_result(
+            {
+                "proposal_id": str(proposal_row.id),
+                "project_name": result.proposal.project.name,
+                "epic_count": epic_count,
+                "dep_count": dep_count,
+                "summary": (
+                    f"{epic_count} epics with {dep_count} blocks-deps "
+                    "drafted from the PDF. Operator should open the "
+                    "preview card to review + commit."
+                ),
             }
         )
 

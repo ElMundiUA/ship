@@ -40,10 +40,12 @@ import type {
 export function RepoResultCard({
   repo,
   result,
+  workspaceId,
 }: {
   /** Best-effort repo metadata. ``null`` when only the wizard payload is around. */
   repo: ApiActivatedRepo | null;
   result: ApiWizardSeedOut;
+  workspaceId: string | null;
 }) {
   const fullName = repo?.full_name ?? null;
   const defaultBranch = repo?.default_branch ?? "main";
@@ -55,7 +57,7 @@ export function RepoResultCard({
       data-testid="onboarding-done-repo-card"
       data-repo-id={repo?.id ?? ""}
       data-repo-full-name={fullName ?? ""}
-      className="rounded-2xl border border-white/10 bg-white/[0.04] p-5 backdrop-blur-xl shadow-card"
+      className="rounded-2xl border border-white/[0.08] bg-white/[0.04] p-5 backdrop-blur-xl shadow-card"
     >
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
@@ -77,14 +79,18 @@ export function RepoResultCard({
           </p>
         </div>
         {result.tracker_kind && (
-          <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] uppercase tracking-widest text-white/65">
+          <span className="rounded-full border border-white/[0.08] bg-white/[0.04] px-2 py-0.5 text-[10px] uppercase tracking-widest text-white/65">
             tracker · {result.tracker_kind}
           </span>
         )}
       </header>
 
       <div className="mt-4 space-y-3">
-        <PullRequestRow result={result} repoId={repo?.id ?? null} />
+        <PullRequestRow
+          result={result}
+          repoId={repo?.id ?? null}
+          workspaceId={workspaceId}
+        />
         <FileCountRow result={result} fileCount={fileCount} />
       </div>
     </article>
@@ -116,12 +122,18 @@ function Section({
 function PullRequestRow({
   result,
   repoId,
+  workspaceId,
 }: {
   result: ApiWizardSeedOut;
   /** ``null`` when the parent only had the wizard payload, no repo row. */
   repoId: string | null;
+  workspaceId: string | null;
 }) {
-  const merged = useActivationMerged(repoId);
+  // Seed the merged signal from the live payload too — covers the
+  // "open Done from fresh tab after the PR was already merged" case
+  // immediately, no polling round-trip needed.
+  const polled = useActivationMerged(workspaceId, repoId);
+  const merged = polled || result.merged === true;
   return (
     <Section label="Pull request">
       <div className="flex flex-wrap items-center gap-2">
@@ -162,18 +174,24 @@ function PullRequestRow({
 
 
 /**
- * Read the activation flag the configure step's "Activate Ship now"
- * modal writes when the App's installation token successfully merged
- * the seed PR. Returns ``true`` only on a successful merge; missing
- * key, parse failure, ``merged !== true``, or storage error all
- * collapse to ``false`` so the badge degrades to OPENED rather than
- * lying.
+ * ELS-182 (W6) — derive the "merged" badge from two signals:
  *
- * One-shot read on mount — the configure step navigates here right
- * after writing, so there's no race window worth subscribing to.
+ *   1. sessionStorage flag from the activation modal (fast path —
+ *      operator just merged via the App's installation token; no
+ *      polling round-trip needed).
+ *   2. Backend ``GET .../wizard_seed/latest`` poll. Catches the
+ *      "opened a fresh tab" + "merged on github.com manually" cases
+ *      that sessionStorage doesn't cover. Polls every 10s for up to
+ *      2 min after mount; gives up after the timeout to avoid
+ *      lingering work on a dead tab.
  */
-function useActivationMerged(repoId: string | null): boolean {
+function useActivationMerged(
+  workspaceId: string | null,
+  repoId: string | null,
+): boolean {
   const [merged, setMerged] = useState(false);
+
+  // Fast path: sessionStorage.
   useEffect(() => {
     if (!repoId) return;
     if (typeof window === "undefined") return;
@@ -195,6 +213,60 @@ function useActivationMerged(repoId: string | null): boolean {
       // Tampered cache — ignore; badge stays OPENED.
     }
   }, [repoId]);
+
+  // Slow path: backend poll. Stops as soon as we flip merged=true
+  // (either source) or after 2 minutes.
+  useEffect(() => {
+    if (!workspaceId || !repoId) return;
+    if (merged) return;
+    let cancelled = false;
+    const started = Date.now();
+    const POLL_INTERVAL_MS = 10_000;
+    const POLL_TIMEOUT_MS = 120_000;
+
+    async function check() {
+      if (cancelled) return;
+      try {
+        // Hit the server-side proxy route — ``@/lib/api/client`` is
+        // tagged ``import "server-only"`` so client components can't
+        // import it (the build refuses since 2026-05-18 when ELS-158
+        // first surfaced the constraint). The proxy at
+        // ``/api/onboard/wizard-seed-latest`` already exists for the
+        // same reason.
+        const url = new URL(
+          "/api/onboard/wizard-seed-latest",
+          window.location.origin,
+        );
+        url.searchParams.set("workspace_id", workspaceId!);
+        url.searchParams.set("repo_id", repoId!);
+        const res = await fetch(url.toString(), {
+          credentials: "include",
+        });
+        if (res.ok) {
+          const body = (await res.json()) as {
+            result?: { merged?: boolean };
+          };
+          if (!cancelled && body.result?.merged === true) {
+            setMerged(true);
+            return;
+          }
+        }
+      } catch {
+        // 404 (no seed) / 5xx / network — silently retry until timeout.
+      }
+      if (cancelled) return;
+      if (Date.now() - started >= POLL_TIMEOUT_MS) return;
+      window.setTimeout(check, POLL_INTERVAL_MS);
+    }
+
+    // First check fires immediately (so a fresh tab with an already-
+    // merged PR doesn't wait 10s for the right badge).
+    void check();
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceId, repoId, merged]);
+
   return merged;
 }
 

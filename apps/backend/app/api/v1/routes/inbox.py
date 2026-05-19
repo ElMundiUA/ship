@@ -67,8 +67,13 @@ from backend.app.db.models.inbox import (
     InboxItem,
     InboxItemEvent,
 )
+from backend.app.db.models.lanes import RoutineRun
 from backend.app.db.models.tenancy import AuditLog, User, WorkspaceMember
 from backend.app.db.session import get_session
+from backend.app.services.inbox.classification import (
+    ACTIONABLE_CATEGORIES,
+    derive_lane,
+)
 from backend.app.services.inbox.profiles import INBOX_TYPES
 from backend.app.services.inbox.routing import RoutingContext, resolve_handle
 from backend.app.services.inbox.side_effects import apply_side_effects
@@ -90,6 +95,12 @@ router = APIRouter(
 
 INBOX_STATUSES: tuple[str, ...] = ("new", "snoozed", "resolved", "dismissed")
 OPEN_STATUSES: tuple[str, ...] = ("new", "snoozed")
+INBOX_CATEGORIES: tuple[str, ...] = ("decision_needed", "failure", "attention")
+INBOX_LANES: tuple[str, ...] = ("now", "today", "whenever")
+INBOX_SORTS: tuple[str, ...] = (
+    "created_desc",
+    "priority_desc_created_asc",
+)
 
 # Type-restricted disposition actions (planning §7).
 _TYPE_GATED_ACTIONS: dict[str, str] = {
@@ -153,6 +164,14 @@ class InboxItemOut(BaseModel):
     snoozed_until: datetime | None
     resolved_at: datetime | None
     resolution: str | None
+    category: str
+    priority: int
+    lane: str
+    # Inbox Decision UI (ELS-158): server-derived rendering hint so
+    # the Console picks pills / checkboxes / ack / freeform without
+    # re-implementing the parser. Falls back to ``freeform_only`` on
+    # legacy rows.
+    resolution_mode: str
     action_item_count: int = 0
     ticket_ref: str | None = None
     fsm_stage: str | None = None
@@ -201,6 +220,8 @@ class InboxCountsResponse(BaseModel):
     mine: int
     unassigned: int
     all_open: int
+    actionable_new: int
+    reports_new: int
     by_type: dict[str, int]
     by_status: dict[str, int]
 
@@ -244,6 +265,19 @@ class InboxEventAppendIn(BaseModel):
 
     body: str = Field(min_length=1, max_length=10_000)
     payload: dict = Field(default_factory=dict)
+
+
+class InboxDecideIn(BaseModel):
+    """ELS-159 — operator's pick(s) on an action_items-bearing row.
+
+    Either ``selections`` (subset of ``payload.action_items[].id``)
+    OR ``freeform`` (free-text override) must be non-empty. Both
+    together is fine — selected actions fire side-effects AND the
+    freeform note is appended as a comment on the source ticket.
+    """
+
+    selections: list[str] = Field(default_factory=list, max_length=32)
+    freeform: str | None = Field(default=None, max_length=10_000)
 
 
 # ---------------------------------------------------------------------------
@@ -312,7 +346,26 @@ def _headline_fields(payload: dict | None) -> tuple[str | None, str | None]:
     return ticket_ref, fsm_stage
 
 
-def _to_item_out(item: InboxItem, owner: User | None) -> InboxItemOut:
+async def _load_runs_by_id(
+    session: AsyncSession, run_ids: set[uuid.UUID]
+) -> dict[uuid.UUID, RoutineRun]:
+    if not run_ids:
+        return {}
+    stmt = select(RoutineRun).where(RoutineRun.id.in_(run_ids))
+    rows = (await session.execute(stmt)).scalars().all()
+    return {r.id: r for r in rows}
+
+
+def _to_item_out(
+    item: InboxItem,
+    owner: User | None,
+    *,
+    lane: str,
+) -> InboxItemOut:
+    from backend.app.services.inbox.classification import (
+        derive_resolution_mode as _drm,
+    )
+
     ticket_ref, fsm_stage = _headline_fields(item.payload)
     return InboxItemOut(
         id=item.id,
@@ -332,10 +385,28 @@ def _to_item_out(item: InboxItem, owner: User | None) -> InboxItemOut:
         snoozed_until=item.snoozed_until,
         resolved_at=item.resolved_at,
         resolution=item.resolution,
+        category=item.category,
+        priority=item.priority,
+        lane=lane,
+        resolution_mode=_drm(item.payload, item_type=item.type),
         action_item_count=_action_item_count(item.payload),
         ticket_ref=ticket_ref,
         fsm_stage=fsm_stage,
     )
+
+
+async def _project_items_out(
+    session: AsyncSession,
+    page_rows: list[tuple[InboxItem, User | None]],
+) -> list[InboxItemOut]:
+    run_ids = {item.run_id for item, _ in page_rows if item.run_id is not None}
+    runs = await _load_runs_by_id(session, run_ids)
+    out: list[InboxItemOut] = []
+    for item, owner in page_rows:
+        run = runs.get(item.run_id) if item.run_id else None
+        lane = derive_lane(item, run=run)
+        out.append(_to_item_out(item, owner, lane=lane))
+    return out
 
 
 def _to_event_out(event: InboxItemEvent) -> InboxItemEventOut:
@@ -423,6 +494,7 @@ def _apply_filters(
     auth_user_id: uuid.UUID,
     ownership: str,
     types: list[str] | None,
+    categories: list[str] | None,
     statuses: list[str] | None,
     repo_id: uuid.UUID | None,
     play_key: str | None,
@@ -443,6 +515,8 @@ def _apply_filters(
 
     if types:
         stmt = stmt.where(InboxItem.type.in_(types))
+    if categories:
+        stmt = stmt.where(InboxItem.category.in_(categories))
     if statuses:
         stmt = stmt.where(InboxItem.status.in_(statuses))
     if repo_id is not None:
@@ -486,6 +560,48 @@ def _normalise_types(raw: list[str] | None) -> list[str] | None:
     return list(raw)
 
 
+def _normalise_categories(raw: list[str] | None) -> list[str] | None:
+    if raw is None or len(raw) == 0:
+        return None
+    bad = [v for v in raw if v not in INBOX_CATEGORIES]
+    if bad:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"unknown category filter: {bad!r}; "
+                f"expected any of {sorted(INBOX_CATEGORIES)}"
+            ),
+        )
+    return list(raw)
+
+
+def _normalise_lane(raw: str | None) -> str | None:
+    if raw is None or raw == "":
+        return None
+    if raw not in INBOX_LANES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"unknown lane filter: {raw!r}; "
+                f"expected any of {sorted(INBOX_LANES)}"
+            ),
+        )
+    return raw
+
+
+def _normalise_sort(raw: str | None) -> str:
+    if raw is None or raw == "":
+        return "priority_desc_created_asc"
+    if raw not in INBOX_SORTS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"unknown sort: {raw!r}; expected any of {sorted(INBOX_SORTS)}"
+            ),
+        )
+    return raw
+
+
 # ---------------------------------------------------------------------------
 # LIST + COUNTS
 # ---------------------------------------------------------------------------
@@ -496,6 +612,9 @@ async def list_inbox(
     workspace_id: uuid.UUID,
     ownership: Literal["mine", "unassigned", "all"] = Query(default="mine"),
     type: list[str] | None = Query(default=None),
+    category: list[str] | None = Query(default=None),
+    lane: str | None = Query(default=None),
+    sort: str | None = Query(default=None),
     status_filter: list[str] | None = Query(default=None, alias="status"),
     repo_id: uuid.UUID | None = Query(default=None),
     play_key: str | None = Query(default=None),
@@ -521,6 +640,9 @@ async def list_inbox(
     await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
 
     types = _normalise_types(type)
+    categories = _normalise_categories(category)
+    lane_filter = _normalise_lane(lane)
+    sort_key = _normalise_sort(sort)
     statuses = _normalise_statuses(status_filter)
 
     Owner = User  # alias keeps the join readable.
@@ -535,34 +657,47 @@ async def list_inbox(
         auth_user_id=auth.user.id,
         ownership=ownership,
         types=types,
+        categories=categories,
         statuses=statuses,
         repo_id=repo_id,
         play_key=play_key,
     )
 
-    # Cursor: keyset pagination over ``(created_at DESC, id DESC)``.
-    # Use a row-tuple comparison so Postgres can index-scan instead
-    # of falling back to a sort-then-filter plan on large tables.
-    if cursor is not None:
+    if sort_key == "priority_desc_created_asc":
+        base_select = base_select.order_by(
+            InboxItem.priority.desc(),
+            InboxItem.created_at.asc(),
+            InboxItem.id.asc(),
+        )
+    else:
+        base_select = base_select.order_by(
+            InboxItem.created_at.desc(), InboxItem.id.desc()
+        )
+
+    fetch_limit = limit + 1
+    if lane_filter is not None:
+        # Lane is derived from run joins — over-fetch then filter in Python.
+        fetch_limit = min(500, max(limit + 1, 100))
+
+    if cursor is not None and sort_key != "priority_desc_created_asc":
         ts, item_id = _decode_cursor(cursor)
         base_select = base_select.where(
             tuple_(InboxItem.created_at, InboxItem.id)
             < tuple_(ts, item_id)
         )
 
-    base_select = base_select.order_by(
-        InboxItem.created_at.desc(), InboxItem.id.desc()
-    ).limit(limit + 1)
+    base_select = base_select.limit(fetch_limit)
 
     rows = (await session.execute(base_select)).all()
-    has_more = len(rows) > limit
+    projected = await _project_items_out(session, rows)
+    if lane_filter is not None:
+        projected = [i for i in projected if i.lane == lane_filter]
+    has_more = len(projected) > limit
+    items = projected[:limit]
     page_rows = rows[:limit]
-    items = [_to_item_out(item, owner) for item, owner in page_rows]
-    next_cursor = (
-        _encode_cursor(page_rows[-1][0].created_at, page_rows[-1][0].id)
-        if has_more and page_rows
-        else None
-    )
+    next_cursor = None
+    if has_more and page_rows and sort_key != "priority_desc_created_asc":
+        next_cursor = _encode_cursor(page_rows[-1][0].created_at, page_rows[-1][0].id)
 
     # ``total`` honours every filter (the count of what the user
     # would see if they kept walking). Same predicates as the page
@@ -574,11 +709,14 @@ async def list_inbox(
         auth_user_id=auth.user.id,
         ownership=ownership,
         types=types,
+        categories=categories,
         statuses=statuses,
         repo_id=repo_id,
         play_key=play_key,
     )
     total = int((await session.execute(total_stmt)).scalar_one())
+    if lane_filter is not None:
+        total = len(items)
 
     # counts_by_type — drop the type filter so chip counts stay
     # honest while the user is excluding a type.
@@ -592,6 +730,7 @@ async def list_inbox(
         auth_user_id=auth.user.id,
         ownership=ownership,
         types=None,
+        categories=categories,
         statuses=statuses,
         repo_id=repo_id,
         play_key=play_key,
@@ -612,6 +751,7 @@ async def list_inbox(
         auth_user_id=auth.user.id,
         ownership=ownership,
         types=types,
+        categories=categories,
         statuses=None,
         repo_id=repo_id,
         play_key=play_key,
@@ -680,6 +820,29 @@ async def get_counts(
                 )
             )
         ).label("all_open"),
+        func.count(
+            case(
+                (
+                    and_(
+                        InboxItem.category.in_(tuple(ACTIONABLE_CATEGORIES)),
+                        InboxItem.status == "new",
+                    ),
+                    InboxItem.id,
+                )
+            )
+        ).label("actionable_new"),
+        func.count(
+            case(
+                (
+                    and_(
+                        InboxItem.category == "attention",
+                        InboxItem.type == "report",
+                        InboxItem.status == "new",
+                    ),
+                    InboxItem.id,
+                )
+            )
+        ).label("reports_new"),
     ).where(InboxItem.workspace_id == workspace_id)
     bucket_row = (await session.execute(bucket_stmt)).one()
 
@@ -710,6 +873,8 @@ async def get_counts(
         mine=int(bucket_row.mine),
         unassigned=int(bucket_row.unassigned),
         all_open=int(bucket_row.all_open),
+        actionable_new=int(bucket_row.actionable_new),
+        reports_new=int(bucket_row.reports_new),
         by_type=by_type,
         by_status=by_status,
     )
@@ -740,7 +905,9 @@ async def _build_detail(
         .order_by(InboxItemEvent.created_at.asc(), InboxItemEvent.id.asc())
     )
     event_rows = (await session.execute(events_stmt)).scalars().all()
-    base = _to_item_out(item, owner)
+    run = await session.get(RoutineRun, item.run_id) if item.run_id else None
+    lane = derive_lane(item, run=run)
+    base = _to_item_out(item, owner, lane=lane)
     return InboxItemDetail(
         **base.model_dump(),
         payload=item.payload or {},
@@ -925,6 +1092,314 @@ async def post_disposition(
             failure.get("error"),
         )
 
+    await session.flush()
+    await session.refresh(item)
+    return await _build_detail(session, item)
+
+
+# ---------------------------------------------------------------------------
+# DECIDE — Inbox Decision UI (ELS-159)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/{item_id}/decide", response_model=InboxItemDetail)
+async def post_decide(
+    workspace_id: uuid.UUID,
+    item_id: uuid.UUID,
+    body: InboxDecideIn,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> InboxItemDetail:
+    """Operator's structured pick on a row carrying ``action_items``.
+
+    Each selection id is matched against
+    ``inbox_items.payload.action_items[].id``. Side-effects route by
+    the matched item's ``kind``:
+
+    - ``kind=choice``  → post a Linear comment with ``label`` on the
+      source ticket and strip ``needs:clarification`` if present.
+    - ``kind=checkbox`` → create a new Linear ticket via the bound
+      tracker (``title=label``, ``body=hint``,
+      ``project_id=target_project_id`` falling back to the source
+      ticket's project).
+    - ``kind=ack`` → no side-effect; just mark resolved.
+
+    A non-empty ``freeform`` is appended as a comment on the source
+    ticket (in addition to any selected actions). Empty selections +
+    non-empty freeform mirrors the legacy quick-reply path.
+
+    **Idempotency:** if the item is already ``resolved`` / ``dismissed``,
+    return the current detail with HTTP 200 and write a no-op event
+    (``action='resolved'``, ``payload.is_replay=True``). Operator
+    double-clicks do not create duplicate tickets.
+    """
+    from backend.app.services.inbox.classification import parse_action_items
+
+    item = await _load_item(session, workspace_id, item_id)
+    await _require_owner_or_admin(
+        session, workspace_id, auth.user.id, item
+    )
+
+    selections = list(body.selections or [])
+    freeform = (body.freeform or "").strip() or None
+    if not selections and not freeform:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "decide_empty",
+                "message": (
+                    "Provide at least one selection id or a freeform note."
+                ),
+            },
+        )
+
+    # Idempotent replay: caller already resolved this row. Echo back.
+    if item.status in ("resolved", "dismissed"):
+        session.add(
+            InboxItemEvent(
+                item_id=item.id,
+                actor_user_id=auth.user.id,
+                actor_kind="user",
+                action="resolved",
+                payload={
+                    "selections": selections,
+                    "freeform": freeform,
+                    "is_replay": True,
+                },
+            )
+        )
+        await session.flush()
+        return await _build_detail(session, item)
+
+    parsed = parse_action_items(item.payload)
+    by_id = {ai.id: ai for ai in parsed}
+    unknown = [sid for sid in selections if sid not in by_id]
+    if unknown:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "decide_unknown_selection",
+                "message": (
+                    f"Selection ids not in this item's action_items: {unknown}"
+                ),
+                "known": list(by_id.keys()),
+            },
+        )
+
+    # Resolve the bound tracker once — side-effects per kind reuse it.
+    from backend.app.core.config import get_settings as _gs
+    from backend.app.integrations.gateway.tracker import TicketRef as _TR
+    from backend.app.services.tracker_resolver import (
+        resolve_for_workspace as _resolve,
+    )
+
+    resolved_tracker = await _resolve(
+        session=session, settings=_gs(), workspace_id=workspace_id
+    )
+    source_ticket_ref: str | None = (
+        (item.payload or {}).get("ticket_ref")
+        if isinstance(item.payload, dict)
+        else None
+    )
+
+    side_effects: list[dict[str, Any]] = []
+    created_ticket_refs: list[str] = []
+
+    for sid in selections:
+        ai = by_id[sid]
+        try:
+            # NEW (2026-05-20): server-side executors. Action items
+            # with an ``executor`` field bypass the legacy "comment on
+            # Linear" path and trigger real GH / Linear / dispatcher
+            # operations. Operator wanted "press button → Ship does
+            # it" instead of "press button → comment posted, now go
+            # manually finish the work elsewhere".
+            if ai.executor:
+                from backend.app.services.inbox.action_executors import (
+                    run_action_executor,
+                )
+                result = await run_action_executor(
+                    session,
+                    workspace_id=workspace_id,
+                    item=item,
+                    executor=ai.executor,
+                    freeform=freeform,
+                )
+                side_effects.append(
+                    {"id": sid, "executor": ai.executor, **result}
+                )
+                continue
+            if ai.kind == "choice":
+                if resolved_tracker is None or not source_ticket_ref:
+                    side_effects.append(
+                        {"id": sid, "kind": "choice", "result": "skipped_no_tracker"}
+                    )
+                    continue
+                target = _TR(
+                    kind=resolved_tracker.kind,
+                    workspace_hint=None,
+                    id=source_ticket_ref,
+                )
+                comment_body = f"**Answer:** {ai.label}"
+                if ai.hint:
+                    comment_body += f"\n\n{ai.hint}"
+                await resolved_tracker.gateway.comment(
+                    target, body=comment_body
+                )
+                # Strip needs:clarification if present (best-effort).
+                try:
+                    await resolved_tracker.gateway.remove_label(
+                        target, "needs:clarification"
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+                side_effects.append(
+                    {"id": sid, "kind": "choice", "result": "comment_posted"}
+                )
+            elif ai.kind == "checkbox":
+                if resolved_tracker is None:
+                    side_effects.append(
+                        {"id": sid, "kind": "checkbox", "result": "skipped_no_tracker"}
+                    )
+                    continue
+                create_fn = getattr(
+                    resolved_tracker.gateway, "create_ticket", None
+                )
+                if create_fn is None:
+                    side_effects.append(
+                        {"id": sid, "kind": "checkbox", "result": "skipped_no_create"}
+                    )
+                    continue
+                pid = ai.target_project_id
+                if not pid and source_ticket_ref:
+                    snap_fn = getattr(
+                        resolved_tracker.gateway,
+                        "get_ticket_snapshot",
+                        None,
+                    )
+                    if snap_fn is not None:
+                        snap = await snap_fn(
+                            _TR(
+                                kind=resolved_tracker.kind,
+                                workspace_hint=None,
+                                id=source_ticket_ref,
+                            )
+                        )
+                        if snap:
+                            pid = snap.get("project_id")
+                created = await create_fn(
+                    title=ai.label,
+                    body=ai.hint or "",
+                    project_id=pid,
+                )
+                ref_str = (
+                    created.display_id
+                    if hasattr(created, "display_id")
+                    else getattr(created, "id", None)
+                )
+                if ref_str:
+                    created_ticket_refs.append(str(ref_str))
+                side_effects.append(
+                    {
+                        "id": sid,
+                        "kind": "checkbox",
+                        "result": "ticket_created",
+                        "ticket_ref": ref_str,
+                    }
+                )
+            elif ai.kind == "ack":
+                side_effects.append({"id": sid, "kind": "ack", "result": "acknowledged"})
+        except Exception as exc:  # noqa: BLE001 — log + continue
+            logger.warning(
+                "inbox.decide side-effect failed item=%s selection=%s: %s",
+                item.id, sid, exc,
+            )
+            side_effects.append(
+                {"id": sid, "kind": ai.kind, "result": "error", "error": str(exc)[:200]}
+            )
+
+    # Freeform note — append as a Linear comment on the source ticket.
+    if freeform:
+        if resolved_tracker is not None and source_ticket_ref:
+            try:
+                await resolved_tracker.gateway.comment(
+                    _TR(
+                        kind=resolved_tracker.kind,
+                        workspace_hint=None,
+                        id=source_ticket_ref,
+                    ),
+                    body=freeform,
+                )
+                side_effects.append({"kind": "freeform", "result": "comment_posted"})
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "inbox.decide freeform comment failed item=%s: %s",
+                    item.id, exc,
+                )
+                side_effects.append(
+                    {"kind": "freeform", "result": "error", "error": str(exc)[:200]}
+                )
+        else:
+            side_effects.append({"kind": "freeform", "result": "stored_only"})
+
+    # Mark resolved. Resolution value derives from item type so existing
+    # consumers (status filter, badge color) keep working.
+    resolution = "answered"
+    if item.type in ("failure", "blocker", "exception"):
+        resolution = "acknowledged"
+    elif item.type == "improvement":
+        resolution = "accepted"
+    elif item.type == "approval":
+        resolution = "approved"
+
+    now = datetime.now(timezone.utc)
+    item.status = "resolved"
+    item.resolution = resolution
+    item.resolved_at = now
+    item.resolved_by_user_id = auth.user.id
+    # Drop the action_items from payload — they were one-shot.
+    if isinstance(item.payload, dict) and "action_items" in item.payload:
+        new_payload = dict(item.payload)
+        new_payload.pop("action_items", None)
+        new_payload["decided"] = {
+            "selections": selections,
+            "freeform": freeform,
+            "side_effects": side_effects,
+            "created_ticket_refs": created_ticket_refs,
+        }
+        item.payload = new_payload
+
+    session.add(
+        InboxItemEvent(
+            item_id=item.id,
+            actor_user_id=auth.user.id,
+            actor_kind="user",
+            action="resolved",
+            payload={
+                "via": "decide",
+                "selections": selections,
+                "freeform": freeform,
+                "side_effects": side_effects,
+                "created_ticket_refs": created_ticket_refs,
+            },
+        )
+    )
+    session.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=auth.user.id,
+            actor_token_id=auth.token.id if auth.token else None,
+            action="inbox.decide",
+            target_kind="inbox_item",
+            target_id=str(item.id),
+            payload={
+                "type": item.type,
+                "resolution": resolution,
+                "selections": selections,
+                "created_ticket_refs": created_ticket_refs,
+            },
+        )
+    )
     await session.flush()
     await session.refresh(item)
     return await _build_detail(session, item)

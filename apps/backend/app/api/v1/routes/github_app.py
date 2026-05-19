@@ -183,10 +183,37 @@ async def install_callback(
             url=_console_onboarding_url(settings, step="github", reason="request")
         )
 
-    stmt = select(GitHubInstallation).where(
-        GitHubInstallation.installation_id == installation_id
-    )
-    row = (await session.execute(stmt)).scalar_one_or_none()
+    # Find the install row for THIS workspace (multi-workspace per
+    # install is supported as of migration 0076 — same numeric
+    # installation_id may belong to multiple workspaces). If the
+    # redirect didn't carry a workspace hint we can't pick safely,
+    # so fall back to the legacy single-row lookup just to detect
+    # whether ANY workspace already binds this install (for the
+    # "missing_state but already-installed" diagnostic below).
+    if decoded_workspace_id is not None:
+        stmt = select(GitHubInstallation).where(
+            GitHubInstallation.installation_id == installation_id,
+            GitHubInstallation.workspace_id == decoded_workspace_id,
+        )
+        row = (await session.execute(stmt)).scalar_one_or_none()
+        any_existing = row is not None
+        if row is None:
+            any_existing = (
+                await session.execute(
+                    select(GitHubInstallation.id)
+                    .where(GitHubInstallation.installation_id == installation_id)
+                    .limit(1)
+                )
+            ).first() is not None
+    else:
+        row = None
+        any_existing = (
+            await session.execute(
+                select(GitHubInstallation.id)
+                .where(GitHubInstallation.installation_id == installation_id)
+                .limit(1)
+            )
+        ).first() is not None
 
     if row is None and decoded_workspace_id is None:
         # Brand new install but the redirect didn't come through our
@@ -194,6 +221,7 @@ async def install_callback(
         # silently attach to the user's first workspace — instead nudge
         # them back through the wizard where the "Install" button mints
         # a state token bound to a specific workspace.
+        _ = any_existing  # reserved for future "already-installed" diag
         return RedirectResponse(
             url=(
                 f"{settings.console_url.rstrip('/')}/onboarding"
@@ -212,14 +240,18 @@ async def install_callback(
             installed_at=datetime.now(timezone.utc),
         )
         session.add(row)
-        action_kind = "github.install.create"
+        # ``share`` when another workspace already binds this install
+        # — operator added a second workspace to an existing org-wide
+        # install. ``create`` for the first workspace ever to bind it.
+        action_kind = (
+            "github.install.share" if any_existing else "github.install.create"
+        )
     else:
-        # Existing install. If the wizard handed us a state token,
-        # re-bind to the (possibly new) workspace; otherwise leave the
-        # existing binding alone — the user is just re-confirming repo
-        # selection from the GitHub UI.
-        if decoded_workspace_id is not None:
-            row.workspace_id = decoded_workspace_id
+        # Existing row for THIS workspace — re-confirming repo
+        # selection or unsuspending. Never re-bind across workspaces;
+        # the compound unique on ``(workspace_id, installation_id)``
+        # makes that meaningless, and a different workspace's install
+        # row lives independently.
         target_workspace_id = row.workspace_id
         row.installed_at = datetime.now(timezone.utc)
         row.suspended_at = None
@@ -348,7 +380,14 @@ def _console_onboarding_url(settings: Settings, *, step: str, reason: str) -> st
 async def _apply_installation_event(
     session: AsyncSession, payload: dict[str, Any], action: str | None
 ) -> None:
-    """Mutate :class:`GitHubInstallation` in response to an install event."""
+    """Mutate :class:`GitHubInstallation` in response to an install event.
+
+    Multi-workspace fan-out (migration 0076): the same numeric
+    ``installation.id`` may map to N workspace rows (one per Ship
+    workspace that linked this org's install). suspend / unsuspend /
+    delete must hit every row so each workspace's UI reflects the
+    same authoritative GitHub state.
+    """
     installation = payload.get("installation") or {}
     installation_id = installation.get("id")
     if not installation_id:
@@ -357,10 +396,13 @@ async def _apply_installation_event(
         logger.warning("installation event missing installation.id, skipping")
         return
 
-    stmt = select(GitHubInstallation).where(
-        GitHubInstallation.installation_id == int(installation_id)
-    )
-    row = (await session.execute(stmt)).scalar_one_or_none()
+    rows = (
+        await session.execute(
+            select(GitHubInstallation).where(
+                GitHubInstallation.installation_id == int(installation_id)
+            )
+        )
+    ).scalars().all()
 
     account = installation.get("account") or {}
     repo_selection = installation.get("repository_selection")
@@ -370,29 +412,69 @@ async def _apply_installation_event(
         # ``created`` arrives in parallel with the OAuth callback — the
         # callback usually wins the race because it's sync, but we still
         # backfill account metadata here for the cases where it doesn't.
-        if row is not None:
+        for row in rows:
             row.account_id = account.get("id")
             row.account_login = account.get("login")
             row.account_type = account.get("type")
             row.repository_selection = repo_selection
             row.suspended_at = None
             row.updated_at = now
-        # If row is None, the OAuth callback hasn't landed yet; no-op and
-        # trust the callback to insert the row with the workspace binding.
+        # If rows is empty, the OAuth callback hasn't landed yet; no-op
+        # and trust the callback to insert the row with the workspace
+        # binding.
     elif action == "suspend":
-        if row is not None:
+        for row in rows:
             row.suspended_at = now
             row.updated_at = now
+        if rows:
             invalidate_installation_token_cache(int(installation_id))
     elif action == "deleted":
-        # User uninstalled the App. We delete the row so re-install starts
-        # from a clean slate; cascade on workspace_id stays intact because
-        # we only delete the install row.
-        if row is not None:
+        # User uninstalled the App. Delete every workspace's row so
+        # re-install starts from a clean slate everywhere; cascade on
+        # workspace_id stays intact because we only delete the install
+        # rows.
+        for row in rows:
             await session.delete(row)
+        if rows:
             invalidate_installation_token_cache(int(installation_id))
     else:
         logger.debug("installation event with unhandled action=%s", action)
+
+
+async def _resolve_workspace_repos(
+    session: AsyncSession,
+    installation_id: int | None,
+    repo_external_id: int | None,
+) -> list[WorkspaceRepo]:
+    """Look up every activated repo row that matches an incoming webhook.
+
+    Webhooks carry GitHub's numeric ``installation.id`` and
+    ``repository.id``. With multi-workspace per install (migration
+    0076), one numeric ``installation_id`` may map to N
+    :class:`GitHubInstallation` rows — one per Ship workspace that
+    linked this org's install. Each of those workspaces may have
+    activated the same repo independently, so a ``pull_request`` /
+    ``workflow_run`` / ``push`` event fans out to every matching
+    :class:`WorkspaceRepo`.
+
+    Returns ``[]`` when no workspace activated this repo (the user
+    enabled the App account-wide but never picked the repo) — webhook
+    is dropped silently in that case.
+    """
+    if not installation_id or not repo_external_id:
+        return []
+    stmt = (
+        select(WorkspaceRepo)
+        .join(
+            GitHubInstallation,
+            WorkspaceRepo.installation_id == GitHubInstallation.id,
+        )
+        .where(
+            GitHubInstallation.installation_id == int(installation_id),
+            WorkspaceRepo.external_id == int(repo_external_id),
+        )
+    )
+    return list((await session.execute(stmt)).scalars().all())
 
 
 async def _resolve_workspace_repo(
@@ -400,31 +482,11 @@ async def _resolve_workspace_repo(
     installation_id: int | None,
     repo_external_id: int | None,
 ) -> WorkspaceRepo | None:
-    """Look up the activated repo row for an incoming webhook event.
-
-    Webhooks carry GitHub's numeric ``installation.id`` and
-    ``repository.id``. We map ``installation.id`` → our internal
-    :class:`GitHubInstallation` row, then join to :class:`WorkspaceRepo`
-    on the (UUID install id + numeric repo id). Returns ``None`` if
-    either lookup misses — in which case the webhook is dropped
-    silently (the user activated repo X but not repo Y, which is fine).
-    """
-    if not installation_id or not repo_external_id:
-        return None
-    install = (
-        await session.execute(
-            select(GitHubInstallation).where(
-                GitHubInstallation.installation_id == int(installation_id)
-            )
-        )
-    ).scalar_one_or_none()
-    if install is None:
-        return None
-    stmt = select(WorkspaceRepo).where(
-        WorkspaceRepo.installation_id == install.id,
-        WorkspaceRepo.external_id == int(repo_external_id),
-    )
-    return (await session.execute(stmt)).scalars().first()
+    """Single-row wrapper for legacy callers. Prefer
+    :func:`_resolve_workspace_repos` for new code — the multi-row
+    return is what makes multi-workspace fan-out work."""
+    rows = await _resolve_workspace_repos(session, installation_id, repo_external_id)
+    return rows[0] if rows else None
 
 
 def _parse_iso(value: Any) -> datetime | None:
@@ -699,6 +761,92 @@ async def _apply_pull_request_event(
 _TICKET_REF_PR_TITLE_RE = re.compile(r"\b([A-Z][A-Z0-9]{2,9}-\d+)\b")
 
 
+async def _find_other_open_prs_by_ticket(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    ticket_refs: list[str],
+    exclude_pr_html_url: str,
+) -> dict[str, list[str]]:
+    """For each ticket_ref, return the html_urls of any OTHER open PR
+    in the workspace's activated repos whose title references it.
+
+    Used by the close-unmerged hook (task #177): when a PR closes
+    without merge, only cancel the Linear ticket if it has no other
+    open PRs — otherwise the chain may still finish via a sibling.
+
+    Best-effort: token mint / API hiccup just returns empty. The
+    caller treats empty as "no siblings found", which falls back to
+    the original cancel behavior.
+    """
+    from sqlalchemy import select as _select
+    from backend.app.core.config import get_settings as _gs
+    from backend.app.db.models.integrations import (
+        GitHubInstallation as _GI,
+        WorkspaceRepo as _WR,
+    )
+    from backend.app.integrations.github.app_auth import (
+        fetch_installation_token as _ftok,
+    )
+
+    if not ticket_refs:
+        return {}
+    repos = (
+        await session.execute(
+            _select(_WR).where(_WR.workspace_id == workspace_id)
+        )
+    ).scalars().all()
+    if not repos:
+        return {}
+    settings = _gs()
+    out: dict[str, list[str]] = {ref: [] for ref in ticket_refs}
+    ticket_set = set(ticket_refs)
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        for repo in repos:
+            install = (
+                await session.execute(
+                    _select(_GI).where(_GI.id == repo.installation_id)
+                )
+            ).scalar_one_or_none()
+            if install is None:
+                continue
+            try:
+                token = await _ftok(
+                    install.installation_id,
+                    settings=settings,
+                    client=client,
+                )
+                # Paginate is overkill; the call site already filters
+                # to one workspace's repos and concurrent open agent
+                # PRs on a single repo rarely exceed a page.
+                r = await client.get(
+                    f"https://api.github.com/repos/{repo.full_name}/pulls",
+                    params={"state": "open", "per_page": 100},
+                    headers={
+                        "Authorization": f"token {token}",
+                        "Accept": "application/vnd.github+json",
+                    },
+                )
+                if r.status_code != 200:
+                    continue
+                for pr in r.json() or []:
+                    pr_url = pr.get("html_url") or ""
+                    if not pr_url or pr_url == exclude_pr_html_url:
+                        continue
+                    title = pr.get("title") or ""
+                    refs_in_title = _TICKET_REF_PR_TITLE_RE.findall(title)
+                    for ref in refs_in_title:
+                        if ref in ticket_set:
+                            out[ref].append(pr_url)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(
+                    "open-PR probe failed repo=%s err=%s",
+                    repo.full_name, exc,
+                )
+                continue
+    return out
+
+
 async def _transition_linked_tickets_on_merge(
     session: AsyncSession,
     *,
@@ -775,7 +923,52 @@ async def _transition_linked_tickets_on_merge(
         else "pr_closed_unmerged.tracker_canceled"
     )
 
+    # task #177 — don't cancel a ticket whose other PRs are still open.
+    # When close_kind='close_unmerged', check the workspace's activated
+    # repos for any OTHER open PR carrying the same ticket_ref in its
+    # title. If found, skip both the transition and the audit row;
+    # this PR's close is just one of many attempts, the chain may
+    # still finish via a sibling.
+    other_open_by_ticket: dict[str, list[str]] = {}
+    if close_kind == "close_unmerged" and ordered_refs:
+        try:
+            other_open_by_ticket = await _find_other_open_prs_by_ticket(
+                session,
+                workspace_id=workspace_id,
+                ticket_refs=ordered_refs,
+                exclude_pr_html_url=pr_html_url,
+            )
+        except Exception as exc:  # noqa: BLE001 — best-effort
+            logger.warning(
+                "pr_close_unmerged sibling-PR check failed ws=%s: %s",
+                workspace_id, exc,
+            )
+
     for ticket_ref in ordered_refs:
+        siblings = other_open_by_ticket.get(ticket_ref) or []
+        if close_kind == "close_unmerged" and siblings:
+            logger.info(
+                "pr_close_unmerged: skipping transition for ticket=%s — "
+                "%d other open PR(s) still carry the ref: %s",
+                ticket_ref, len(siblings), siblings[:5],
+            )
+            session.add(
+                AuditLog(
+                    workspace_id=workspace_id,
+                    actor_user_id=None,
+                    actor_token_id=None,
+                    action="pr_closed_unmerged.skip_cancel",
+                    target_kind="ticket",
+                    target_id=ticket_ref,
+                    payload={
+                        "tracker_kind": resolved.kind,
+                        "pr_number": pr_number,
+                        "pr_html_url": pr_html_url,
+                        "open_sibling_pr_urls": siblings,
+                    },
+                )
+            )
+            continue
         try:
             ref_obj = _ticket_ref_from(resolved.kind, ticket_ref)
             await resolved.gateway.comment(ref_obj, body=comment_body)

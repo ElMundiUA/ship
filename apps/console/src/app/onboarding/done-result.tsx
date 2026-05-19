@@ -138,7 +138,13 @@ export function DoneResult({
     );
   }
 
-  return <RepoResultCard repo={repo} result={state.result} />;
+  return (
+    <RepoResultCard
+      repo={repo}
+      result={state.result}
+      workspaceId={workspaceId}
+    />
+  );
 }
 
 function DoneSkeleton({ repoFullName }: { repoFullName: string }) {
@@ -146,7 +152,7 @@ function DoneSkeleton({ repoFullName }: { repoFullName: string }) {
     <div
       role="status"
       aria-busy="true"
-      className="rounded-2xl border border-white/10 bg-white/[0.04] p-5 backdrop-blur-xl shadow-card"
+      className="rounded-2xl border border-white/[0.08] bg-white/[0.04] p-5 backdrop-blur-xl shadow-card"
     >
       <div className="flex items-center justify-between">
         <h3 className="font-display text-lg font-bold text-white/80">
@@ -155,9 +161,9 @@ function DoneSkeleton({ repoFullName }: { repoFullName: string }) {
         <span className="text-[11px] text-white/45">loading…</span>
       </div>
       <div className="mt-3 space-y-2">
-        <div className="h-12 w-full animate-pulse rounded-lg bg-white/[0.03]" />
-        <div className="h-12 w-full animate-pulse rounded-lg bg-white/[0.03]" />
-        <div className="h-12 w-full animate-pulse rounded-lg bg-white/[0.03]" />
+        <div className="h-12 w-full animate-pulse rounded-lg bg-white/[0.02]" />
+        <div className="h-12 w-full animate-pulse rounded-lg bg-white/[0.02]" />
+        <div className="h-12 w-full animate-pulse rounded-lg bg-white/[0.02]" />
       </div>
     </div>
   );
@@ -178,7 +184,7 @@ function NoBootstrapYet({
     ? `/onboarding?step=confirm&ws=${encodeURIComponent(workspaceId)}`
     : "/onboarding";
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-5 backdrop-blur-xl shadow-card">
+    <div className="rounded-2xl border border-white/[0.08] bg-white/[0.04] p-5 backdrop-blur-xl shadow-card">
       <h3 className="font-display text-lg font-bold text-white">
         {repo.full_name}
       </h3>

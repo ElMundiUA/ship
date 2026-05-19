@@ -406,7 +406,7 @@ async def commit_bundle_pr(
     2. Upload each file as a blob.
     3. Build a new tree that adds every blob at its target path.
     4. Create a commit on that tree pointing at HEAD as the parent.
-    5. Create ``ship/bundle-<label>-<unix>`` ref on that commit.
+    5. Create ``ship/install-<label>-<unix>`` ref on that commit.
     6. Open the PR.
 
     Idempotency is the same as the single-file flow: the timestamped
@@ -485,7 +485,15 @@ async def commit_bundle_pr(
     _raise_for(commit_resp)
     new_commit_sha = commit_resp.json()["sha"]
 
-    branch = f"ship/bundle-{branch_label}-{int(time.time())}"
+    # ELS-180 (W4) — branch prefix unified to ``ship/install-`` so the
+    # post-merge bootstrap webhook gate in github_app.py
+    # (`head_ref.startswith("ship/install-")`) fires. Pre-fix the wizard
+    # PR used ``ship/bundle-*`` which the gate didn't match, so wizard
+    # merges silently skipped knowledge-routine auto-dispatch + cache
+    # invalidation. ``branch_label`` already carries the wizard origin
+    # (``wizard-default`` etc) so renaming the prefix preserves
+    # forensic readability.
+    branch = f"ship/install-{branch_label}-{int(time.time())}"
     ref_resp = await _request(
         "POST",
         f"/repos/{owner}/{name}/git/refs",

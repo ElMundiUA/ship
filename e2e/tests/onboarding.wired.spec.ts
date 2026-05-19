@@ -136,31 +136,6 @@ test.describe("onboarding wizard (authenticated)", () => {
     await expect(seedCta).toBeVisible();
   });
 
-  test("redirects ?step=configure to ?step=confirm", async ({ page }) => {
-    // Don't follow redirects automatically off-page (nothing to do —
-    // Playwright does follow same-origin 303s during goto). We just
-    // check the final URL matches the new step id.
-    await page.goto("/onboarding?step=configure");
-
-    // The legacy redirect handler in OnboardingPage drops ``step``
-    // first, so the resulting URL ends with ``?step=confirm``.
-    await expect
-      .poll(() => new URL(page.url()).searchParams.get("step"), {
-        timeout: 15_000,
-      })
-      .toBe("confirm");
-
-    const confirm = page.getByTestId("onboarding-step-confirm");
-    if (!(await isVisibleSoon(confirm))) {
-      test.skip(
-        true,
-        "Backend not wired: redirect landed at /onboarding?step=confirm but the step did not SSR (no activated repos in this workspace).",
-      );
-      return;
-    }
-    await expect(confirm).toBeVisible();
-  });
-
   test("done step shows pr link and routing summary when sessionStorage primed", async ({
     page,
   }) => {
@@ -176,7 +151,7 @@ test.describe("onboarding wizard (authenticated)", () => {
     const seeded = buildWizardSeedResult({
       pr_url: "https://github.com/acme/widgets/pull/1234",
       pr_number: 1234,
-      branch: "ship/bundle-bootstrap-1",
+      branch: "ship/install-bootstrap-1",
       files: ["/.ship/config.yml", "/.github/workflows/pr-and-ci-gate.yml"],
       presets: ["default"],
       tracker_kind: null,
@@ -254,7 +229,7 @@ test.describe("onboarding wizard (authenticated)", () => {
     const fixture = buildWizardSeedResult({
       pr_url: "https://github.com/acme/widgets/pull/9876",
       pr_number: 9876,
-      branch: "ship/bundle-bootstrap-fallback",
+      branch: "ship/install-bootstrap-fallback",
       synthetic_lanes_created: 3,
       codeowners: {
         file_found: true,

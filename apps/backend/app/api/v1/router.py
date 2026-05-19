@@ -46,6 +46,7 @@ from backend.app.api.v1.routes import (
     navigator_memories,
     notifications,
     notion_oauth,
+    planning,
     processes,
     runs,
     policies,
@@ -84,6 +85,11 @@ api_router.include_router(members.router)
 # routing service (services.inbox.routing). Owner-or-admin RBAC for
 # mutations; member RBAC for reads.
 api_router.include_router(inbox.router)
+# Mass-planning intake (ELS-170 / M3). CRUD over draft proposals
+# the Navigator emits after extracting a requirements PDF; the
+# commit endpoint (`POST /planning/mass-import`) lands in the same
+# router file via a separate ticket (ELS-169 / M2).
+api_router.include_router(planning.router)
 # Workspace repo activations (pilot Day 2 — picker UI + Code Map MVP).
 # Lives next to artifact_repos but is keyed off GitHub App installations
 # instead of paste-URL clones.

@@ -32,6 +32,25 @@ export const INBOX_STATUSES = [
 ] as const;
 export type InboxStatus = (typeof INBOX_STATUSES)[number];
 
+export const INBOX_CATEGORIES = [
+  "decision_needed",
+  "failure",
+  "attention",
+] as const;
+export type InboxCategory = (typeof INBOX_CATEGORIES)[number];
+
+export const INBOX_LANES = ["now", "today", "whenever"] as const;
+export type InboxLane = (typeof INBOX_LANES)[number];
+
+export const INBOX_LANE_META: Record<
+  InboxLane,
+  { label: string; tone: string }
+> = {
+  now: { label: "Now", tone: "text-coral" },
+  today: { label: "Today", tone: "text-sun" },
+  whenever: { label: "Whenever", tone: "text-white/55" },
+};
+
 export const INBOX_RESOLUTIONS = [
   "answered",
   "approved",
@@ -106,14 +125,13 @@ export const INBOX_TYPE_META: Record<
  *   - ``decision`` — primary + secondary disposition buttons. Used for
  *     everything that's a yes/no/dismiss decision.
  */
-export type InboxFooterKind = "acknowledge" | "reply" | "decision" | "checklist";
+export type InboxFooterKind = "acknowledge" | "reply" | "decision";
 
-export type InboxActionItem = {
-  id: string;
-  prompt: string;
-  primary: { label: string; choice: string };
-  secondary: { label: string; choice: string };
-};
+export function inboxFooterKind(type: InboxType): InboxFooterKind {
+  if (type === "report") return "acknowledge";
+  if (type === "clarification") return "reply";
+  return "decision";
+}
 
 /** Type kicker: glyph + label + dot tone for mailbox list rows. */
 export const ROW_KICKER: Record<
@@ -129,50 +147,6 @@ export const ROW_KICKER: Record<
   stuck: { glyph: "★", label: "ATTENTION", tone: "bg-white/30" },
   report: { glyph: "≡", label: "REPORT", tone: "bg-white/15" },
 };
-
-export function inboxActionItems(
-  payload: Record<string, unknown> | undefined,
-): InboxActionItem[] {
-  const raw = payload?.action_items;
-  if (!Array.isArray(raw)) return [];
-  return raw.filter(isInboxActionItem);
-}
-
-function isInboxActionItem(value: unknown): value is InboxActionItem {
-  if (!value || typeof value !== "object") return false;
-  const row = value as Record<string, unknown>;
-  return (
-    typeof row.id === "string" &&
-    typeof row.prompt === "string" &&
-    row.primary !== null &&
-    typeof row.primary === "object" &&
-    typeof (row.primary as { label?: unknown }).label === "string" &&
-    typeof (row.primary as { choice?: unknown }).choice === "string" &&
-    row.secondary !== null &&
-    typeof row.secondary === "object" &&
-    typeof (row.secondary as { label?: unknown }).label === "string" &&
-    typeof (row.secondary as { choice?: unknown }).choice === "string"
-  );
-}
-
-export function inboxFooterKind(
-  type: InboxType,
-  detail?: {
-    status?: InboxStatus;
-    payload?: Record<string, unknown>;
-  },
-): InboxFooterKind {
-  if (
-    detail?.status !== "resolved" &&
-    detail?.status !== "dismissed" &&
-    inboxActionItems(detail?.payload).length > 0
-  ) {
-    return "checklist";
-  }
-  if (type === "report") return "acknowledge";
-  if (type === "clarification") return "reply";
-  return "decision";
-}
 
 /**
  * One row as it appears in the inbox list. Compact: the detail view
@@ -199,6 +173,10 @@ export type InboxItem = {
   snoozed_until: string | null;
   resolved_at: string | null;
   resolution: InboxResolution | null;
+  category: InboxCategory;
+  priority: number;
+  lane: InboxLane;
+  resolution_mode: InboxResolutionMode;
   /** Count of ``payload.action_items`` for list-row decision chip. */
   action_item_count?: number;
   /** From payload — powers ``formatInboxHeadline`` on list rows. */
@@ -225,9 +203,45 @@ export type InboxCountsResponse = {
   mine: number;
   unassigned: number;
   all_open: number;
+  actionable_new: number;
+  reports_new: number;
   by_type: Record<string, number>;
   by_status: Record<string, number>;
 };
+
+/** Categories shown in the `/inbox` list.
+ *
+ * Pre-2026-05-18 this was decision_needed + failure only — reports
+ * and stuck-rows lived on the separate `/reports` page. Operator
+ * feedback: split surface drained the main inbox of context and the
+ * report digests are the same kind of "scan-once, click-acknowledge"
+ * letters every other type is. `attention` is back; only
+ * `dismiss_silently` (env-warning info notices, etc.) stays gated to
+ * the noise page.
+ */
+export const INBOX_ACTIONABLE_CATEGORIES: InboxCategory[] = [
+  "decision_needed",
+  "failure",
+  "attention",
+];
+
+/** Inbox Decision UI (ELS-158) — structured action_items contract. */
+export type InboxActionItemKind = "choice" | "checkbox" | "ack";
+
+export type InboxActionItem = {
+  id: string;
+  kind: InboxActionItemKind;
+  label: string;
+  hint?: string | null;
+  default?: boolean;
+  target_project_id?: string | null;
+};
+
+export type InboxResolutionMode =
+  | "single_choice"
+  | "multi_select"
+  | "ack_only"
+  | "freeform_only";
 
 export type InboxItemEvent = {
   id: string;

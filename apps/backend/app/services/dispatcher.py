@@ -28,7 +28,7 @@ import logging
 import re
 import uuid
 from dataclasses import dataclass
-from typing import Final
+from typing import Any, Final
 
 import httpx
 from sqlalchemy import select, text
@@ -39,8 +39,8 @@ from backend.app.db.models.integrations import (
     GitHubInstallation,
     WorkspaceRepo,
 )
-from backend.app.db.models.inbox import InboxItem
 from backend.app.db.models.tenancy import AuditLog, Workspace
+from sqlalchemy.orm.attributes import flag_modified
 from backend.app.integrations.gateway.tracker import TicketRef
 from backend.app.integrations.github.workflows import (
     WorkflowDispatchError,
@@ -94,16 +94,32 @@ WORKFLOW_FILE: Final[str] = "ship-agent-run.yml"
 CASCADE_LIMIT: Final[int] = 3
 CASCADE_WINDOW_S: Final[int] = 60
 
+# FSM ``stage_next`` values that keep the per-project WIP lock while
+# the same ticket's SDLC chain is still in flight. Anything else on
+# ``ready_next_step`` (``merged``, ``planning_done``, …) releases at
+# finish so a stalled sibling can dispatch. Keys mirror
+# ``_STAGE_TO_ROUTINE`` plus ``code_review`` (bundle id, not legacy
+# ``pr_review``).
+PROJECT_LOCK_IN_FLIGHT_STAGE_NEXT: Final[frozenset[str]] = frozenset(
+    set(_STAGE_TO_ROUTINE) | {"code_review"}
+)
+
+_PLANNING_ANCHOR_LABEL: Final[str] = "planning:anchor"
+
 # Per-project lock TTL. Holds across the full ticket lifecycle until
-# the next ``pull_request.closed merged=true`` webhook releases it
-# (``apps/backend/app/api/v1/routes/github_app.py`` →
-# ``_release_project_lock_for_merged_pr``). 24h is the belt-and-
-# braces upper bound — for a non-anchor ticket that legitimately
-# takes that long, the operator already has a human PR-review in
-# flight and can extend via re-trigger. Without this fallback an
-# abandoned PR strands every other ticket in the project for
-# weeks.
-PROJECT_LOCK_TTL_S: Final[int] = 24 * 60 * 60
+# merge webhook or finish-time release (``maybe_release_project_lock_on_finish``,
+# ``github_app._release_project_lock_for_merged_pr``). 60 minutes is
+# the belt-and-braces upper bound matching the ticket-level lock TTL.
+# Was 24h before ELS-150; that was too long — when the explicit
+# release paths missed (crashed agent, picker null without release,
+# GH dispatch without workflow_run, post-mortem 2026-05-18), the lock
+# stranded every sibling ticket in the project for a working day.
+# A 60-min TTL means even exotic uncovered cases self-heal within an
+# hour. Cascades within an active chain bypass the lock (don't
+# re-acquire), so a multi-stage chain doesn't lose its slot at the
+# 60-min mark; the first non-cascade dispatch is the lock-acquirer
+# and subsequent stages don't touch it.
+PROJECT_LOCK_TTL_S: Final[int] = 60 * 60
 
 # Per-ticket lock TTL. The dispatch fires a single workflow run which
 # typically completes in 5-10 min for the SDLC bundles we'll ship in
@@ -151,6 +167,7 @@ class _Reason:
     CAP_EXCEEDED = "cap_exceeded"  # workspace's parallel dispatch limit hit
     PROJECT_BUSY = "project_busy"  # another non-anchor ticket in the same Linear project is in flight
     CASCADE_BLOCKED = "cascade_blocked"  # too many dispatches for this ticket recently
+    BLOCKED_BY_DEPENDENCY = "blocked_by_dependency"  # one of the ticket's Linear `blocks` relations is unresolved
     NO_REPO = "no_repo"  # workspace has no activated repo to dispatch to
     NO_ROUTINE = "no_routine"  # ticket carries no stage label or unknown stage
     DISPATCH_FAILED = "dispatch_failed"  # GH API rejected the call
@@ -237,6 +254,126 @@ async def release_lock(
         {"ws": workspace_id, "key": key},
     )
     return (result.rowcount or 0) > 0
+
+
+def should_release_project_lock(
+    *,
+    outcome: str,
+    stage_next: str | None,
+    labels: list[str] | None = None,
+) -> bool:
+    """Whether ``/agent-runs/finish`` should drop ``project:<id>``.
+
+    Anchors never hold the project lock — callers still skip release
+    when ``planning:anchor`` is present. Stall / clarify / OOS ends
+    sibling starvation; ``ready_next_step`` keeps the lock only while
+    ``stage_next`` names the next in-flight bundle stage.
+    """
+    if _PLANNING_ANCHOR_LABEL in (labels or []):
+        return False
+    if outcome in ("blocked", "needs_clarification", "out_of_scope"):
+        return True
+    if outcome == "noop":
+        return True
+    if outcome != "ready_next_step":
+        return False
+    if not stage_next:
+        return True
+    return stage_next not in PROJECT_LOCK_IN_FLIGHT_STAGE_NEXT
+
+
+async def maybe_release_project_lock_on_finish(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    ticket_ref: str,
+    outcome: str,
+    stage_next: str | None,
+    labels: list[str] | None = None,
+    project_id: str | None = None,
+    settings: Any | None = None,
+) -> bool:
+    """Best-effort ``project:<linear_project_id>`` release after finish.
+
+    Returns ``True`` when a lock row was deleted. Idempotent when the
+    lock was already released (merge webhook, prior finish, TTL).
+    """
+    if not should_release_project_lock(
+        outcome=outcome, stage_next=stage_next, labels=labels
+    ):
+        return False
+
+    resolved_project_id = project_id
+    if resolved_project_id is None or labels is None:
+        try:
+            from backend.app.core.config import get_settings as _gs
+
+            _settings = settings if settings is not None else _gs()
+            resolved = await tracker_resolver_module.resolve_for_workspace(
+                session=session,
+                settings=_settings,
+                workspace_id=workspace_id,
+            )
+            if resolved is None:
+                return False
+            snap_fn = getattr(resolved.gateway, "get_ticket_snapshot", None)
+            if snap_fn is None:
+                return False
+            ticket = TicketRef(
+                kind=resolved.kind,
+                workspace_hint=None,
+                id=ticket_ref,
+            )
+            snap = await snap_fn(ticket)
+            if not snap:
+                return False
+            if labels is None:
+                labels = list(snap.get("labels") or [])
+            if _PLANNING_ANCHOR_LABEL in labels:
+                return False
+            if not resolved_project_id and snap.get("project_id"):
+                resolved_project_id = str(snap["project_id"])
+        except Exception as exc:  # noqa: BLE001 — best-effort
+            log.debug(
+                "project_lock finish release lookup failed ws=%s ticket=%s err=%s",
+                workspace_id,
+                ticket_ref,
+                exc,
+            )
+            return False
+
+    if not resolved_project_id:
+        return False
+
+    released = await release_lock(
+        session,
+        workspace_id=workspace_id,
+        key=f"project:{resolved_project_id}",
+    )
+    if released:
+        log.info(
+            "agent_run.finish → released project lock ws=%s ticket=%s project=%s outcome=%s stage_next=%s",
+            workspace_id,
+            ticket_ref,
+            resolved_project_id,
+            outcome,
+            stage_next,
+        )
+        session.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                action="dispatch.project_lock_released",
+                target_kind="ticket",
+                target_id=ticket_ref,
+                payload={
+                    "via": "agent_run.finish",
+                    "outcome": outcome,
+                    "stage_next": stage_next,
+                    "project_id": resolved_project_id,
+                },
+            )
+        )
+    return released
 
 
 async def sweep_expired_locks(
@@ -366,6 +503,15 @@ async def _count_recent_dispatches(
 # ---------------------------------------------------------------------------
 
 
+ENV_SEPARATION_ACK_KEY = "env_separation_acknowledged"
+ENV_SEPARATION_PENDING_KEY = "env_separation_pending"
+
+
+def env_separation_handle(*, workspace_id: uuid.UUID, project_id: str) -> str:
+    """Stable per-project handle (fits workspace settings + legacy intake_handle)."""
+    return f"env-warn:{str(workspace_id)[:8]}:{str(project_id)[:8]}"
+
+
 async def _emit_env_separation_warning(
     session: AsyncSession,
     *,
@@ -373,68 +519,37 @@ async def _emit_env_separation_warning(
     project_id: str,
     project_name: str,
 ) -> None:
-    """One-time inbox warning when auto-dispatch first touches a project.
+    """Queue a one-time Console env-separation modal for this project.
 
-    The operator opted into Ship by clicking through the wizard, but
-    that consent doesn't extend to "let agents merge PRs into prod
-    main on day one". When the per-project WIP gate first acquires
-    the lock for a project we drop a single warning into the inbox
-    surfacing the env-separation expectation. Idempotent via
-    ``InboxItem.intake_handle`` — a second dispatch on the same
-    project doesn't re-spam.
+    Idempotent via ``env-warn:<ws8>:<proj8>`` stored in
+    ``workspace.settings`` — no inbox row (ELS-144).
     """
-    # ``InboxItem.intake_handle`` is VARCHAR(64); two full UUIDs +
-    # prefix overflow at 82 chars and the poller's transaction
-    # rolls back with ``StringDataRightTruncationError``, stalling
-    # the entire dispatch chain (caught on askslayer 2026-05-15
-    # right after this guard was added). Short-prefix the IDs —
-    # collision risk is per-workspace + per-project and 8 hex chars
-    # of each is well under 2⁻³² per pair within a single tenant.
-    handle = f"env-warn:{str(workspace_id)[:8]}:{str(project_id)[:8]}"
-    existing = (
-        await session.execute(
-            select(InboxItem.id).where(InboxItem.intake_handle == handle).limit(1)
-        )
-    ).scalar_one_or_none()
-    if existing is not None:
-        return
-    session.add(
-        InboxItem(
-            workspace_id=workspace_id,
-            repo_id=None,
-            type="warning",
-            title=(
-                f"Agents will auto-merge PRs in project {project_name!r}"
-            )[:300],
-            summary=(
-                "Ship just started dispatching agent work on a ticket in "
-                f"project {project_name!r}. Tickets in the project run "
-                "one-at-a-time and the planned auto-merger bundle will "
-                "ship PRs into your default branch when the reviewer "
-                "is confident. **Strongly recommended before you let "
-                "this run unattended:**\n\n"
-                "1. Use a non-prod default branch (``develop`` / "
-                "``main`` with deploy gates downstream) and let the "
-                "agent open PRs against it — not directly into prod.\n"
-                "2. Make sure your DB / API base URL / payment keys "
-                "in this repo's GH Actions secrets are dev/staging, "
-                "not prod credentials.\n"
-                "3. Keep ``CODEOWNERS`` pointed at a human reviewer "
-                "for risky paths (auth, migrations, payments) so the "
-                "auto-merger can't skip required review.\n\n"
-                "Acknowledge this once and Ship won't warn again for "
-                "this project."
-            ),
-            payload={
-                "project_id": project_id,
-                "project_name": project_name,
-                "reason": "auto_dispatch_first_touch",
-            },
-            status="new",
-            intake_handle=handle,
-            intake_reason="env_separation_warning",
-        )
+    handle = env_separation_handle(
+        workspace_id=workspace_id, project_id=project_id
     )
+    workspace = await session.get(Workspace, workspace_id)
+    if workspace is None:
+        return
+
+    settings = dict(workspace.settings or {})
+    acknowledged = set(settings.get(ENV_SEPARATION_ACK_KEY) or [])
+    if handle in acknowledged:
+        return
+
+    pending = list(settings.get(ENV_SEPARATION_PENDING_KEY) or [])
+    if any(entry.get("handle") == handle for entry in pending):
+        return
+
+    pending.append(
+        {
+            "handle": handle,
+            "project_id": project_id,
+            "project_name": project_name,
+        }
+    )
+    settings[ENV_SEPARATION_PENDING_KEY] = pending
+    workspace.settings = settings
+    flag_modified(workspace, "settings")
 
 
 async def _pick_dispatch_repo(
@@ -721,6 +836,67 @@ async def maybe_dispatch(
             ticket_ref, exc,
         )
 
+    # 5a. Dependency gate. Linear models hard prerequisites via the
+    # `blocks` relation (issue A blocks issue B → B can't start until
+    # A is done). Three parallel devs picked up sibling inbox tickets
+    # in the same project and each wrote a conflicting Alembic
+    # `0074_*` migration because no stage checked the relation
+    # (caught 2026-05-18 on ELS-143/144/147). Refuse the dispatch
+    # while any blocker is in a non-terminal state. ``canceled``
+    # counts as resolved — the work is no longer expected, so the
+    # dependency is conceptually gone. Best-effort: if the adapter
+    # can't answer (non-Linear tracker, GraphQL hiccup), we proceed.
+    if resolved_tracker is not None:
+        get_blockers_fn = getattr(
+            resolved_tracker.gateway, "get_ticket_blockers", None
+        )
+        if get_blockers_fn is not None:
+            try:
+                blockers = await get_blockers_fn(
+                    TicketRef(
+                        kind=resolved_tracker.kind,
+                        workspace_hint=None,
+                        id=ticket_ref,
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001 — best-effort
+                log.debug(
+                    "dispatcher: get_ticket_blockers failed ticket=%s err=%s",
+                    ticket_ref, exc,
+                )
+                blockers = None
+            unresolved = [
+                b for b in (blockers or []) if not b.get("completed")
+            ]
+            if unresolved:
+                await release_lock(
+                    session, workspace_id=workspace_id, key=lock_key
+                )
+                session.add(
+                    AuditLog(
+                        workspace_id=workspace_id,
+                        action="dispatch.blocked_by_dep",
+                        target_kind="ticket",
+                        target_id=ticket_ref,
+                        payload={
+                            "trigger_kind": trigger_kind,
+                            "fsm_stage": fsm_stage,
+                            "blockers": [
+                                {
+                                    "identifier": b.get("identifier"),
+                                    "state_name": b.get("state_name"),
+                                }
+                                for b in unresolved
+                            ],
+                        },
+                    )
+                )
+                return DispatchResult(
+                    fired=False,
+                    reason=_Reason.BLOCKED_BY_DEPENDENCY,
+                    lock_key=lock_key,
+                )
+
     # 5b. Project-WIP gate. One non-anchor ticket per Linear project
     # at a time — anchors decompose their project and must stay
     # parallelisable; everything else queues. ``planning:anchor``
@@ -845,25 +1021,30 @@ async def maybe_dispatch(
         )
 
     # 7. Happy path. Audit the successful fire.
-    session.add(
-        AuditLog(
-            workspace_id=workspace_id,
-            action="agent_run.dispatch",
-            target_kind="ticket",
-            target_id=ticket_ref,
-            payload={
-                "trigger_kind": trigger_kind,
-                "repo": repo.full_name,
-                "workflow_file": WORKFLOW_FILE,
-                "routine_id": routine_id,
-                "fsm_stage": fsm_stage,
-                # Stash project_id so /tracker/next can fall back to
-                # it when synthesising a row from audit on a stale
-                # tracker replica (orphan gate needs project_id).
-                "project_id": project_id,
-            },
-        )
+    dispatch_audit = AuditLog(
+        workspace_id=workspace_id,
+        action="agent_run.dispatch",
+        target_kind="ticket",
+        target_id=ticket_ref,
+        payload={
+            "trigger_kind": trigger_kind,
+            "repo": repo.full_name,
+            "workflow_file": WORKFLOW_FILE,
+            "routine_id": routine_id,
+            "fsm_stage": fsm_stage,
+            # Stash project_id so /tracker/next can fall back to
+            # it when synthesising a row from audit on a stale
+            # tracker replica (orphan gate needs project_id).
+            "project_id": project_id,
+        },
     )
+    session.add(dispatch_audit)
+    # ELS-149 followup: pre-merge attempt to backfill the dispatch
+    # audit id onto agent_dispatch_locks.run_id hit a schema mismatch
+    # — audit_log.id is bigint in prod, lock.run_id is uuid. Reverted.
+    # The sweeper falls back to project_id heuristics, which covers
+    # 99% of cases. Schema-aligning the two columns is a separate
+    # migration tracked in the lock-lifecycle epic.
     log.info(
         "dispatch fired: ws=%s ticket=%s trigger=%s repo=%s",
         workspace_id,

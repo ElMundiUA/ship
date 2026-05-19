@@ -6,6 +6,7 @@ import { ApiUnavailable } from "@/components/api-unavailable";
 import {
   ApiHttpError,
   ApiUnavailableError,
+  getInboxCounts,
   isApiConfigured,
 } from "@/lib/api/client";
 import {
@@ -79,6 +80,7 @@ export default async function AuthedLayout({
   const resolvedId = await getResolvedWorkspaceId({}, workspaces);
   const workspace = pickWorkspace(workspaces, resolvedId);
   const me = await getCachedMe();
+  const inboxCounts = await getInboxCounts(workspace.id, token).catch(() => null);
 
   return (
     <AppShellChrome
@@ -89,6 +91,7 @@ export default async function AuthedLayout({
       }}
       allWorkspaces={toAppShellWorkspaces(workspaces)}
       me={meToShellUser(me)}
+      inboxActionableCount={inboxCounts?.actionable_new ?? null}
     >
       {children}
     </AppShellChrome>
