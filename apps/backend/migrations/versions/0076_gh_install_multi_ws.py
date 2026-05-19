@@ -20,9 +20,11 @@ Revision ID: 0076_gh_install_multi_ws
 Revises: 0075_planning_proposals
 Create Date: 2026-05-19
 
-NOTE: revision id ≤ 32 chars — ``alembic_version.version_num`` is
-``VARCHAR(32)``; the original ``0076_github_installations_multi_workspace``
-(42 chars) fails CI with ``StringDataRightTruncation``.
+Note: revision id kept <=32 chars (``alembic_version.version_num``
+is ``varchar(32)``). The long original id
+``0076_github_installations_multi_workspace`` (43 chars) crashed
+the prod rollout with ``StringDataRightTruncation`` and blocked
+every deploy until renamed.
 """
 
 from __future__ import annotations
