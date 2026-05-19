@@ -525,6 +525,13 @@ class WizardSeedOut(BaseModel):
     tracker_kind: str | None = None
     run_token_prefix: str | None = None
     run_token_rotated: bool = False
+    # ELS-182 (W6) — true once the seed PR has been merged (either via
+    # the App's installation token in the activation modal or by the
+    # operator on github.com). Populated by /wizard_seed/latest from
+    # a sibling ``pr_merge.tracker_done`` audit row matched on
+    # pr_number — the live endpoint always returns False because the
+    # PR is fresh.
+    merged: bool = False
 
 
 class WizardSeedActivateIn(BaseModel):
@@ -1359,14 +1366,41 @@ async def get_latest_wizard_seed(
 
     payload = row.payload or {}
 
+    # ELS-182 (W6) — detect whether the seed PR has merged so the Done
+    # page badge flips without sessionStorage's help. We look for a
+    # sibling ``pr_merge.tracker_done`` audit row whose pr_number
+    # matches. Cheap: one indexed query on (workspace_id, action,
+    # created_at).
+    seed_pr_number = int(payload.get("pr_number") or 0)
+    merged = False
+    if seed_pr_number:
+        from sqlalchemy import cast as _sa_cast, Integer as _SaInteger
+
+        merged_row = (
+            await session.execute(
+                select(AuditLog.id)
+                .where(
+                    AuditLog.workspace_id == workspace_id,
+                    AuditLog.action == "pr_merge.tracker_done",
+                    _sa_cast(
+                        AuditLog.payload["pr_number"].astext, _SaInteger
+                    )
+                    == seed_pr_number,
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        merged = merged_row is not None
+
     return WizardSeedOut(
         pr_url=payload.get("pr_url") or "",
-        pr_number=int(payload.get("pr_number") or 0),
+        pr_number=seed_pr_number,
         branch=payload.get("branch") or "",
         files=list(payload.get("files") or []),
         tracker_kind=payload.get("tracker_kind"),
         run_token_prefix=payload.get("run_token_prefix"),
         run_token_rotated=bool(payload.get("run_token_rotated") or False),
+        merged=merged,
     )
 
 

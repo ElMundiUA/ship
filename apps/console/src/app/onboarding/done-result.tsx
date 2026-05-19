@@ -138,7 +138,13 @@ export function DoneResult({
     );
   }
 
-  return <RepoResultCard repo={repo} result={state.result} />;
+  return (
+    <RepoResultCard
+      repo={repo}
+      result={state.result}
+      workspaceId={workspaceId}
+    />
+  );
 }
 
 function DoneSkeleton({ repoFullName }: { repoFullName: string }) {

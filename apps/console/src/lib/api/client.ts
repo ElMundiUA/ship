@@ -679,6 +679,10 @@ export interface ApiWizardSeedResult {
   tracker_kind: string | null;
   run_token_prefix: string | null;
   run_token_rotated: boolean;
+  /** ELS-182 (W6) — true once the seed PR is merged on GitHub. The
+   *  POST .../wizard_seed dispatch always returns false (fresh PR);
+   *  GET .../wizard_seed/latest flips this when the PR merges. */
+  merged: boolean;
 }
 
 export function wizardSeed(

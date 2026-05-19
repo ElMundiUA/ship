@@ -40,10 +40,12 @@ import type {
 export function RepoResultCard({
   repo,
   result,
+  workspaceId,
 }: {
   /** Best-effort repo metadata. ``null`` when only the wizard payload is around. */
   repo: ApiActivatedRepo | null;
   result: ApiWizardSeedOut;
+  workspaceId: string | null;
 }) {
   const fullName = repo?.full_name ?? null;
   const defaultBranch = repo?.default_branch ?? "main";
@@ -84,7 +86,11 @@ export function RepoResultCard({
       </header>
 
       <div className="mt-4 space-y-3">
-        <PullRequestRow result={result} repoId={repo?.id ?? null} />
+        <PullRequestRow
+          result={result}
+          repoId={repo?.id ?? null}
+          workspaceId={workspaceId}
+        />
         <FileCountRow result={result} fileCount={fileCount} />
       </div>
     </article>
@@ -116,12 +122,18 @@ function Section({
 function PullRequestRow({
   result,
   repoId,
+  workspaceId,
 }: {
   result: ApiWizardSeedOut;
   /** ``null`` when the parent only had the wizard payload, no repo row. */
   repoId: string | null;
+  workspaceId: string | null;
 }) {
-  const merged = useActivationMerged(repoId);
+  // Seed the merged signal from the live payload too — covers the
+  // "open Done from fresh tab after the PR was already merged" case
+  // immediately, no polling round-trip needed.
+  const polled = useActivationMerged(workspaceId, repoId);
+  const merged = polled || result.merged === true;
   return (
     <Section label="Pull request">
       <div className="flex flex-wrap items-center gap-2">
@@ -162,18 +174,24 @@ function PullRequestRow({
 
 
 /**
- * Read the activation flag the configure step's "Activate Ship now"
- * modal writes when the App's installation token successfully merged
- * the seed PR. Returns ``true`` only on a successful merge; missing
- * key, parse failure, ``merged !== true``, or storage error all
- * collapse to ``false`` so the badge degrades to OPENED rather than
- * lying.
+ * ELS-182 (W6) — derive the "merged" badge from two signals:
  *
- * One-shot read on mount — the configure step navigates here right
- * after writing, so there's no race window worth subscribing to.
+ *   1. sessionStorage flag from the activation modal (fast path —
+ *      operator just merged via the App's installation token; no
+ *      polling round-trip needed).
+ *   2. Backend ``GET .../wizard_seed/latest`` poll. Catches the
+ *      "opened a fresh tab" + "merged on github.com manually" cases
+ *      that sessionStorage doesn't cover. Polls every 10s for up to
+ *      2 min after mount; gives up after the timeout to avoid
+ *      lingering work on a dead tab.
  */
-function useActivationMerged(repoId: string | null): boolean {
+function useActivationMerged(
+  workspaceId: string | null,
+  repoId: string | null,
+): boolean {
   const [merged, setMerged] = useState(false);
+
+  // Fast path: sessionStorage.
   useEffect(() => {
     if (!repoId) return;
     if (typeof window === "undefined") return;
@@ -195,6 +213,42 @@ function useActivationMerged(repoId: string | null): boolean {
       // Tampered cache — ignore; badge stays OPENED.
     }
   }, [repoId]);
+
+  // Slow path: backend poll. Stops as soon as we flip merged=true
+  // (either source) or after 2 minutes.
+  useEffect(() => {
+    if (!workspaceId || !repoId) return;
+    if (merged) return;
+    let cancelled = false;
+    const started = Date.now();
+    const POLL_INTERVAL_MS = 10_000;
+    const POLL_TIMEOUT_MS = 120_000;
+
+    async function check() {
+      if (cancelled) return;
+      try {
+        const { getLatestWizardSeed } = await import("@/lib/api/client");
+        const latest = await getLatestWizardSeed(workspaceId!, repoId!);
+        if (!cancelled && latest?.merged === true) {
+          setMerged(true);
+          return;
+        }
+      } catch {
+        // 404 (no seed) / 5xx / network — silently retry until timeout.
+      }
+      if (cancelled) return;
+      if (Date.now() - started >= POLL_TIMEOUT_MS) return;
+      window.setTimeout(check, POLL_INTERVAL_MS);
+    }
+
+    // First check fires immediately (so a fresh tab with an already-
+    // merged PR doesn't wait 10s for the right badge).
+    void check();
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceId, repoId, merged]);
+
   return merged;
 }
 

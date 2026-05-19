@@ -33,7 +33,7 @@
  */
 
 import { useRouter } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 import type {
   ApiAgentSecretStatus,
@@ -126,6 +126,7 @@ export function RepoCard({
 
   const [seedSaving, setSeedSaving] = useState(false);
   const [seedError, setSeedError] = useState<string | null>(null);
+  const seedButtonRef = useRef<HTMLButtonElement | null>(null);
   // Post-seed modal state. Pre-fix the seed POST navigated straight
   // to ``/done`` and silently dropped the operator on a screen that
   // told them "open the PR on GitHub and merge it" — ~30% of pilot
@@ -660,6 +661,7 @@ export function RepoCard({
             )}
           </div>
           <button
+            ref={seedButtonRef}
             type="button"
             data-testid="onboarding-confirm-open-seed-pr"
             data-repo-id={initial.repo.id}
@@ -714,10 +716,40 @@ export function RepoCard({
           </button>
         </div>
         {seedError && (
-          <p className="mt-2 text-[11px] text-coral">
-            Seed PR didn&apos;t open ({seedError}). Try again once the
-            blocker clears.
-          </p>
+          <div className="mt-2 space-y-1.5 rounded-md border border-coral/30 bg-coral/[0.08] p-2.5 text-[11px] text-coral">
+            <p>
+              Seed PR didn&apos;t open ({seedError}). Try again once the
+              blocker clears.
+            </p>
+            <div className="flex flex-wrap items-center gap-3 pt-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setSeedError(null);
+                  seedButtonRef.current?.click();
+                }}
+                className="rounded-md bg-aqua/15 px-2.5 py-1 text-xs font-semibold text-aqua hover:bg-aqua/25"
+              >
+                Retry seed PR
+              </button>
+              <a
+                href={`mailto:support@elmundi.com?subject=${encodeURIComponent(
+                  `[Ship] wizard seed failed — ${initial.repo.full_name}`,
+                )}&body=${encodeURIComponent(
+                  [
+                    "Ship's wizard seed step failed and I can't unblock it.",
+                    "",
+                    `Workspace: ${workspaceId}`,
+                    `Repo: ${initial.repo.full_name}`,
+                    `Error: ${seedError}`,
+                  ].join("\n"),
+                )}`}
+                className="text-[11px] font-semibold underline-offset-2 hover:underline"
+              >
+                Tell us what happened →
+              </a>
+            </div>
+          </div>
         )}
       </footer>
 
