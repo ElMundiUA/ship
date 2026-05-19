@@ -158,7 +158,9 @@ test.describe("settings: API keys (wired, serial)", () => {
       page.getByRole("heading", { name: "API key created", exact: true }),
     ).toHaveCount(0);
     await expect(secretCode).toHaveCount(0);
-    await expect(page.getByText(secret, { exact: true })).toHaveCount(0);
+    await expect(page.locator("code").filter({ hasText: /^ship_pat_/ })).toHaveCount(
+      0,
+    );
   });
 
   test("@deployed revoke removes PAT row and API listing", async ({
