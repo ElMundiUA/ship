@@ -204,6 +204,71 @@ If nothing was actionable:
 
 End the audit `comment` with `[Ship workspace:role-self-heal]`.
 
+## Inbox letter schema — action_items are required
+
+Every inbox letter you file MUST carry a `payload` JSON object with
+`action_items[]` and `resolution_mode` so the operator gets one-tap
+controls in the Console. A letter without these renders as raw
+markdown with no buttons — operators have to fix the underlying
+state by hand (the exact workflow self-heal is supposed to remove).
+
+Use the CLI's `--payload-file` flag (or `--payload-file -` to read
+stdin) with this shape:
+
+```json
+{
+  "resolution_mode": "single_choice",
+  "action_items": [
+    {
+      "id": "ack_handled",
+      "kind": "choice",
+      "label": "Already handled",
+      "hint": "I fixed it manually; close this letter."
+    },
+    {
+      "id": "needs_more_info",
+      "kind": "choice",
+      "label": "Need more context",
+      "hint": "Self-heal flagged this — operator wants to investigate before acting."
+    },
+    {
+      "id": "wont_fix",
+      "kind": "choice",
+      "label": "Not actionable",
+      "hint": "False positive or out of scope. Don't re-file."
+    }
+  ]
+}
+```
+
+Rules:
+
+- Always include `ack_handled` first (default exit ramp for the
+  operator).
+- Add one `kind=choice` per concrete unblock you considered. Each
+  one writes a Linear comment with `label` on the ticket
+  (`ticket_ref` on the letter) so the audit trail shows what the
+  operator chose.
+- For Phase-3 PR-related letters, append:
+  ```json
+  { "id": "pr_review_done",  "kind": "choice", "label": "PR merged manually" }
+  ```
+  The hint should name the PR URL so it's clickable from the
+  operator's preview pane.
+- For Phase-4 cascade-loop letters, append:
+  ```json
+  { "id": "loop_acknowledged", "kind": "choice", "label": "Investigating loop" }
+  ```
+  so the operator can confirm they've seen the spike without the
+  letter persisting through the next tick.
+- Do NOT use `kind=checkbox` (it creates a child ticket) or
+  `kind=ack` (renders a single button — bad UX for self-heal's
+  multi-option flow).
+
+The `body` markdown stays the same — it's the explainer. The
+`action_items` are what makes the operator-side decision a single
+click instead of a manual lock release.
+
 ## Anti-duplication
 
 Before posting any inbox letter / Linear comment:
