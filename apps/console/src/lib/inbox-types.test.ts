@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  INBOX_TYPES,
   inboxActionItems,
   inboxFooterKind,
   ROW_KICKER,
@@ -23,6 +24,24 @@ describe("ROW_KICKER", () => {
   it("maps report to ≡ REPORT", () => {
     expect(ROW_KICKER.report.glyph).toBe("≡");
     expect(ROW_KICKER.report.label).toBe("REPORT");
+  });
+
+  it("defines glyph + label for every inbox type", () => {
+    const expectedGlyphs: Record<string, string> = {
+      clarification: "?",
+      blocker: "!",
+      failure: "!",
+      report: "≡",
+      approval: "★",
+      exception: "★",
+      stuck: "★",
+      improvement: "★",
+    };
+    for (const type of INBOX_TYPES) {
+      const kicker = ROW_KICKER[type];
+      expect(kicker.glyph).toBe(expectedGlyphs[type]);
+      expect(kicker.label.length).toBeGreaterThan(0);
+    }
   });
 });
 
