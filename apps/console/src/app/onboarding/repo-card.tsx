@@ -197,38 +197,35 @@ export function RepoCard({
     >
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
-          <h3 className="font-display text-lg font-bold text-white">
-            {initial.repo.full_name}
-          </h3>
-          <div className="mt-0.5 flex flex-wrap items-center gap-2 font-mono text-[10px] uppercase tracking-widest text-white/45">
-            <span>{initial.repo.default_branch}</span>
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-sm font-semibold text-white">
+              {initial.repo.full_name}
+            </h3>
+            <span className="font-mono text-[10px] uppercase tracking-widest text-white/35">
+              {initial.repo.default_branch}
+            </span>
             {tracker.kind && tracker.source === "workspace" && (
-              <span className="rounded bg-white/5 px-1.5 py-0.5">
+              <span className="rounded bg-white/5 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-white/45">
                 inherits {tracker.kind}
               </span>
             )}
             {tracker.kind && tracker.source === "repo" && (
-              <span className="rounded bg-aqua/15 px-1.5 py-0.5 text-aqua">
+              <span className="rounded bg-aqua/15 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-aqua">
                 {tracker.kind}
               </span>
             )}
-            {!tracker.kind && (
-              <span className="rounded bg-white/5 px-1.5 py-0.5 text-white/45">
-                no tracker
-              </span>
-            )}
             {seedState === "not_seeded" && (
-              <span className="rounded bg-coral/15 px-1.5 py-0.5 text-coral">
+              <span className="rounded bg-coral/15 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-coral">
                 not seeded
               </span>
             )}
             {seedState === "up_to_date" && (
-              <span className="rounded bg-aqua/15 px-1.5 py-0.5 text-aqua">
-                bundle v{current}
+              <span className="rounded bg-aqua/15 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-aqua">
+                v{current}
               </span>
             )}
             {seedState === "update_available" && (
-              <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-amber-200">
+              <span className="rounded bg-amber-500/20 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-amber-200">
                 v{installed} → v{current}
               </span>
             )}
@@ -468,12 +465,41 @@ export function RepoCard({
         </div>
       </fieldset>
 
-      {/* ── Agent secrets ──────────────────────────────────────── */}
-      <fieldset className="mt-5">
-        <legend className="text-[11px] font-bold uppercase tracking-widest text-white/55">
-          Agents
-        </legend>
-        <p className="mt-1 text-[11px] text-white/55">
+      {/* ── Agent secrets ────────────────────────────────────────
+          Collapsed by default — most operators don't touch agent keys
+          on the per-repo card (workspace defaults cover Claude Code +
+          Cursor) and the long catalog crowded the seed CTA. Open the
+          panel when an agent surfaces a "missing" pill in the
+          summary. */}
+      <details
+        className="mt-5 group/agents"
+        open={missingRequiredSecrets.length > 0 || secretsFailed.length > 0}
+      >
+        <summary className="cursor-pointer list-none [&::-webkit-details-marker]:hidden">
+          <span className="inline-flex items-center gap-2">
+            <span
+              aria-hidden
+              className="text-white/40 transition-transform group-open/agents:rotate-90"
+            >
+              ▸
+            </span>
+            <span className="text-[11px] font-bold uppercase tracking-widest text-white/55">
+              Agents
+            </span>
+            <span className="text-[11px] text-white/45">
+              {(() => {
+                const required = agents.filter((a) => a.required);
+                const present = required.filter((a) => a.present).length;
+                const missing = required.length - present;
+                if (missing > 0)
+                  return `${missing} required key${missing === 1 ? "" : "s"} missing`;
+                if (required.length === 0) return "no required keys";
+                return `${present}/${required.length} required keys present`;
+              })()}
+            </span>
+          </span>
+        </summary>
+        <p className="mt-2 text-[11px] text-white/55">
           Pick <strong className="text-white/80">one</strong> coding-agent key
           — Claude Code (Anthropic), Cursor Cloud, OpenAI Codex,{" "}
           <em>or</em> use GitHub Copilot (no extra secret; it uses the
@@ -650,7 +676,7 @@ export function RepoCard({
             </span>
           )}
         </div>
-      </fieldset>
+      </details>
 
       {/* ── Seed button ────────────────────────────────────────── */}
       <footer className="mt-6 border-t border-white/[0.08] pt-4">
