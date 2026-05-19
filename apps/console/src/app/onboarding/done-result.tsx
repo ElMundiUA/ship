@@ -30,7 +30,7 @@ import { useEffect, useState } from "react";
 import type {
   ApiActivatedRepo,
   ApiWizardSeedOut,
-} from "@/lib/api/client";
+} from "@/lib/api/types";
 
 import { RepoResultCard } from "./repo-result-card";
 

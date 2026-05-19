@@ -26,7 +26,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { cn } from "@/lib/cn";
-import { decideInboxItem } from "@/lib/api/client";
+import { decideInboxItemClient } from "@/lib/inbox-decide-client";
 import type {
   InboxActionItem,
   InboxItemDetail,
@@ -97,7 +97,7 @@ export function InboxActionPanel({ workspaceId, item, onResolved }: Props) {
     setBusy(true);
     setError(null);
     try {
-      const next = await decideInboxItem(workspaceId, item.id, {
+      const next = await decideInboxItemClient(workspaceId, item.id, {
         selections,
         freeform: text || null,
       });
@@ -121,7 +121,7 @@ export function InboxActionPanel({ workspaceId, item, onResolved }: Props) {
     setBusy(true);
     setError(null);
     try {
-      const next = await decideInboxItem(workspaceId, item.id, {
+      const next = await decideInboxItemClient(workspaceId, item.id, {
         action_item_id: actionItemId,
         choice,
       });

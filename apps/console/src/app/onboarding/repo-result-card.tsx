@@ -35,7 +35,7 @@ import { useEffect, useState } from "react";
 import type {
   ApiActivatedRepo,
   ApiWizardSeedOut,
-} from "@/lib/api/client";
+} from "@/lib/api/types";
 
 export function RepoResultCard({
   repo,
@@ -227,9 +227,14 @@ function useActivationMerged(
     async function check() {
       if (cancelled) return;
       try {
-        const { getLatestWizardSeed } = await import("@/lib/api/client");
-        const latest = await getLatestWizardSeed(workspaceId!, repoId!);
-        if (!cancelled && latest?.merged === true) {
+        const qs = new URLSearchParams({
+          workspace_id: workspaceId!,
+          repo_id: repoId!,
+        });
+        const res = await fetch(`/api/onboard/wizard-seed-latest?${qs}`);
+        if (!res.ok) return;
+        const body = (await res.json()) as { result?: ApiWizardSeedOut };
+        if (!cancelled && body.result?.merged === true) {
           setMerged(true);
           return;
         }

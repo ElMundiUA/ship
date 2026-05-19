@@ -14,7 +14,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Badge } from "@/components/ui";
-import { apiFetch } from "@/lib/api/client";
+import { proxyApiFetch } from "@/lib/api/proxy-client";
 import { cn } from "@/lib/cn";
 
 // ---------------------------------------------------------------------------
@@ -116,7 +116,7 @@ function MassPlanningPreviewCard({
     setLoading(true);
     setError(null);
     try {
-      const data = await apiFetch<PlanningProposalOut>(
+      const data = await proxyApiFetch<PlanningProposalOut>(
         `/v1/workspaces/${proposal?.workspace_id ?? ""}/planning/proposals/${proposalId}`,
         { method: "GET" },
       );
@@ -141,7 +141,7 @@ function MassPlanningPreviewCard({
         // path. We pull it from the inbox API's me-context header which
         // every authed page already has. As a pragmatic fallback, look it
         // up via /v1/workspaces and pick the active one.
-        const sess = await apiFetch<{ workspaces: { id: string }[] }>(
+        const sess = await proxyApiFetch<{ workspaces: { id: string }[] }>(
           `/v1/workspaces`,
           { method: "GET" },
         ).catch(() => null);
@@ -149,7 +149,7 @@ function MassPlanningPreviewCard({
         if (!wsId) {
           throw new Error("No workspace in session");
         }
-        const data = await apiFetch<PlanningProposalOut>(
+        const data = await proxyApiFetch<PlanningProposalOut>(
           `/v1/workspaces/${wsId}/planning/proposals/${proposalId}`,
           { method: "GET" },
         );
@@ -182,7 +182,7 @@ function MassPlanningPreviewCard({
       setBusy(true);
       setError(null);
       try {
-        const updated = await apiFetch<PlanningProposalOut>(
+        const updated = await proxyApiFetch<PlanningProposalOut>(
           `/v1/workspaces/${workspaceId}/planning/proposals/${proposalId}`,
           { method: "PATCH", body: { payload: next } },
         );
@@ -202,7 +202,7 @@ function MassPlanningPreviewCard({
     setBusy(true);
     setError(null);
     try {
-      const res = await apiFetch<CommitResponse>(
+      const res = await proxyApiFetch<CommitResponse>(
         `/v1/workspaces/${workspaceId}/planning/mass-import`,
         { method: "POST", body: { proposal_id: proposalId } },
       );
@@ -220,7 +220,7 @@ function MassPlanningPreviewCard({
     setBusy(true);
     setError(null);
     try {
-      await apiFetch(
+      await proxyApiFetch(
         `/v1/workspaces/${workspaceId}/planning/proposals/${proposalId}`,
         { method: "DELETE" },
       );
