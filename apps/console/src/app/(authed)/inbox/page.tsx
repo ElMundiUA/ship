@@ -20,7 +20,6 @@ import { ApiUnavailable } from "@/components/api-unavailable";
 import { PageBody, PageHeader } from "@/components/app-shell";
 import { InboxMailboxListClient } from "@/components/inbox/inbox-mailbox-list-client";
 import { InboxActionPanel } from "@/components/inbox/inbox-action-panel";
-import { MailboxFooter } from "@/components/inbox/mailbox-footer";
 import { MarkdownBlock } from "@/components/markdown-block";
 import { cn } from "@/lib/cn";
 import { relativeTime } from "@/lib/format";
@@ -401,14 +400,18 @@ function MailboxPreview({
       </div>
 
       <footer className="space-y-3 border-t border-white/[0.06] px-6 py-4">
+        {/* InboxActionPanel renders the structured action_items the
+            backend filed with the letter (decision pills / Apply /
+            Acknowledge depending on resolution_mode). The legacy
+            MailboxFooter ("Mark handled" + "Dismiss" + reply textarea)
+            was retired 2026-05-20 — operator feedback: those buttons
+            are duplicate noise when every letter already ships its
+            own structured controls. If a letter lacks action_items
+            the panel falls through to the freeform textarea path. */}
         <InboxActionPanel
           workspaceId={workspaceId}
           item={detail}
         />
-        {/* Legacy MailboxFooter still hosts snooze / reassign / dismiss
-            controls; the primary decide flow now lives in the panel
-            above. */}
-        <MailboxFooter detail={detail} workspaceId={workspaceId} />
       </footer>
     </div>
   );

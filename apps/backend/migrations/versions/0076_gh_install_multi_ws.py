@@ -16,9 +16,15 @@ Existing data is fine — every row currently has at most one
 ``installation_id`` because the old unique kept it that way; the new
 compound constraint is no stricter for any of them.
 
-Revision ID: 0076_github_installations_multi_workspace
+Revision ID: 0076_gh_install_multi_ws
 Revises: 0075_planning_proposals
 Create Date: 2026-05-19
+
+Note: revision id kept <=32 chars (``alembic_version.version_num``
+is ``varchar(32)``). The long original id
+``0076_github_installations_multi_workspace`` (43 chars) crashed
+the prod rollout with ``StringDataRightTruncation`` and blocked
+every deploy until renamed.
 """
 
 from __future__ import annotations
@@ -28,7 +34,7 @@ from typing import Union
 from alembic import op
 
 
-revision: str = "0076_github_installations_multi_workspace"
+revision: str = "0076_gh_install_multi_ws"
 down_revision: Union[str, None] = "0075_planning_proposals"
 branch_labels: Union[str, tuple[str, ...], None] = None
 depends_on: Union[str, tuple[str, ...], None] = None
