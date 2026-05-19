@@ -124,13 +124,67 @@ export const INBOX_TYPE_META: Record<
  *     Used for ``clarification`` where the agent needs an answer.
  *   - ``decision`` — primary + secondary disposition buttons. Used for
  *     everything that's a yes/no/dismiss decision.
+ *   - ``checklist`` — one row per ``payload.action_items`` entry with
+ *     prompt + primary/secondary choices (daily digest letters).
  */
-export type InboxFooterKind = "acknowledge" | "reply" | "decision";
+export type InboxFooterKind = "acknowledge" | "reply" | "decision" | "checklist";
 
-export function inboxFooterKind(type: InboxType): InboxFooterKind {
-  if (type === "report") return "acknowledge";
-  if (type === "clarification") return "reply";
+type FooterKindInput =
+  | InboxType
+  | Pick<InboxItemDetail, "type" | "payload" | "status">;
+
+export function inboxFooterKind(input: FooterKindInput): InboxFooterKind {
+  if (typeof input === "object") {
+    if (input.status !== "resolved" && input.status !== "dismissed") {
+      if (parseChecklistActionItems(input.payload).length > 0) {
+        return "checklist";
+      }
+    }
+    return inboxFooterKind(input.type);
+  }
+  if (input === "report") return "acknowledge";
+  if (input === "clarification") return "reply";
   return "decision";
+}
+
+/** Daily-digest / multi-prompt letters — checklist footer contract. */
+export type InboxChecklistActionItem = {
+  id: string;
+  prompt: string;
+  primary: { label: string; choice: string };
+  secondary: { label: string; choice: string };
+};
+
+function readChoiceButton(
+  raw: unknown,
+): { label: string; choice: string } | null {
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  const label = typeof o.label === "string" ? o.label.trim() : "";
+  const choice = typeof o.choice === "string" ? o.choice.trim() : "";
+  if (!label || !choice) return null;
+  return { label, choice };
+}
+
+/** Parse checklist-shaped ``action_items``; skips invalid rows. */
+export function parseChecklistActionItems(
+  payload: Record<string, unknown> | undefined,
+): InboxChecklistActionItem[] {
+  if (!payload || typeof payload !== "object") return [];
+  const raw = payload["action_items"];
+  if (!Array.isArray(raw)) return [];
+  const out: InboxChecklistActionItem[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") continue;
+    const row = entry as Record<string, unknown>;
+    const id = typeof row.id === "string" ? row.id.trim() : "";
+    const prompt = typeof row.prompt === "string" ? row.prompt.trim() : "";
+    const primary = readChoiceButton(row.primary);
+    const secondary = readChoiceButton(row.secondary);
+    if (!id || !prompt || !primary || !secondary) continue;
+    out.push({ id, prompt, primary, secondary });
+  }
+  return out;
 }
 
 /** Type kicker: glyph + label + dot tone for mailbox list rows. */

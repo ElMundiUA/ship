@@ -14,8 +14,11 @@
  */
 
 import { SnoozeForm } from "@/components/inbox/snooze-form";
+import { ButtonDanger, ButtonGhost } from "@/components/ui";
 import {
   inboxFooterKind,
+  parseChecklistActionItems,
+  type InboxChecklistActionItem,
   type InboxItemDetail,
   type InboxType,
 } from "@/lib/inbox-types";
@@ -81,9 +84,12 @@ const DECISIONS: Partial<Record<InboxType, Decision>> = {
 export function MailboxFooter({
   detail,
   workspaceId,
+  returnTo = "/inbox",
 }: {
   detail: InboxItemDetail;
   workspaceId: string;
+  /** Bounce target after disposition (mailbox ``?selected=`` URL). */
+  returnTo?: string;
 }) {
   if (detail.status === "resolved" || detail.status === "dismissed") {
     return (
@@ -102,7 +108,17 @@ export function MailboxFooter({
     );
   }
 
-  const kind = inboxFooterKind(detail.type as InboxType);
+  const kind = inboxFooterKind(detail);
+  if (kind === "checklist") {
+    return (
+      <ChecklistFooter
+        workspaceId={workspaceId}
+        itemId={detail.id}
+        items={parseChecklistActionItems(detail.payload)}
+        returnTo={returnTo}
+      />
+    );
+  }
   if (kind === "acknowledge") {
     // Reports (daily digest, learning capture, retro) only had a
     // single Acknowledge button — operators routinely wanted a
@@ -271,6 +287,82 @@ function ReplyForm({
         </button>
         <DismissForm workspaceId={workspaceId} itemId={itemId} />
       </div>
+    </form>
+  );
+}
+
+function ChecklistFooter({
+  workspaceId,
+  itemId,
+  items,
+  returnTo,
+}: {
+  workspaceId: string;
+  itemId: string;
+  items: InboxChecklistActionItem[];
+  returnTo: string;
+}) {
+  return (
+    <ul className="space-y-3" data-testid="inbox-checklist-footer">
+      {items.map((item) => (
+        <li key={item.id} className="space-y-2">
+          <p className="text-sm text-white/85">{item.prompt}</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <ChecklistChoiceForm
+              workspaceId={workspaceId}
+              itemId={itemId}
+              actionItemId={item.id}
+              choice={item.primary.choice}
+              label={item.primary.label}
+              returnTo={returnTo}
+              variant="primary"
+            />
+            <ChecklistChoiceForm
+              workspaceId={workspaceId}
+              itemId={itemId}
+              actionItemId={item.id}
+              choice={item.secondary.choice}
+              label={item.secondary.label}
+              returnTo={returnTo}
+              variant="secondary"
+            />
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function ChecklistChoiceForm({
+  workspaceId,
+  itemId,
+  actionItemId,
+  choice,
+  label,
+  returnTo,
+  variant,
+}: {
+  workspaceId: string;
+  itemId: string;
+  actionItemId: string;
+  choice: string;
+  label: string;
+  returnTo: string;
+  variant: "primary" | "secondary";
+}) {
+  const Button = variant === "primary" ? ButtonGhost : ButtonDanger;
+  return (
+    <form
+      action={`/api/inbox/${encodeURIComponent(itemId)}/disposition`}
+      method="POST"
+      className="contents"
+    >
+      <input type="hidden" name="ws" value={workspaceId} />
+      <input type="hidden" name="action" value="resolve" />
+      <input type="hidden" name="action_item_id" value={actionItemId} />
+      <input type="hidden" name="choice" value={choice} />
+      <input type="hidden" name="return_to" value={returnTo} />
+      <Button type="submit">{label}</Button>
     </form>
   );
 }

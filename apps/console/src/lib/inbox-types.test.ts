@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { INBOX_TYPES, inboxFooterKind, ROW_KICKER } from "@/lib/inbox-types";
+import {
+  INBOX_TYPES,
+  inboxFooterKind,
+  parseChecklistActionItems,
+  ROW_KICKER,
+} from "@/lib/inbox-types";
 
 describe("ROW_KICKER", () => {
   it("maps clarification to ? CLARIFY", () => {
@@ -51,5 +56,68 @@ describe("inboxFooterKind", () => {
 
   it("returns decision for blocker", () => {
     expect(inboxFooterKind("blocker")).toBe("decision");
+  });
+
+  it("returns checklist when payload has checklist action_items", () => {
+    expect(
+      inboxFooterKind({
+        type: "report",
+        status: "new",
+        payload: {
+          action_items: [
+            {
+              id: "q1",
+              prompt: "Ship it?",
+              primary: { label: "Yes", choice: "yes" },
+              secondary: { label: "No", choice: "no" },
+            },
+          ],
+        },
+      }),
+    ).toBe("checklist");
+  });
+
+  it("does not return checklist for resolved items", () => {
+    expect(
+      inboxFooterKind({
+        type: "report",
+        status: "resolved",
+        payload: {
+          action_items: [
+            {
+              id: "q1",
+              prompt: "Ship it?",
+              primary: { label: "Yes", choice: "yes" },
+              secondary: { label: "No", choice: "no" },
+            },
+          ],
+        },
+      }),
+    ).toBe("acknowledge");
+  });
+});
+
+describe("parseChecklistActionItems", () => {
+  it("parses valid rows and skips incomplete entries", () => {
+    expect(
+      parseChecklistActionItems({
+        action_items: [
+          {
+            id: "a",
+            prompt: "Q1",
+            primary: { label: "Go", choice: "go" },
+            secondary: { label: "Wait", choice: "wait" },
+          },
+          { id: "b", prompt: "missing buttons" },
+        ],
+      }),
+    ).toEqual([
+      {
+        id: "a",
+        prompt: "Q1",
+        primary: { label: "Go", choice: "go" },
+        secondary: { label: "Wait", choice: "wait" },
+      },
+    ]);
   });
 });
