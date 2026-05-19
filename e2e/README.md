@@ -398,4 +398,4 @@ UI-спека (`navigator-memory-ui`) на локалке не работают 
 
 ## CI
 
-В репозитории нет GitHub Actions workflow для e2e. Запускай локально: `cd e2e && npm test` / `npm run test:deployed` с `.env` по примерам выше. Секреты те же (`E2E_CONSOLE_BASE_URL`, `E2E_PLAYWRIGHT_STORAGE_JSON` или `E2E_STORAGE_STATE`, `E2E_SHIP_API_*`, sandbox, интеграции — см. фазы выше).
+**Landing smoke** runs on every PR via the `landing-e2e` job in `.github/workflows/ci.yml` (no console secrets). Console wired/deployed suites remain manual or scheduled — see phases above for `E2E_CONSOLE_BASE_URL`, `E2E_STORAGE_STATE`, `E2E_SHIP_API_*`, sandbox, and integration secrets.

@@ -204,10 +204,9 @@ jobs:
 
       - name: Install landing deps
         working-directory: apps/landing
-        env:
-          # prebuild scripts (blog charts) need devDependencies e.g. echarts
-          NODE_ENV: development
-        run: npm ci
+        # Standalone install: workspace hoisting without root `npm ci` leaves
+        # devDeps like echarts at repo root where prebuild scripts cannot resolve them.
+        run: npm ci --workspaces=false
 
       - name: Install e2e deps
         working-directory: e2e
