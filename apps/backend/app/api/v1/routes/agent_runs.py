@@ -3874,25 +3874,22 @@ async def finish_agent_run(
             )
         )
         actions.append("inbox:clarification")
-        await _release_project_lock_for_ticket(
-            session,
-            workspace_id=workspace_id,
-            resolved=resolved,
-            ticket_ref=payload.ticket_ref,
-            reason="needs_clarification",
-        )
+        # ELS-142: project_lock release for needs_clarification /
+        # blocked / out_of_scope happens below via
+        # ``maybe_release_project_lock_on_finish`` so every finish path
+        # writes a single ``dispatch.project_lock_released`` audit row
+        # with ``via=agent_run.finish``. Pre-fix the early call here
+        # released the lock first with ``via=<outcome>``, and the
+        # cascade matrix path then no-op'd — AC1 of ELS-142 (single
+        # ``via=agent_run.finish`` audit per release) couldn't fire.
 
     elif payload.outcome == "blocked":
         # No ticket move and no inbox row — transient blocked finishes
         # stay in the audit log only (ELS-144). Real escalations still
-        # surface via refire_capped / tracker_outage paths.
-        await _release_project_lock_for_ticket(
-            session,
-            workspace_id=workspace_id,
-            resolved=resolved,
-            ticket_ref=payload.ticket_ref,
-            reason="blocked",
-        )
+        # surface via refire_capped / tracker_outage paths. Lock release
+        # happens via ``maybe_release_project_lock_on_finish`` below
+        # (ELS-142).
+        pass
 
     elif payload.outcome == "out_of_scope":
         if not payload.ticket_ref:
@@ -3915,13 +3912,8 @@ async def finish_agent_run(
             fsm_stage=payload.fsm_stage,
             actions=actions,
         )
-        await _release_project_lock_for_ticket(
-            session,
-            workspace_id=workspace_id,
-            resolved=resolved,
-            ticket_ref=payload.ticket_ref,
-            reason="out_of_scope",
-        )
+        # ELS-142: lock release deferred to
+        # ``maybe_release_project_lock_on_finish`` below.
 
     session.add(
         AuditLog(
