@@ -3884,12 +3884,94 @@ async def finish_agent_run(
         # ``via=agent_run.finish`` audit per release) couldn't fire.
 
     elif payload.outcome == "blocked":
-        # No ticket move and no inbox row — transient blocked finishes
-        # stay in the audit log only (ELS-144). Real escalations still
-        # surface via refire_capped / tracker_outage paths. Lock release
-        # happens via ``maybe_release_project_lock_on_finish`` below
-        # (ELS-142).
-        pass
+        # Two sub-cases:
+        #
+        # (A) ``stage_next`` is set — the agent picked a cascade target
+        #     (e.g. reviewer bouncing to dev_implementation). The cascade
+        #     matrix handles the re-dispatch downstream. No inbox row,
+        #     no label change; the picker reads the new ``stage:*`` label
+        #     once :func:`tracker.transition` runs further below.
+        #
+        # (B) ``stage_next`` is null — the agent finished blocked with
+        #     no cascade target. Pre-2026-05-19 this meant the picker
+        #     re-fired the same stage every tick until the 24h refire
+        #     cap kicked in (3 in 24h), producing a 24h ticket idle.
+        #     Measured on Ship-on-Ship 2026-05-12..19: 77% of
+        #     ``code_review`` blocks were null-next, the dominant FSM
+        #     bottleneck. Treat as effectively ``needs_clarification``:
+        #     stamp ``needs:clarification`` on the ticket so the picker
+        #     skips, file a blocker inbox row immediately so the
+        #     operator can act in <1 minute instead of waiting 24h.
+        if not payload.stage_next and resolved is not None and payload.ticket_ref:
+            ref = _ticket_ref_from(resolved.kind, payload.ticket_ref)
+            add_signal = getattr(resolved.gateway, "add_signal_label", None)
+            if add_signal is not None:
+                try:
+                    await add_signal(ref, key="needs_clarification")
+                    actions.append("tracker:label:needs_clarification")
+                except Exception as exc:  # noqa: BLE001 — best-effort
+                    logger.info(
+                        "blocked+no_next label add failed ws=%s ticket=%s: %s",
+                        workspace_id, payload.ticket_ref, exc,
+                    )
+            session.add(
+                InboxItem(
+                    workspace_id=workspace_id,
+                    repo_id=None,
+                    type="blocker",
+                    title=(
+                        f"{payload.ticket_ref}: {payload.fsm_stage or 'agent'} "
+                        f"blocked without cascade target"
+                    )[:300],
+                    summary=(
+                        f"Agent finished outcome=blocked with stage_next=null "
+                        f"at fsm_stage={payload.fsm_stage}. Picker can't route "
+                        f"the fix anywhere; ticket sits idle until you act."
+                    )[:2000],
+                    payload={
+                        "ticket_ref": payload.ticket_ref,
+                        "fsm_stage": payload.fsm_stage,
+                        "run_id": payload.run_id,
+                        "resolution_mode": "single_choice",
+                        "action_items": [
+                            {
+                                "id": "send_to_dev",
+                                "kind": "choice",
+                                "label": "Send to dev_implementation",
+                                "hint": (
+                                    "Agent should re-run dev to fix the "
+                                    "blockers listed in its comment."
+                                ),
+                            },
+                            {
+                                "id": "send_to_validation",
+                                "kind": "choice",
+                                "label": "Send to validation",
+                                "hint": (
+                                    "QA missed something; re-validate against "
+                                    "this commit."
+                                ),
+                            },
+                            {
+                                "id": "mark_handled",
+                                "kind": "choice",
+                                "label": "Already handled",
+                                "hint": (
+                                    "Operator fixed it manually or the PR "
+                                    "is no longer relevant."
+                                ),
+                            },
+                        ],
+                    },
+                    status="new",
+                    intake_handle=None,
+                    intake_reason="blocked_without_cascade",
+                )
+            )
+            actions.append("inbox:blocker:blocked_no_next")
+        # else: stage_next is set — cascade matrix handles re-dispatch;
+        # nothing to do here. (Lock release happens via
+        # ``maybe_release_project_lock_on_finish`` below.)
 
     elif payload.outcome == "out_of_scope":
         if not payload.ticket_ref:
