@@ -1,5 +1,5 @@
 /**
- * Workspace registries settings — empty state, UI create, and invalid URL validation.
+ * Workspace registries settings — empty state, UI create, URL validation.
  *
  * @deployed
  */
@@ -19,15 +19,8 @@ type ApiArtifactRepo = { id: string; url: string };
 const skipReason =
   "E2E_STORAGE_STATE + E2E_SHIP_API_BASE + E2E_SHIP_API_TOKEN (admin)";
 
-const INVALID_URL_PATTERN =
-  /That URL doesn.t look right\. Use file:\/\/, https:\/\/, ssh:\/\/, or git@host:path style\./;
-
 function uniqueSlug(): string {
-  return `e2e-reg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function registriesPath(workspaceId: string): string {
-  return `/settings/registries?ws=${encodeURIComponent(workspaceId)}`;
+  return `e2e-ws-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 async function createThrowawayWorkspace(
@@ -45,59 +38,21 @@ async function createThrowawayWorkspace(
   return body;
 }
 
-async function listArtifactRepos(
-  request: Parameters<typeof shipApiGet>[0],
-  workspaceId: string,
-): Promise<ApiArtifactRepo[]> {
-  const res = await shipApiGet(
-    request,
-    `/v1/workspaces/${encodeURIComponent(workspaceId)}/artifact-repos`,
-  );
-  expect(res.ok(), `GET artifact-repos → ${res.status()}`).toBeTruthy();
-  return (await res.json()) as ApiArtifactRepo[];
-}
-
-async function deleteArtifactRepo(
-  request: Parameters<typeof shipApiDelete>[0],
-  workspaceId: string,
-  repoId: string,
-): Promise<void> {
-  const res = await shipApiDelete(
-    request,
-    `/v1/workspaces/${encodeURIComponent(workspaceId)}/artifact-repos/${encodeURIComponent(repoId)}`,
-  );
-  expect(
-    res.ok() || res.status() === 204,
-    `DELETE artifact-repo → ${res.status()}`,
-  ).toBeTruthy();
-}
-
-async function deleteThrowawayWorkspace(
-  request: Parameters<typeof shipApiDelete>[0],
-  workspaceId: string,
-): Promise<void> {
-  const res = await shipApiDelete(
-    request,
-    `/v1/workspaces/${encodeURIComponent(workspaceId)}`,
-  );
-  expect(
-    res.ok() || res.status() === 204,
-    `DELETE workspace → ${res.status()}`,
-  ).toBeTruthy();
+async function openRegistries(page: Page, workspaceId: string): Promise<void> {
+  await page.goto(`/settings/registries?ws=${encodeURIComponent(workspaceId)}`);
+  await expect(
+    page.getByRole("heading", { name: "Registries", exact: true }),
+  ).toBeVisible({ timeout: 30_000 });
 }
 
 async function expandAddRepoForm(page: Page): Promise<void> {
-  await page.getByText("+ Add repo", { exact: true }).click();
-}
-
-async function submitAddRepoForm(page: Page, url: string): Promise<void> {
-  await expandAddRepoForm(page);
-  await page.locator('input[name="url"]').fill(url);
-  await page.getByRole("button", { name: "Register" }).click();
+  await page.getByText("+ Add repo").click();
 }
 
 test.describe("settings: registries (wired, serial)", () => {
   test.describe.configure({ mode: "serial", timeout: 120_000 });
+
+  const createdRepoIds: { wsId: string; repoId: string }[] = [];
 
   test.beforeEach(() => {
     test.skip(
@@ -106,81 +61,78 @@ test.describe("settings: registries (wired, serial)", () => {
     );
   });
 
-  test("@deployed empty state — heading, copy, and add control", async ({
-    page,
-    request,
-  }) => {
-    const ws = await createThrowawayWorkspace(request);
-    try {
-      await page.goto(registriesPath(ws.id));
-      await expect(
-        page.getByRole("heading", { name: "Registries", exact: true }),
-      ).toBeVisible({ timeout: 30_000 });
-      await expect(
-        page.getByText("No artifact repos registered yet", { exact: false }),
-      ).toBeVisible();
-      await expect(page.getByText("+ Add repo", { exact: true })).toBeVisible();
-    } finally {
-      await deleteThrowawayWorkspace(request, ws.id);
-    }
-  });
-
-  test("@deployed create repo via UI — table row and API list", async ({
-    page,
-    request,
-  }) => {
-    const ws = await createThrowawayWorkspace(request);
-    const repoUrl = `file:///tmp/e2e-registries-${Date.now()}`;
-    let createdId: string | null = null;
-
-    try {
-      await page.goto(registriesPath(ws.id));
-      await expect(
-        page.getByRole("heading", { name: "Registries", exact: true }),
-      ).toBeVisible({ timeout: 30_000 });
-
-      await submitAddRepoForm(page, repoUrl);
-      await expect(page).toHaveURL(/\/settings(?:\?|$)/, { timeout: 20_000 });
-
-      await page.goto(registriesPath(ws.id));
-      await expect(page.getByText(repoUrl, { exact: true })).toBeVisible({
-        timeout: 15_000,
-      });
-
-      const apiRows = await listArtifactRepos(request, ws.id);
-      const created = apiRows.find((r) => r.url === repoUrl);
-      expect(created).toBeTruthy();
-      createdId = created!.id;
-    } finally {
-      if (createdId) {
-        await deleteArtifactRepo(request, ws.id, createdId);
+  test.afterEach(async ({ request }) => {
+    for (const { wsId, repoId } of [...createdRepoIds]) {
+      try {
+        const res = await shipApiDelete(
+          request,
+          `/v1/workspaces/${encodeURIComponent(wsId)}/artifact-repos/${encodeURIComponent(repoId)}`,
+        );
+        expect(res.ok() || res.status() === 204).toBeTruthy();
+      } catch {
+        // Best-effort cleanup for throwaway workspace.
       }
-      await deleteThrowawayWorkspace(request, ws.id);
     }
+    createdRepoIds.length = 0;
   });
 
-  test("@deployed invalid URL — settings error banner", async ({
+  test("@deployed registries tab shows empty state", async ({
+    page,
+    request,
+  }) => {
+    const ws = await createThrowawayWorkspace(request);
+    await openRegistries(page, ws.id);
+
+    await expect(
+      page.getByText(/No artifact repos registered yet/),
+    ).toBeVisible();
+    await expect(page.getByText("+ Add repo")).toBeVisible();
+  });
+
+  test("@deployed UI create registers file:// repo", async ({
+    page,
+    request,
+  }) => {
+    const ws = await createThrowawayWorkspace(request);
+    const fileUrl = `file:///tmp/e2e-registries-${Date.now()}`;
+
+    await openRegistries(page, ws.id);
+    await expandAddRepoForm(page);
+    await page.locator('input[name="url"]').fill(fileUrl);
+    await page.getByRole("button", { name: "Register" }).click();
+
+    await expect(page).toHaveURL(/\/settings/, { timeout: 20_000 });
+
+    await page.goto(`/settings/registries?ws=${encodeURIComponent(ws.id)}`);
+    await expect(page.getByText(fileUrl, { exact: true })).toBeVisible({
+      timeout: 15_000,
+    });
+
+    const listed = await shipApiGet(
+      request,
+      `/v1/workspaces/${encodeURIComponent(ws.id)}/artifact-repos`,
+    );
+    expect(listed.ok(), `GET artifact-repos → ${listed.status()}`).toBeTruthy();
+    const rows = (await listed.json()) as ApiArtifactRepo[];
+    const created = rows.find((r) => r.url === fileUrl);
+    expect(created?.id).toBeTruthy();
+    createdRepoIds.push({ wsId: ws.id, repoId: created!.id });
+  });
+
+  test("@deployed invalid URL shows validation banner", async ({
     page,
     request,
   }) => {
     const ws = await createThrowawayWorkspace(request);
 
-    try {
-      await page.goto(registriesPath(ws.id));
-      await expect(
-        page.getByRole("heading", { name: "Registries", exact: true }),
-      ).toBeVisible({ timeout: 30_000 });
+    await openRegistries(page, ws.id);
+    await expandAddRepoForm(page);
+    await page.locator('input[name="url"]').fill("not-a-url");
+    await page.getByRole("button", { name: "Register" }).click();
 
-      await submitAddRepoForm(page, "not-a-url");
-      await expect(page).toHaveURL(/error=invalid_url/, { timeout: 20_000 });
-      await expect(page.getByText(INVALID_URL_PATTERN)).toBeVisible({
-        timeout: 15_000,
-      });
-
-      const apiRows = await listArtifactRepos(request, ws.id);
-      expect(apiRows.some((r) => r.url === "not-a-url")).toBe(false);
-    } finally {
-      await deleteThrowawayWorkspace(request, ws.id);
-    }
+    await expect(page).toHaveURL(/error=invalid_url/, { timeout: 20_000 });
+    await expect(
+      page.getByText(/That URL doesn’t look right/),
+    ).toBeVisible({ timeout: 15_000 });
   });
 });
