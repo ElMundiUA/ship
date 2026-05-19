@@ -377,7 +377,11 @@ async def _mirror_stuck_prs_to_inbox(
             select(InboxItem.payload).where(
                 InboxItem.workspace_id == workspace_id,
                 InboxItem.status.in_(_INBOX_OPEN),
-                InboxItem.type.in_(("blocker", "clarification")),
+                # ``improvement`` covered because fsm_self_heal phase-1
+                # files orphan-dispatch findings as improvements, not
+                # blockers — same situation as a stuck_pr from the
+                # operator's POV.
+                InboxItem.type.in_(("blocker", "clarification", "improvement")),
             )
         )
     ).all()
