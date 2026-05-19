@@ -164,7 +164,9 @@ export default async function TopicViewPage({
           scopePill={scopePill}
         />
         <PageBody>
-          <ApiUnavailable scope="knowledge" details={result.reason} />
+          <div data-testid="topic-view-unavailable">
+            <ApiUnavailable scope="knowledge" details={result.reason} />
+          </div>
         </PageBody>
       </>
     );
@@ -179,7 +181,10 @@ export default async function TopicViewPage({
           scopePill={scopePill}
         />
         <PageBody>
-          <p className="text-sm text-white/55">
+          <p
+            data-testid="topic-view-empty"
+            className="text-sm text-white/55"
+          >
             No topic view rendered for this tag yet. Either fewer than 3
             active claims carry it, or the renderer cron hasn{"'"}t fired
             since this topic emerged.
@@ -222,7 +227,10 @@ export default async function TopicViewPage({
           </header>
 
           <div className="grid grid-cols-1 gap-x-12 gap-y-12 lg:grid-cols-12 2xl:gap-x-16">
-            <article className="max-w-3xl lg:col-span-8 2xl:col-span-9">
+            <article
+              data-testid="topic-view-article"
+              className="max-w-3xl lg:col-span-8 2xl:col-span-9"
+            >
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 components={MARKDOWN_COMPONENTS}
@@ -231,7 +239,10 @@ export default async function TopicViewPage({
               </ReactMarkdown>
             </article>
 
-            <aside className="space-y-4 lg:col-span-4 2xl:col-span-3">
+            <aside
+              data-testid="topic-view-claims"
+              className="space-y-4 lg:col-span-4 2xl:col-span-3"
+            >
               <h3 className="font-display text-xs font-bold uppercase tracking-widest text-white/55">
                 Claims · {view.claims.length}
               </h3>
