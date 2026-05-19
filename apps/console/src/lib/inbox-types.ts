@@ -32,6 +32,25 @@ export const INBOX_STATUSES = [
 ] as const;
 export type InboxStatus = (typeof INBOX_STATUSES)[number];
 
+export const INBOX_CATEGORIES = [
+  "decision_needed",
+  "failure",
+  "attention",
+] as const;
+export type InboxCategory = (typeof INBOX_CATEGORIES)[number];
+
+export const INBOX_LANES = ["now", "today", "whenever"] as const;
+export type InboxLane = (typeof INBOX_LANES)[number];
+
+export const INBOX_LANE_META: Record<
+  InboxLane,
+  { label: string; tone: string }
+> = {
+  now: { label: "Now", tone: "text-coral" },
+  today: { label: "Today", tone: "text-sun" },
+  whenever: { label: "Whenever", tone: "text-white/55" },
+};
+
 export const INBOX_RESOLUTIONS = [
   "answered",
   "approved",
@@ -110,9 +129,9 @@ export type InboxFooterKind = "acknowledge" | "reply" | "decision" | "report_act
 
 export type InboxReportActionItem = {
   id: string;
-  prompt: string;
-  primary: string;
-  secondary: string;
+  hint: string;
+  label: string;
+  secondary_label: string;
 };
 
 export function reportActionItems(
@@ -124,12 +143,14 @@ export function reportActionItems(
   for (const entry of raw) {
     if (!entry || typeof entry !== "object") continue;
     const row = entry as Record<string, unknown>;
+    if (row.kind !== "binary") continue;
     const id = typeof row.id === "string" ? row.id : "";
-    const prompt = typeof row.prompt === "string" ? row.prompt : "";
-    const primary = typeof row.primary === "string" ? row.primary : "";
-    const secondary = typeof row.secondary === "string" ? row.secondary : "";
-    if (!id || !prompt || !primary || !secondary) continue;
-    out.push({ id, prompt, primary, secondary });
+    const hint = typeof row.hint === "string" ? row.hint : "";
+    const label = typeof row.label === "string" ? row.label : "";
+    const secondary_label =
+      typeof row.secondary_label === "string" ? row.secondary_label : "";
+    if (!id || !hint || !label || !secondary_label) continue;
+    out.push({ id, hint, label, secondary_label });
   }
   return out;
 }
@@ -201,6 +222,10 @@ export type InboxItem = {
   snoozed_until: string | null;
   resolved_at: string | null;
   resolution: InboxResolution | null;
+  category: InboxCategory;
+  priority: number;
+  lane: InboxLane;
+  resolution_mode: InboxResolutionMode;
 };
 
 export type InboxItemDetail = InboxItem & {
@@ -222,9 +247,47 @@ export type InboxCountsResponse = {
   mine: number;
   unassigned: number;
   all_open: number;
+  actionable_new: number;
+  reports_new: number;
   by_type: Record<string, number>;
   by_status: Record<string, number>;
 };
+
+/** Categories shown in the `/inbox` list.
+ *
+ * Pre-2026-05-18 this was decision_needed + failure only — reports
+ * and stuck-rows lived on the separate `/reports` page. Operator
+ * feedback: split surface drained the main inbox of context and the
+ * report digests are the same kind of "scan-once, click-acknowledge"
+ * letters every other type is. `attention` is back; only
+ * `dismiss_silently` (env-warning info notices, etc.) stays gated to
+ * the noise page.
+ */
+export const INBOX_ACTIONABLE_CATEGORIES: InboxCategory[] = [
+  "decision_needed",
+  "failure",
+  "attention",
+];
+
+/** Inbox Decision UI (ELS-158) — structured action_items contract. */
+export type InboxActionItemKind = "choice" | "checkbox" | "ack" | "binary";
+
+export type InboxActionItem = {
+  id: string;
+  kind: InboxActionItemKind;
+  label: string;
+  hint?: string | null;
+  secondary_label?: string | null;
+  default?: boolean;
+  target_project_id?: string | null;
+};
+
+export type InboxResolutionMode =
+  | "single_choice"
+  | "multi_select"
+  | "ack_only"
+  | "per_item_binary"
+  | "freeform_only";
 
 export type InboxItemEvent = {
   id: string;

@@ -147,16 +147,7 @@ export function InboxItemRow({
           </code>
         )}
         {workspaceId && href && !isTerminal && (
-          <span className="hidden lg:inline-flex lg:opacity-0 lg:transition lg:group-hover:opacity-100 lg:focus-within:opacity-100">
-            <InboxRowActions
-              workspaceId={workspaceId}
-              item={{ id: item.id, type: item.type, status: item.status }}
-              detailHref={href}
-            />
-          </span>
-        )}
-        {workspaceId && href && !isTerminal && (
-          <span className="inline-flex lg:hidden">
+          <span className="inline-flex">
             <InboxRowActions
               workspaceId={workspaceId}
               item={{ id: item.id, type: item.type, status: item.status }}

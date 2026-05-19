@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
+from typing import Final
 
 import httpx
 from sqlalchemy import select
@@ -52,7 +53,24 @@ from backend.app.services import linear_provisioner
 log = logging.getLogger(__name__)
 
 
-STALE_DISPATCH_WINDOW = timedelta(minutes=20)
+STALE_DISPATCH_WINDOW = timedelta(minutes=60)
+# Was 20min — too short for project-lock-bound chains, where the
+# original dispatch can hold the lock up to 60min waiting for /finish
+# or sweep. Re-firing at 20min meant fsm_self_heal kept queuing fresh
+# dispatches the picker had to refuse with ``dispatch.project_busy``,
+# while runner-side crashes (no /finish, ever) racked up endlessly on
+# the same ticket. Matching the 60min PROJECT_LOCK_TTL_S window in
+# dispatcher.py makes the backstop genuinely "fire when prior attempt
+# is dead", not "fire on top of an in-flight attempt".
+
+# Threshold for "this runner is dying without finishing" — if a ticket
+# has this many ``agent_run.dispatch`` rows in the lookback window with
+# zero matching ``agent_run.finish`` rows after each, fsm_self_heal
+# skips it and files an inbox blocker rather than racking up the
+# (N+1)-th dead dispatch. Operator clears manually after looking at
+# the GH Actions logs.
+RUNNER_FAIL_THRESHOLD: Final[int] = 3
+RUNNER_FAIL_WINDOW = timedelta(hours=4)
 # Stages the backstop scan considers. We exclude ``self_heal`` /
 # decomposition (special chains) and the legacy intake-substage
 # names — those are handled by the labels-as-breadcrumb path.
@@ -322,6 +340,31 @@ async def _scan_one_workspace(
                 ).first()
                 if recent is not None:
                     continue
+
+                # Runner-fail loop detection. Look back RUNNER_FAIL_WINDOW
+                # and count dispatch rows without any subsequent finish.
+                # If >= RUNNER_FAIL_THRESHOLD, the GH Actions workflow is
+                # dying silently (network error, missing secret, OOM, etc.)
+                # and re-firing produces yet another dead run. File a
+                # blocker letter once and stop re-firing this ticket
+                # until an operator clears it (resolve the letter).
+                #
+                # askslayer/PAC-32 + PAC-13 2026-05-19: 6 fsm_self_heal
+                # dispatches in 5h, zero finishes, two project_locks
+                # held continuously, 14 sibling PAC-* tickets gated on
+                # ``dispatch.project_busy`` every 15min tick. Same
+                # pattern caught earlier on askslayer/PAC-23 — root
+                # cause is always runner-side (workflow file, secret,
+                # cursor account), never something self-heal can fix
+                # by re-dispatching.
+                if await _looks_like_runner_fail_loop(
+                    session, install.workspace_id, ref
+                ):
+                    await _file_runner_fail_blocker(
+                        session, install.workspace_id, ref, stage
+                    )
+                    continue
+
                 # No fresh dispatch on this (ws, ticket) — re-fire.
                 await maybe_dispatch(
                     session,
@@ -333,6 +376,148 @@ async def _scan_one_workspace(
                 )
                 fired += 1
     return fired
+
+
+async def _looks_like_runner_fail_loop(
+    session: AsyncSession,
+    workspace_id,
+    ticket_ref: str,
+) -> bool:
+    """Detect dispatched-without-finish loops on this ticket.
+
+    Returns True when at least ``RUNNER_FAIL_THRESHOLD`` ``agent_run.dispatch``
+    rows have landed for this ticket inside ``RUNNER_FAIL_WINDOW`` and the
+    number of subsequent ``agent_run.finish`` rows is fewer than the
+    dispatch count — i.e. at least one runner crashed without ``/finish``
+    each time. Idempotent: returns True every tick while the operator
+    has the inbox letter open, so we keep skipping.
+
+    The signal we want: ``dispatches > finishes`` in the window, with
+    ``dispatches >= 3``. We don't try to pair specific dispatches with
+    specific finishes; the count delta is enough.
+    """
+    cutoff = datetime.now(timezone.utc) - RUNNER_FAIL_WINDOW
+    dispatch_count = (
+        await session.execute(
+            select(AuditLog.id)
+            .where(
+                AuditLog.workspace_id == workspace_id,
+                AuditLog.action == "agent_run.dispatch",
+                AuditLog.target_id == ticket_ref,
+                AuditLog.created_at >= cutoff,
+            )
+        )
+    ).all()
+    if len(dispatch_count) < RUNNER_FAIL_THRESHOLD:
+        return False
+    finish_count = (
+        await session.execute(
+            select(AuditLog.id)
+            .where(
+                AuditLog.workspace_id == workspace_id,
+                AuditLog.action == "agent_run.finish",
+                AuditLog.created_at >= cutoff,
+                (AuditLog.target_id == ticket_ref)
+                | (
+                    AuditLog.payload["ticket_ref"].astext == ticket_ref
+                ),
+            )
+        )
+    ).all()
+    return len(dispatch_count) - len(finish_count) >= RUNNER_FAIL_THRESHOLD
+
+
+async def _file_runner_fail_blocker(
+    session: AsyncSession,
+    workspace_id,
+    ticket_ref: str,
+    stage: str,
+) -> None:
+    """File one ``runner_fail_loop`` blocker letter (dedup by intake_handle).
+
+    Stops fsm_self_heal from racking up additional dead dispatches while
+    the operator looks at the GH Actions logs. Letter carries action_items
+    so the operator can pick "Investigated — resume" / "Pause project" /
+    "Already handled" in one click.
+    """
+    from backend.app.db.models.inbox import InboxItem
+
+    handle = f"runner-fail:{ticket_ref}"
+    existing = (
+        await session.execute(
+            select(InboxItem.id).where(
+                InboxItem.workspace_id == workspace_id,
+                InboxItem.intake_handle == handle,
+                InboxItem.status == "new",
+            )
+        )
+    ).first()
+    if existing is not None:
+        # Letter already open; don't spam re-files on every tick.
+        return
+    session.add(
+        InboxItem(
+            workspace_id=workspace_id,
+            repo_id=None,
+            type="blocker",
+            title=(
+                f"{ticket_ref}: {stage} runner crashing without /finish "
+                f"(≥{RUNNER_FAIL_THRESHOLD} dead dispatches in "
+                f"{int(RUNNER_FAIL_WINDOW.total_seconds() // 3600)}h)"
+            )[:300],
+            summary=(
+                f"GitHub Actions runs for {ticket_ref} keep starting "
+                f"(self-heal re-fires every {int(STALE_DISPATCH_WINDOW.total_seconds() // 60)}min) "
+                f"but never call /finish — the chain holds the project "
+                f"lock for 60min, sweeper clears, fsm_self_heal re-fires, "
+                f"loop. Check the latest ship-agent-run.yml run on the "
+                f"repo for the actual error (missing secret, OOM, network)."
+            )[:2000],
+            payload={
+                "ticket_ref": ticket_ref,
+                "fsm_stage": stage,
+                "threshold": RUNNER_FAIL_THRESHOLD,
+                "window_hours": int(
+                    RUNNER_FAIL_WINDOW.total_seconds() // 3600
+                ),
+                "resolution_mode": "single_choice",
+                "action_items": [
+                    {
+                        "id": "investigated_resume",
+                        "kind": "choice",
+                        "label": "Investigated — resume dispatching",
+                        "hint": (
+                            "Operator fixed the root cause (secret, "
+                            "branch, etc.); fsm_self_heal will pick "
+                            "this up on the next tick."
+                        ),
+                    },
+                    {
+                        "id": "pause_project",
+                        "kind": "choice",
+                        "label": "Pause this project's dispatching",
+                        "hint": (
+                            "Stops auto-dispatch on every ticket in "
+                            "the same Linear project until manually "
+                            "resumed."
+                        ),
+                    },
+                    {
+                        "id": "already_handled",
+                        "kind": "choice",
+                        "label": "Already handled",
+                        "hint": (
+                            "Operator merged / cancelled / re-assigned "
+                            "the ticket manually."
+                        ),
+                    },
+                ],
+            },
+            status="new",
+            intake_handle=handle,
+            intake_reason="runner_fail_loop",
+        )
+    )
 
 
 __all__ = [

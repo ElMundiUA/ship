@@ -69,93 +69,8 @@ from backend.app.services import catalog as catalog_service
 logger = logging.getLogger(__name__)
 
 
-# Sentinel sync_source the synthetic rows carry so dashboards can
-# tell "we made this up at install time" apart from a genuine config
-# read. Mirrors :data:`lanes_sync.CONFIG_PATH`-style ``<sha>:<path>``
-# but pins the wizard origin instead of a blob sha.
-_SYNTHETIC_SYNC_SOURCE: str = "wizard_seed:default-bundle"
-
 ORIGIN_MERGED: str = "merged"
 ORIGIN_SYNTHETIC: str = "wizard_seed_synthetic"
-
-
-async def synthetic_lane_sync(
-    *,
-    session: AsyncSession,
-    workspace_id: uuid.UUID,
-    repo_id: uuid.UUID,
-    bundle: tuple[str, ...],
-) -> int:
-    """Insert :class:`Routine` rows for every pattern in ``bundle``.
-
-    Behaviour parity with the post-merge syncer:
-
-    - ``(repo_id, lane_id)`` is the natural key. Existing rows are
-      left untouched regardless of ``origin`` — operator edits made
-      via a future "edit lane" admin surface MUST NOT be clobbered
-      on a wizard re-run, and a real merge that already promoted
-      a synthetic row to ``'merged'`` MUST NOT regress.
-    - ``kind`` / ``pattern`` / ``cron`` / ``config_blob`` are derived
-      from :func:`backend.app.services.catalog.bundle_lane_entries`
-      so the synthetic row's shape is byte-identical to what the
-      post-merge syncer will (re)write — minimises the row diff
-      when reconciliation lands.
-    - ``synced_at`` is ``now()``; ``sync_source`` is the synthetic
-      sentinel so the freshness badge can render "Pending PR merge"
-      instead of "Last synced 5s ago".
-    - ``enabled`` is true (the wizard's whole point is to make Ship
-      live; opting out comes later).
-
-    Returns the count of newly inserted rows. ``0`` is a perfectly
-    valid outcome on a re-run (every lane already existed) and the
-    caller is expected to audit-log the count without raising on it.
-    """
-    if not bundle:
-        return 0
-
-    lane_entries = catalog_service.bundle_lane_entries(bundle)
-    if not lane_entries:
-        # Bundle is all request-only patterns / patterns without
-        # triggers. Not an error — just nothing to materialise.
-        return 0
-
-    existing_lane_ids = await _existing_lane_ids(
-        session=session, repo_id=repo_id
-    )
-
-    now = datetime.now(timezone.utc)
-    inserted = 0
-    for lane_id, trigger in lane_entries.items():
-        if lane_id in existing_lane_ids:
-            continue
-        kind, cron_value, pattern_str, config_blob = _shape_lane_entry(
-            lane_id=lane_id, trigger=trigger
-        )
-        if kind is None:
-            # Defensive: bundle_lane_entries already filters non-lane
-            # patterns; if a future refactor relaxes that we still
-            # don't want to create a row that violates ck_lanes_kind.
-            continue
-        row = Routine(
-            workspace_id=workspace_id,
-            repo_id=repo_id,
-            lane_id=lane_id,
-            kind=kind,
-            pattern=pattern_str,
-            cron=cron_value,
-            idempotency_key=None,
-            enabled=True,
-            config_blob=config_blob,
-            synced_at=now,
-            sync_source=_SYNTHETIC_SYNC_SOURCE,
-            origin=ORIGIN_SYNTHETIC,
-        )
-        session.add(row)
-        inserted += 1
-
-    if inserted:
-        await session.flush()
-    return inserted
 
 
 async def reconcile_synthetic_lanes(
@@ -296,5 +211,4 @@ __all__ = [
     "ORIGIN_MERGED",
     "ORIGIN_SYNTHETIC",
     "reconcile_synthetic_lanes",
-    "synthetic_lane_sync",
 ]

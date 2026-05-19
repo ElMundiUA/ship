@@ -43,6 +43,7 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import dataclass, field
+from datetime import timedelta
 from typing import Any
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -52,6 +53,10 @@ from backend.app.db.models.inbox import (
     InboxItem,
     InboxItemEvent,
     RunEscalation,
+)
+from backend.app.services.inbox.classification import (
+    category_from_type,
+    priority_for_item,
 )
 from backend.app.services.inbox.headline import derive_headline
 from backend.app.services.inbox.profiles import (
@@ -283,10 +288,24 @@ def _build_inbox_item(
         headline_arg: str | None = explicit_headline
     else:
         headline_arg = None
+    auto_resolvable = False
+    stale_after = None
+    if effective_type == "stuck":
+        auto_resolvable = True
+        stale_after = timedelta(hours=1)
+    elif (
+        effective_type == "failure"
+        and payload.get("ticket_ref")
+        and payload.get("fsm_stage")
+    ):
+        auto_resolvable = True
+    category = category_from_type(effective_type)
     return InboxItem(
         workspace_id=workspace_id,
         repo_id=repo_id,
         type=effective_type,
+        category=category,
+        priority=priority_for_item(category=category, item_type=effective_type),
         source_table=source_table,
         source_id=source_id,
         play_key=play_key,
@@ -303,6 +322,8 @@ def _build_inbox_item(
         owner_user_id=resolved.user_id,
         intake_handle=resolved.intake_handle,
         intake_reason=resolved.intake_reason,
+        auto_resolvable=auto_resolvable,
+        stale_after=stale_after,
     )
 
 
@@ -386,6 +407,21 @@ async def emit_for_run(
         if gate_reason is not None:
             report.items_skipped.append(
                 {"finding_index": index, "reason": gate_reason}
+            )
+            continue
+
+        if effective_type == "exception":
+            from backend.app.core.sentry import record_inbox_exception_breadcrumb
+
+            record_inbox_exception_breadcrumb(
+                source="play_intake",
+                title=finding.title,
+                ticket_ref=str(finding.payload.get("ticket_ref") or "") or None,
+                play_key=play_key,
+                run_id=str(run_id) if run_id else None,
+            )
+            report.items_skipped.append(
+                {"finding_index": index, "reason": "exception:breadcrumb_only"}
             )
             continue
 

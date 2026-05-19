@@ -114,13 +114,34 @@ export function MailboxFooter({
     );
   }
   if (kind === "acknowledge") {
+    // Reports (daily digest, learning capture, retro) only had a
+    // single Acknowledge button — operators routinely wanted a
+    // "Snooze 24h" without opening the legacy datetime-local picker
+    // ("come back tomorrow"), or a "Dismiss" for digests that
+    // arrived during a freeze. Surface the three together so the
+    // mailbox preview matches what a Decision-UI letter offers.
     return (
-      <PrimaryForm
-        workspaceId={workspaceId}
-        itemId={detail.id}
-        action="resolve"
-        label="Acknowledge"
-      />
+      <div className="flex flex-wrap items-center gap-2">
+        <PrimaryForm
+          workspaceId={workspaceId}
+          itemId={detail.id}
+          action="resolve"
+          label="Acknowledge"
+        />
+        <SnoozeForm
+          workspaceId={workspaceId}
+          itemId={detail.id}
+          hours={24}
+          label="Snooze 24h"
+        />
+        <SecondaryForm
+          workspaceId={workspaceId}
+          itemId={detail.id}
+          action="dismiss"
+          label="Dismiss"
+          style="danger"
+        />
+      </div>
     );
   }
   if (kind === "reply") {
@@ -184,7 +205,7 @@ function PrimaryForm({
       <input type="hidden" name="return_to" value="/inbox" />
       <button
         type="submit"
-        className="inline-flex items-center gap-1.5 rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-4 py-1.5 text-sm font-bold text-ink shadow-glow transition hover:brightness-110"
+        className="inline-flex items-center gap-1.5 rounded-md bg-aqua/15 px-3 py-1.5 text-sm font-semibold text-aqua transition hover:bg-aqua/25"
       >
         {label}
       </button>
@@ -228,6 +249,51 @@ function SecondaryForm({
   );
 }
 
+function SnoozeForm({
+  workspaceId,
+  itemId,
+  hours,
+  label,
+}: {
+  workspaceId: string;
+  itemId: string;
+  hours: number;
+  label: string;
+}) {
+  // ``/api/inbox/[id]/snooze`` expects a ``snoozed_until`` field
+  // formatted as ``new Date(value)`` can parse. Compute the offset
+  // at submit time client-side so the operator's clock stays
+  // authoritative even if the wizard tab sat open for hours.
+  return (
+    <form
+      action={`/api/inbox/${encodeURIComponent(itemId)}/snooze`}
+      method="POST"
+      className="contents"
+      onSubmit={(e) => {
+        const input = e.currentTarget.elements.namedItem(
+          "snoozed_until",
+        ) as HTMLInputElement | null;
+        if (input) {
+          const t = new Date(Date.now() + hours * 60 * 60 * 1000);
+          // ``datetime-local`` format: YYYY-MM-DDTHH:MM in local TZ.
+          // The route's ``new Date(raw)`` interprets that exactly.
+          const pad = (n: number) => String(n).padStart(2, "0");
+          input.value = `${t.getFullYear()}-${pad(t.getMonth() + 1)}-${pad(t.getDate())}T${pad(t.getHours())}:${pad(t.getMinutes())}`;
+        }
+      }}
+    >
+      <input type="hidden" name="ws" value={workspaceId} />
+      <input type="hidden" name="snoozed_until" defaultValue="" />
+      <button
+        type="submit"
+        className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/[0.04] px-3 py-1.5 text-xs font-semibold text-white/85 transition hover:bg-white/[0.08]"
+      >
+        {label}
+      </button>
+    </form>
+  );
+}
+
 function ReplyForm({
   workspaceId,
   itemId,
@@ -254,7 +320,7 @@ function ReplyForm({
       <div className="flex items-center gap-2">
         <button
           type="submit"
-          className="inline-flex items-center gap-1.5 rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-4 py-1.5 text-sm font-bold text-ink shadow-glow transition hover:brightness-110"
+          className="inline-flex items-center gap-1.5 rounded-md bg-aqua/15 px-3 py-1.5 text-sm font-semibold text-aqua transition hover:bg-aqua/25"
         >
           Send
         </button>
@@ -306,18 +372,18 @@ function ReportActionItemRow({
 }: {
   workspaceId: string;
   itemId: string;
-  item: { id: string; prompt: string; primary: string; secondary: string };
+  item: { id: string; hint: string; label: string; secondary_label: string };
 }) {
   return (
     <div className="rounded border border-white/10 bg-white/[0.03] p-3">
-      <p className="text-sm text-white/85">{item.prompt}</p>
+      <p className="text-sm text-white/85">{item.hint}</p>
       <div className="mt-2 flex flex-wrap gap-2">
         <ActionItemChoiceForm
           workspaceId={workspaceId}
           itemId={itemId}
           actionItemId={item.id}
           choice="primary"
-          label={item.primary}
+          label={item.label}
           tone="ghost"
         />
         <ActionItemChoiceForm
@@ -325,7 +391,7 @@ function ReportActionItemRow({
           itemId={itemId}
           actionItemId={item.id}
           choice="secondary"
-          label={item.secondary}
+          label={item.secondary_label}
           tone="danger"
         />
       </div>
@@ -354,12 +420,11 @@ function ActionItemChoiceForm({
       : "inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/[0.04] px-3 py-1.5 text-xs font-semibold text-white/85 transition hover:bg-white/[0.08]";
   return (
     <form
-      action={`/api/inbox/${encodeURIComponent(itemId)}/disposition`}
+      action={`/api/inbox/${encodeURIComponent(itemId)}/decide`}
       method="POST"
       className="contents"
     >
       <input type="hidden" name="ws" value={workspaceId} />
-      <input type="hidden" name="action" value="resolve" />
       <input type="hidden" name="action_item_id" value={actionItemId} />
       <input type="hidden" name="choice" value={choice} />
       <input type="hidden" name="return_to" value="/inbox" />

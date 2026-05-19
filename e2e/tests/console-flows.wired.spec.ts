@@ -39,6 +39,40 @@ test.describe("console surfaces (wired, serial)", () => {
     await expect(
       page.getByRole("heading", { name: "Inbox", exact: true }),
     ).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId("inbox-lane-filters")).toBeVisible();
+  });
+
+  test("03b — inbox lane chip filters without navigation", async ({ page }) => {
+    await page.goto("/inbox");
+    await expect(page.getByTestId("inbox-lane-filters")).toBeVisible({
+      timeout: 30_000,
+    });
+    const rows = page.getByTestId("inbox-mailbox-rows").locator("li");
+    const total = await rows.count();
+    if (total === 0) {
+      test.info().annotations.push({
+        type: "skip",
+        description: "No actionable inbox rows in wired workspace.",
+      });
+      return;
+    }
+    const urlBefore = page.url();
+    await page.getByTestId("inbox-lane-now").click();
+    await expect(page).toHaveURL(urlBefore);
+    const visible = await rows.count();
+    for (let i = 0; i < visible; i++) {
+      await expect(rows.nth(i)).toHaveAttribute("data-lane", "now");
+    }
+    if (total > visible) {
+      expect(visible).toBeLessThan(total);
+    }
+  });
+
+  test("03c — reports surface", async ({ page }) => {
+    await page.goto("/reports");
+    await expect(
+      page.getByRole("heading", { name: "Reports", exact: true }),
+    ).toBeVisible({ timeout: 30_000 });
   });
 
   test("06 — navigator (agent chat)", async ({ page }) => {
@@ -139,10 +173,15 @@ test.describe("console surfaces (wired, serial)", () => {
     const nav = page.locator("aside nav");
     const checks: [string, RegExp][] = [
       ["Process", /\/process$/],
-      ["Inbox", /\/inbox$/],
+      ["Reports", /\/reports$/],
       ["Knowledge", /\/knowledge$/],
       ["Audit log", /\/audit$/],
     ];
+    await expect(
+      nav.getByRole("link", { name: /^Inbox · \d+$/ }),
+    ).toBeVisible();
+    await nav.getByRole("link", { name: /^Inbox · \d+$/ }).click();
+    await expect(page).toHaveURL(/\/inbox$/);
     for (const [label, pathRe] of checks) {
       await nav.getByRole("link", { name: label, exact: true }).click();
       await expect(page).toHaveURL(pathRe);

@@ -78,17 +78,17 @@ export async function DoneStep({
         Done
       </p>
       <h1
-        className="mt-2 font-display text-4xl font-bold leading-tight"
+        className="mt-2 font-display text-2xl font-bold leading-tight"
         data-testid="onboarding-done-title"
       >
-        What just happened
+        {repoCount === 0
+          ? "Ship is ready to set up."
+          : `Ship is live in ${repoCount} ${repoCount === 1 ? "repo" : "repos"}.`}
       </h1>
       <p className="mt-3 max-w-2xl text-sm leading-relaxed text-white/70">
         {repoCount === 0
-          ? "Bootstrap dispatched. Once at least one repo is wired, you'll see its result card here."
-          : `Bootstrap dispatched for ${repoCount} ${
-              repoCount === 1 ? "repo" : "repos"
-            }. Each card below shows what we wired and where to go next.`}
+          ? "Pick a repo and open the seed PR to wire Ship in."
+          : "Your first ticket can run end-to-end from here. Open the Inbox to see what's already waiting, or drop a brief into the planner to spin up a project."}
       </p>
 
       {loadError && (
@@ -111,15 +111,12 @@ export async function DoneStep({
 
       <WhatsNextGrid workspaceId={wsId} />
 
-      <footer className="mt-10 flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-5">
-        <span className="text-[11px] text-white/45">
-          All done — close this tab or jump back into the dashboard.
-        </span>
+      <footer className="mt-10 flex flex-wrap items-center justify-between gap-3 border-t border-white/[0.08] pt-5">
         <Link
           href={dashboardHref}
-          className="rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-4 py-2 text-xs font-bold text-ink shadow-glow transition hover:brightness-110"
+          className="rounded-md bg-aqua/15 px-3 py-1.5 text-sm font-semibold text-aqua transition hover:bg-aqua/25"
         >
-          Go to dashboard →
+          Open dashboard →
         </Link>
       </footer>
     </section>
@@ -131,7 +128,7 @@ function NoReposEmptyState({ wsId }: { wsId: string | null }) {
     ? `/onboarding?step=repos&ws=${encodeURIComponent(wsId)}`
     : "/onboarding?step=repos";
   return (
-    <div className="mt-7 rounded-2xl border border-white/10 bg-white/[0.04] p-5 text-xs text-white/70 backdrop-blur-xl shadow-card">
+    <div className="mt-7 rounded-2xl border border-white/[0.08] bg-white/[0.04] p-5 text-xs text-white/70 backdrop-blur-xl shadow-card">
       <p>
         No activated repos to show. Activate at least one and run the
         seed PR — the wizard will land you back here once it&apos;s

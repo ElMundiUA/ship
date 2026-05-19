@@ -5,11 +5,8 @@ Covers the side-effect dispatcher
 HTTP wiring through ``POST /v1/workspaces/{ws}/inbox/{id}/disposition``
 so a regression in either layer trips a test.
 
-The :class:`RunEscalation` table does not yet carry resolution
-columns (see the side_effects module docstring + the RFC-0010
-schema-gap note); the close path is exercised as a marker-only
-operation here. When the follow-up migration lands the assertions
-on ``esc.resolved_at`` etc. should be flipped on.
+Exercises :class:`RunEscalation` resolution column writes when
+dispositions close matching escalations (migration 0074).
 """
 
 from __future__ import annotations
@@ -257,8 +254,12 @@ async def test_approve_closes_matching_run_escalation(
     assert esc.id in report.escalations_closed
     assert report.failures == []
 
-    # Audit + event rows recorded so ops can reconcile (and so the
-    # close survives the schema-pending gap on RunEscalation).
+    await db_session.flush()
+    await db_session.refresh(esc)
+    assert esc.resolved_at is not None
+    assert esc.resolution == "approved"
+    assert esc.resolved_by_user_id == user.id
+
     audits = await _audits_with_action(
         db_session, "inbox.side_effect.escalation_close"
     )
@@ -321,16 +322,7 @@ async def test_approve_closes_multiple_escalations_for_same_run(
 async def test_approve_does_not_touch_already_resolved_escalation(
     db_session, seed_workspace
 ):
-    """Skip rows pre-marked as closed.
-
-    ``RunEscalation`` does not yet carry a ``resolved_at`` column;
-    until the migration lands the helper treats every match as
-    closeable. We assert the matching set still includes both rows
-    (the marker-only close is idempotent) so the test documents the
-    intended future behaviour without breaking on the current schema.
-    Once ``resolved_at`` exists the assertion should flip to require
-    the resolved row to be EXCLUDED.
-    """
+    """Skip rows that already have ``resolved_at`` set."""
     user, _, ws = seed_workspace
     run = await _make_run(db_session, ws)
     item = await _make_item(
@@ -355,11 +347,10 @@ async def test_approve_does_not_touch_already_resolved_escalation(
     esc_resolved = await _make_escalation(
         db_session, run_id=run.id, inbox_item_id=item_b.id
     )
-    if hasattr(esc_resolved, "resolved_at"):
-        esc_resolved.resolved_at = datetime.now(timezone.utc)
-        esc_resolved.resolution = "approved"
-        esc_resolved.resolved_by_user_id = user.id
-        await db_session.flush()
+    esc_resolved.resolved_at = datetime.now(timezone.utc)
+    esc_resolved.resolution = "approved"
+    esc_resolved.resolved_by_user_id = user.id
+    await db_session.flush()
 
     report = await apply_side_effects(
         db_session,
@@ -370,13 +361,7 @@ async def test_approve_does_not_touch_already_resolved_escalation(
     )
 
     assert esc_unresolved.id in report.escalations_closed
-    if hasattr(esc_resolved, "resolved_at"):
-        assert esc_resolved.id not in report.escalations_closed
-    else:
-        # Schema-pending: matching identifies both rows; the close
-        # is marker-only so neither is mutated. Keep the test as a
-        # regression marker for the future migration.
-        assert esc_resolved.id in report.escalations_closed
+    assert esc_resolved.id not in report.escalations_closed
 
 
 # ---------------------------------------------------------------------------

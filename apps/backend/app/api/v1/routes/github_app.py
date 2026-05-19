@@ -699,6 +699,92 @@ async def _apply_pull_request_event(
 _TICKET_REF_PR_TITLE_RE = re.compile(r"\b([A-Z][A-Z0-9]{2,9}-\d+)\b")
 
 
+async def _find_other_open_prs_by_ticket(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    ticket_refs: list[str],
+    exclude_pr_html_url: str,
+) -> dict[str, list[str]]:
+    """For each ticket_ref, return the html_urls of any OTHER open PR
+    in the workspace's activated repos whose title references it.
+
+    Used by the close-unmerged hook (task #177): when a PR closes
+    without merge, only cancel the Linear ticket if it has no other
+    open PRs — otherwise the chain may still finish via a sibling.
+
+    Best-effort: token mint / API hiccup just returns empty. The
+    caller treats empty as "no siblings found", which falls back to
+    the original cancel behavior.
+    """
+    from sqlalchemy import select as _select
+    from backend.app.core.config import get_settings as _gs
+    from backend.app.db.models.integrations import (
+        GitHubInstallation as _GI,
+        WorkspaceRepo as _WR,
+    )
+    from backend.app.integrations.github.app_auth import (
+        fetch_installation_token as _ftok,
+    )
+
+    if not ticket_refs:
+        return {}
+    repos = (
+        await session.execute(
+            _select(_WR).where(_WR.workspace_id == workspace_id)
+        )
+    ).scalars().all()
+    if not repos:
+        return {}
+    settings = _gs()
+    out: dict[str, list[str]] = {ref: [] for ref in ticket_refs}
+    ticket_set = set(ticket_refs)
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        for repo in repos:
+            install = (
+                await session.execute(
+                    _select(_GI).where(_GI.id == repo.installation_id)
+                )
+            ).scalar_one_or_none()
+            if install is None:
+                continue
+            try:
+                token = await _ftok(
+                    install.installation_id,
+                    settings=settings,
+                    client=client,
+                )
+                # Paginate is overkill; the call site already filters
+                # to one workspace's repos and concurrent open agent
+                # PRs on a single repo rarely exceed a page.
+                r = await client.get(
+                    f"https://api.github.com/repos/{repo.full_name}/pulls",
+                    params={"state": "open", "per_page": 100},
+                    headers={
+                        "Authorization": f"token {token}",
+                        "Accept": "application/vnd.github+json",
+                    },
+                )
+                if r.status_code != 200:
+                    continue
+                for pr in r.json() or []:
+                    pr_url = pr.get("html_url") or ""
+                    if not pr_url or pr_url == exclude_pr_html_url:
+                        continue
+                    title = pr.get("title") or ""
+                    refs_in_title = _TICKET_REF_PR_TITLE_RE.findall(title)
+                    for ref in refs_in_title:
+                        if ref in ticket_set:
+                            out[ref].append(pr_url)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(
+                    "open-PR probe failed repo=%s err=%s",
+                    repo.full_name, exc,
+                )
+                continue
+    return out
+
+
 async def _transition_linked_tickets_on_merge(
     session: AsyncSession,
     *,
@@ -775,7 +861,52 @@ async def _transition_linked_tickets_on_merge(
         else "pr_closed_unmerged.tracker_canceled"
     )
 
+    # task #177 — don't cancel a ticket whose other PRs are still open.
+    # When close_kind='close_unmerged', check the workspace's activated
+    # repos for any OTHER open PR carrying the same ticket_ref in its
+    # title. If found, skip both the transition and the audit row;
+    # this PR's close is just one of many attempts, the chain may
+    # still finish via a sibling.
+    other_open_by_ticket: dict[str, list[str]] = {}
+    if close_kind == "close_unmerged" and ordered_refs:
+        try:
+            other_open_by_ticket = await _find_other_open_prs_by_ticket(
+                session,
+                workspace_id=workspace_id,
+                ticket_refs=ordered_refs,
+                exclude_pr_html_url=pr_html_url,
+            )
+        except Exception as exc:  # noqa: BLE001 — best-effort
+            logger.warning(
+                "pr_close_unmerged sibling-PR check failed ws=%s: %s",
+                workspace_id, exc,
+            )
+
     for ticket_ref in ordered_refs:
+        siblings = other_open_by_ticket.get(ticket_ref) or []
+        if close_kind == "close_unmerged" and siblings:
+            logger.info(
+                "pr_close_unmerged: skipping transition for ticket=%s — "
+                "%d other open PR(s) still carry the ref: %s",
+                ticket_ref, len(siblings), siblings[:5],
+            )
+            session.add(
+                AuditLog(
+                    workspace_id=workspace_id,
+                    actor_user_id=None,
+                    actor_token_id=None,
+                    action="pr_closed_unmerged.skip_cancel",
+                    target_kind="ticket",
+                    target_id=ticket_ref,
+                    payload={
+                        "tracker_kind": resolved.kind,
+                        "pr_number": pr_number,
+                        "pr_html_url": pr_html_url,
+                        "open_sibling_pr_urls": siblings,
+                    },
+                )
+            )
+            continue
         try:
             ref_obj = _ticket_ref_from(resolved.kind, ticket_ref)
             await resolved.gateway.comment(ref_obj, body=comment_body)

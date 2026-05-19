@@ -637,6 +637,47 @@ def register_all() -> None:
         job_id="fsm_self_heal_scan",
     )
 
+    register_cron(
+        fn=_inbox_stale_sweep_tick,
+        cron_expr="*/15 * * * *",
+        job_id="inbox_stale_sweep",
+    )
+
+    # Agent-dispatch lock sweeper (ELS-149). Releases project:* locks
+    # whose owning chain is dead — covers crashed agents that never
+    # reach /finish (Cursor Free runtime errors, OOM, GH workflow
+    # never invoked). Picker-null path is handled directly in
+    # _next_task (ELS-148); this cron covers the cases the picker
+    # never sees. Runs every 5 minutes; 60-min stale floor + 30-min
+    # activity window keep false positives off legitimate chains.
+    register_cron(
+        fn=_agent_dispatch_lock_sweep_tick,
+        cron_expr="*/5 * * * *",
+        job_id="agent_dispatch_lock_sweep",
+    )
+
+    # Inbox action_items backfill (ELS-165). Parses legacy
+    # clarification rows' markdown options into structured
+    # payload.action_items so the Decision UI shows pills. Cheap
+    # noop on rows that already carry action_items.
+    register_cron(
+        fn=_inbox_action_items_backfill_tick,
+        cron_expr="*/30 * * * *",
+        job_id="inbox_action_items_backfill",
+    )
+
+
+@cron_with_lock(lock=CronLockId.INBOX_STALE_SWEEP, name="inbox_stale_sweep")
+async def _inbox_stale_sweep_tick() -> None:
+    """Dismiss time-boxed inbox rows past ``stale_after``."""
+    from backend.app.db.session import get_sessionmaker
+    from backend.app.services.inbox.sweep import sweep_stale_inbox_items
+
+    sessionmaker = get_sessionmaker()
+    async with sessionmaker() as session:
+        await sweep_stale_inbox_items(session)
+        await session.commit()
+
 
 @cron_with_lock(lock=CronLockId.FSM_SCAN_BACKSTOP, name="fsm_self_heal_scan")
 async def _fsm_self_heal_scan_tick() -> None:
@@ -646,6 +687,35 @@ async def _fsm_self_heal_scan_tick() -> None:
     from backend.app.services.fsm_self_heal import scan_eligible_tickets
 
     await scan_eligible_tickets()
+
+
+@cron_with_lock(
+    lock=CronLockId.AGENT_DISPATCH_LOCK_SWEEP,
+    name="agent_dispatch_lock_sweep",
+)
+async def _agent_dispatch_lock_sweep_tick() -> None:
+    """Periodic cleanup for dangling ``project:*`` dispatch locks.
+    See :mod:`dispatch_lock_sweep` for the algorithm + thresholds."""
+    from backend.app.services.dispatch_lock_sweep import (
+        sweep_dangling_project_locks_tick,
+    )
+
+    await sweep_dangling_project_locks_tick()
+
+
+@cron_with_lock(
+    lock=CronLockId.INBOX_ACTION_ITEMS_BACKFILL,
+    name="inbox_action_items_backfill",
+)
+async def _inbox_action_items_backfill_tick() -> None:
+    """Backfill ``payload.action_items`` on legacy clarification rows
+    that pre-date the structured Decision UI contract (ELS-162).
+    See :mod:`backfill_action_items` for the parser."""
+    from backend.app.services.inbox.backfill_action_items import (
+        backfill_inbox_action_items_tick,
+    )
+
+    await backfill_inbox_action_items_tick()
 
 
 __all__ = ["register_all"]

@@ -28,8 +28,8 @@ E14 architecture (locked 2026-04-30):
   - ``needs_clarification`` → tag with ``needs:clarification`` so
                              intake stops re-picking until the
                              human answers; optional comment.
-  - ``blocked``             → drop a blocker into the workspace
-                             inbox; ticket unchanged.
+  - ``blocked``             → audit only (no inbox row); ticket
+                             unchanged.
   - ``out_of_scope``        → close the ticket with optional
                              comment.
 
@@ -54,6 +54,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from sqlalchemy import select as sa_select
 
@@ -64,9 +65,16 @@ from backend.app.api.v1.routes.workspaces import (
 )
 from backend.app.core.config import Settings, get_settings
 from backend.app.db.models.dashboard_priorities import WorkspaceProjectPriority
+from backend.app.core.sentry import record_inbox_exception_breadcrumb
 from backend.app.db.models.inbox import InboxItem
 from backend.app.db.models.pipelines import PullRequest
-from backend.app.db.models.tenancy import AuditLog
+from backend.app.db.models.tenancy import AuditLog, Workspace
+from backend.app.services.inbox.sweep import sweep_auto_resolvable
+from backend.app.services.dispatcher import (
+    ENV_SEPARATION_ACK_KEY,
+    ENV_SEPARATION_PENDING_KEY,
+    env_separation_handle,
+)
 from backend.app.db.session import get_session
 from backend.app.integrations.gateway.tracker import TicketRef
 from backend.app.services.inbox.headline import derive_headline
@@ -929,6 +937,37 @@ async def get_next_task(
         )
 
     if pick is None:
+        # ELS-148 / A1: every picker filter that returns null here
+        # leaves the `maybe_dispatch`-acquired project_lock dangling.
+        # The agent CLI exits via EXIT_NO_TASK without calling
+        # /finish, so the lock survives until its 24h TTL — blocking
+        # every sibling ticket in the project. Release here based on
+        # which filter caught the pinned ticket. Best-effort: noop
+        # when the route was called without a pinned `ticket_ref`
+        # (legacy non-pinned cron path; no fresh project_lock to
+        # release in that path either).
+        if ticket_ref:
+            skipped_kind = None
+            if any(str(r.get("id") or "") == ticket_ref for r in skipped_orphans):
+                skipped_kind = "orphan_skipped"
+            elif any(
+                str(r.get("id") or "") == ticket_ref
+                for r, _ in skipped_overlay
+            ):
+                skipped_kind = "overlay_frozen"
+            elif any(
+                str(r.get("id") or "") == ticket_ref
+                for r, _ in skipped_priority
+            ):
+                skipped_kind = "priority_skipped"
+            if skipped_kind is not None:
+                await _release_project_lock_for_ticket(
+                    session,
+                    workspace_id=workspace_id,
+                    resolved=resolved,
+                    ticket_ref=ticket_ref,
+                    reason=f"picker_{skipped_kind}",
+                )
         return TaskResponseOut(
             ticket=None, fsm_stage=state, tracker_kind=resolved.kind
         )
@@ -1018,13 +1057,66 @@ async def get_next_task(
                             "ticket_ref": ticket_ref,
                             "fire_count": fire_count,
                             "url": str(pick.get("url") or "") or None,
+                            # ELS-163 — recovery options as one-click
+                            # pills in the Inbox Decision UI. The
+                            # /decide endpoint posts each label as a
+                            # comment on the source ticket; the
+                            # operator is signalling intent — Ship
+                            # doesn't auto-execute these yet (P2-2
+                            # follow-up will wire side-effects). For
+                            # now the comment is the contract.
+                            "action_items": [
+                                {
+                                    "id": "retry-stage",
+                                    "kind": "choice",
+                                    "label": "Retry this stage",
+                                    "hint": (
+                                        "Clear refire cap and re-dispatch "
+                                        f"{state}. Use only if you fixed "
+                                        "whatever was making it bounce."
+                                    ),
+                                },
+                                {
+                                    "id": "send-back-to-dev",
+                                    "kind": "choice",
+                                    "label": "Send back to dev_implementation",
+                                    "hint": (
+                                        "Dev rewrites against fresh main. "
+                                        "Use if the bounces are about "
+                                        "broken code, not broken pipeline."
+                                    ),
+                                },
+                                {
+                                    "id": "pause-routine",
+                                    "kind": "choice",
+                                    "label": "Pause routine — I'll handle manually",
+                                    "hint": (
+                                        "Mark ack'd; ticket stays where it "
+                                        "is. You move it past this stage "
+                                        "by hand."
+                                    ),
+                                },
+                            ],
+                            "resolution_mode": "single_choice",
                         },
                         status="new",
+                        category="failure",
+                        priority=10,
                         intake_handle=None,
                         intake_reason="refire_capped",
                     )
                 )
                 await session.flush()
+            # ELS-148 / A1: same leak as the picker null paths above —
+            # refire-cap returns null without /finish, so the dispatcher's
+            # project_lock dangles. Release it before exiting.
+            await _release_project_lock_for_ticket(
+                session,
+                workspace_id=workspace_id,
+                resolved=resolved,
+                ticket_ref=ticket_ref,
+                reason="picker_refire_capped",
+            )
             return TaskResponseOut(
                 ticket=None, fsm_stage=state, tracker_kind=resolved.kind
             )
@@ -1208,22 +1300,35 @@ async def _recent_finish_count_for_stage(
     human". A mix with a success in the middle means the ticket
     progressed and we're on a fresh iteration.
 
+    **Cross-stage reset (ELS-FSM 2026-05-19):** the pre-fix query
+    filtered the audit pull by ``fsm_stage`` for ALL rows, so a
+    ``validation`` finish with ``outcome=ready_next_step`` (which
+    cascaded into ``code_review``) was invisible to the code_review
+    cap counter — the cap stayed armed across the cross-stage
+    success. Caught on Ship-on-Ship/ELS-7 2026-05-18: an
+    auto_merge bounce chain hit cap=3 even though intervening
+    validation+code_review finishes had `ready_next_step`. Fix:
+    same-stage filter for blocked rows (cap is per-stage), but
+    accept ANY-stage ``ready_next_step`` for the same ticket as a
+    reset signal.
+
     Counts rows with both ``target_id == ticket_ref`` (canonical) and
     ``payload.ticket_ref == ticket_ref`` (legacy) — keeps the cap
     honest across a deploy boundary.
     """
     cutoff = datetime.now(timezone.utc) - window
-    # Pull both ``agent_run.finish`` rows AND
-    # ``agent_run.clarification_resolved`` markers for this (ws,
-    # stage, ticket) within the window, newest first. Walk until we
-    # hit either an ``outcome=ready_next_step`` finish OR a
-    # clarification-resolved marker — both reset the counter. Only
-    # the consecutive blocked / needs_clarification finishes BEFORE
-    # that reset count.
+    # Pull ANY-stage finish + clarification-resolved markers for this
+    # (workspace, ticket) within the window, newest first. The walk
+    # below decides per-row:
+    #   - ``clarification_resolved`` → reset (operator answered)
+    #   - any-stage ``ready_next_step`` → reset (chain advanced)
+    #   - same-stage non-success → increment counter
+    #   - cross-stage non-success → skip (different cap bucket)
     stmt = (
         select(
             AuditLog.action,
             AuditLog.payload["outcome"].astext,
+            AuditLog.payload["fsm_stage"].astext,
             AuditLog.id,
         )
         .where(
@@ -1236,21 +1341,24 @@ async def _recent_finish_count_for_stage(
                 (AuditLog.target_id == ticket_ref)
                 | (AuditLog.payload["ticket_ref"].astext == ticket_ref)
             ),
-            AuditLog.payload["fsm_stage"].astext == fsm_stage,
         )
         .order_by(AuditLog.created_at.desc())
     )
     rows = (await session.execute(stmt)).all()
     consecutive_blocked = 0
-    for action, outcome, _ in rows:
-        # Either a successful finish or an operator-answered
-        # clarification resets the counter — both mean "the chain
-        # made forward progress; the stretch of blocked attempts
-        # before this point is no longer the current loop".
+    for action, outcome, row_stage, _ in rows:
+        # Either a successful finish (any stage — the chain moved
+        # forward) or an operator-answered clarification resets the
+        # counter. The pre-fix per-stage filter missed cross-stage
+        # successes and over-counted the cap.
         if action == "agent_run.clarification_resolved":
             break
         if outcome == "ready_next_step":
             break
+        if row_stage != fsm_stage:
+            # Non-success finish on a different stage doesn't add to
+            # this stage's cap; skip it without resetting either.
+            continue
         consecutive_blocked += 1
     return consecutive_blocked
 
@@ -1964,6 +2072,30 @@ async def post_inbox_item(
         prerequisite as an inbox item the operator can act on.
     """
     await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+    if payload.type == "exception":
+        record_inbox_exception_breadcrumb(
+            source="agent_run.inbox_item",
+            title=payload.title,
+            ticket_ref=payload.ticket_ref,
+        )
+        session.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                actor_user_id=auth.user.id,
+                actor_token_id=auth.token.id if auth.token else None,
+                action="agent_run.inbox_item",
+                target_kind="inbox_item",
+                target_id=None,
+                payload={
+                    "type": payload.type,
+                    "title": payload.title[:300],
+                    "ticket_ref": payload.ticket_ref,
+                    "breadcrumb_only": True,
+                },
+            )
+        )
+        await session.flush()
+        return WriteOut(ok=True, note="exception recorded (no inbox row)")
     # Build the row's payload bag. ``body`` (markdown for the preview
     # pane) lives here so the InboxItem schema can keep ``summary``
     # capped at 2KB for the list view. When the agent didn't pass an
@@ -2015,6 +2147,72 @@ async def post_inbox_item(
     )
     await session.flush()
     return WriteOut(ok=True, note=f"inbox item created (type={payload.type})")
+
+
+class EnvSeparationWarningOut(BaseModel):
+    handle: str
+    project_id: str
+    project_name: str
+
+
+class EnvSeparationAckIn(BaseModel):
+    handle: str = Field(min_length=8, max_length=64)
+
+
+@router.get(
+    "/agent-runs/env-separation-warnings",
+    response_model=list[EnvSeparationWarningOut],
+)
+async def list_env_separation_warnings(
+    workspace_id: uuid.UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> list[EnvSeparationWarningOut]:
+    """Pending first-run env-separation modals for this workspace."""
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+    workspace = await session.get(Workspace, workspace_id)
+    if workspace is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="workspace_not_found")
+    pending = list((workspace.settings or {}).get(ENV_SEPARATION_PENDING_KEY) or [])
+    return [
+        EnvSeparationWarningOut(
+            handle=str(entry.get("handle") or ""),
+            project_id=str(entry.get("project_id") or ""),
+            project_name=str(entry.get("project_name") or ""),
+        )
+        for entry in pending
+        if entry.get("handle")
+    ]
+
+
+@router.post("/agent-runs/env-separation-warnings/ack", response_model=WriteOut)
+async def ack_env_separation_warning(
+    workspace_id: uuid.UUID,
+    payload: EnvSeparationAckIn,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> WriteOut:
+    """Mark a project env-separation warning as acknowledged."""
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+    workspace = await session.get(Workspace, workspace_id)
+    if workspace is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="workspace_not_found")
+
+    settings = dict(workspace.settings or {})
+    pending = [
+        e
+        for e in (settings.get(ENV_SEPARATION_PENDING_KEY) or [])
+        if e.get("handle") != payload.handle
+    ]
+    acknowledged = list(settings.get(ENV_SEPARATION_ACK_KEY) or [])
+    if payload.handle not in acknowledged:
+        acknowledged.append(payload.handle)
+    settings[ENV_SEPARATION_PENDING_KEY] = pending
+    settings[ENV_SEPARATION_ACK_KEY] = acknowledged
+    workspace.settings = settings
+    flag_modified(workspace, "settings")
+    await session.flush()
+    return WriteOut(ok=True, note="env separation warning acknowledged")
 
 
 # ---------------------------------------------------------------------------
@@ -3177,6 +3375,27 @@ async def _flip_drafts_row_to_parked(
     return True
 
 
+async def _sweep_inbox_on_ticket_advance(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    ticket_ref: str | None,
+    fsm_stage: str | None,
+    actions: list[str],
+) -> None:
+    """Auto-close recoverable inbox rows after a successful tracker move."""
+    if not ticket_ref or not fsm_stage:
+        return
+    swept = await sweep_auto_resolvable(
+        session,
+        workspace_id=workspace_id,
+        ticket_ref=ticket_ref,
+        fsm_stage=fsm_stage,
+    )
+    if swept:
+        actions.append(f"inbox:sweep_auto_resolved:{swept}")
+
+
 @router.post("/agent-runs/finish", response_model=FinishOut)
 async def finish_agent_run(
     workspace_id: uuid.UUID,
@@ -3540,6 +3759,13 @@ async def finish_agent_run(
                     from_state=payload.fsm_stage,
                 )
                 actions.append(f"tracker:transition:{payload.stage_next}")
+                await _sweep_inbox_on_ticket_advance(
+                    session,
+                    workspace_id=workspace_id,
+                    ticket_ref=payload.ticket_ref,
+                    fsm_stage=payload.fsm_stage,
+                    actions=actions,
+                )
 
             # Auto-merger hook (post-E16 WAU). When the auto-merger
             # bundle finishes with ``payload.auto_merge_action="merge"``,
@@ -3588,6 +3814,13 @@ async def finish_agent_run(
                             )
                             actions.append(
                                 f"tracker:transition:{payload.stage_next}"
+                            )
+                            await _sweep_inbox_on_ticket_advance(
+                                session,
+                                workspace_id=workspace_id,
+                                ticket_ref=payload.ticket_ref,
+                                fsm_stage=payload.fsm_stage,
+                                actions=actions,
                             )
                         except Exception as exc:  # noqa: BLE001
                             logger.warning(
@@ -3688,54 +3921,109 @@ async def finish_agent_run(
             )
         )
         actions.append("inbox:clarification")
-        await _release_project_lock_for_ticket(
-            session,
-            workspace_id=workspace_id,
-            resolved=resolved,
-            ticket_ref=payload.ticket_ref,
-            reason="needs_clarification",
-        )
+        # ELS-142: project_lock release for needs_clarification /
+        # blocked / out_of_scope happens below via
+        # ``maybe_release_project_lock_on_finish`` so every finish path
+        # writes a single ``dispatch.project_lock_released`` audit row
+        # with ``via=agent_run.finish``. Pre-fix the early call here
+        # released the lock first with ``via=<outcome>``, and the
+        # cascade matrix path then no-op'd — AC1 of ELS-142 (single
+        # ``via=agent_run.finish`` audit per release) couldn't fire.
 
     elif payload.outcome == "blocked":
-        # No ticket move — operator sees the blocker via inbox. Snapshot
-        # the source ticket if there was one (blockers tied to a
-        # specific ticket get the same context as clarifications).
-        ticket_snapshot = None
-        if payload.ticket_ref and resolved is not None:
+        # Two sub-cases:
+        #
+        # (A) ``stage_next`` is set — the agent picked a cascade target
+        #     (e.g. reviewer bouncing to dev_implementation). The cascade
+        #     matrix handles the re-dispatch downstream. No inbox row,
+        #     no label change; the picker reads the new ``stage:*`` label
+        #     once :func:`tracker.transition` runs further below.
+        #
+        # (B) ``stage_next`` is null — the agent finished blocked with
+        #     no cascade target. Pre-2026-05-19 this meant the picker
+        #     re-fired the same stage every tick until the 24h refire
+        #     cap kicked in (3 in 24h), producing a 24h ticket idle.
+        #     Measured on Ship-on-Ship 2026-05-12..19: 77% of
+        #     ``code_review`` blocks were null-next, the dominant FSM
+        #     bottleneck. Treat as effectively ``needs_clarification``:
+        #     stamp ``needs:clarification`` on the ticket so the picker
+        #     skips, file a blocker inbox row immediately so the
+        #     operator can act in <1 minute instead of waiting 24h.
+        if not payload.stage_next and resolved is not None and payload.ticket_ref:
             ref = _ticket_ref_from(resolved.kind, payload.ticket_ref)
-            ticket_snapshot = await _try_ticket_snapshot(resolved.gateway, ref)
-        blocked_title = f"agent blocked: {payload.fsm_stage or 'run'}"[:300]
-        blocked_summary = (payload.summary or payload.comment or "")[:2000] or None
-        session.add(
-            InboxItem(
-                workspace_id=workspace_id,
-                repo_id=None,
-                type="blocker",
-                title=blocked_title,
-                headline=derive_headline(
-                    summary=blocked_summary, title=blocked_title
-                ),
-                summary=blocked_summary,
-                payload={
-                    "run_id": payload.run_id,
-                    "fsm_stage": payload.fsm_stage,
-                    "ticket_ref": payload.ticket_ref,
-                    **({"source_ticket": ticket_snapshot} if ticket_snapshot else {}),
-                    **payload.payload,
-                },
-                status="new",
-                intake_handle=None,
-                intake_reason="agent_run_blocked",
+            add_signal = getattr(resolved.gateway, "add_signal_label", None)
+            if add_signal is not None:
+                try:
+                    await add_signal(ref, key="needs_clarification")
+                    actions.append("tracker:label:needs_clarification")
+                except Exception as exc:  # noqa: BLE001 — best-effort
+                    logger.info(
+                        "blocked+no_next label add failed ws=%s ticket=%s: %s",
+                        workspace_id, payload.ticket_ref, exc,
+                    )
+            blocked_title = (
+                f"{payload.ticket_ref}: {payload.fsm_stage or 'agent'} "
+                f"blocked without cascade target"
+            )[:300]
+            blocked_summary = (
+                f"Agent finished outcome=blocked with stage_next=null "
+                f"at fsm_stage={payload.fsm_stage}. Picker can't route "
+                f"the fix anywhere; ticket sits idle until you act."
+            )[:2000]
+            session.add(
+                InboxItem(
+                    workspace_id=workspace_id,
+                    repo_id=None,
+                    type="blocker",
+                    title=blocked_title,
+                    headline=derive_headline(
+                        summary=blocked_summary, title=blocked_title
+                    ),
+                    summary=blocked_summary,
+                    payload={
+                        "ticket_ref": payload.ticket_ref,
+                        "fsm_stage": payload.fsm_stage,
+                        "run_id": payload.run_id,
+                        "resolution_mode": "single_choice",
+                        "action_items": [
+                            {
+                                "id": "send_to_dev",
+                                "kind": "choice",
+                                "label": "Send to dev_implementation",
+                                "hint": (
+                                    "Agent should re-run dev to fix the "
+                                    "blockers listed in its comment."
+                                ),
+                            },
+                            {
+                                "id": "send_to_validation",
+                                "kind": "choice",
+                                "label": "Send to validation",
+                                "hint": (
+                                    "QA missed something; re-validate against "
+                                    "this commit."
+                                ),
+                            },
+                            {
+                                "id": "mark_handled",
+                                "kind": "choice",
+                                "label": "Already handled",
+                                "hint": (
+                                    "Operator fixed it manually or the PR "
+                                    "is no longer relevant."
+                                ),
+                            },
+                        ],
+                    },
+                    status="new",
+                    intake_handle=None,
+                    intake_reason="blocked_without_cascade",
+                )
             )
-        )
-        actions.append("inbox:blocker")
-        await _release_project_lock_for_ticket(
-            session,
-            workspace_id=workspace_id,
-            resolved=resolved,
-            ticket_ref=payload.ticket_ref,
-            reason="blocked",
-        )
+            actions.append("inbox:blocker:blocked_no_next")
+        # else: stage_next is set — cascade matrix handles re-dispatch;
+        # nothing to do here. (Lock release happens via
+        # ``maybe_release_project_lock_on_finish`` below.)
 
     elif payload.outcome == "out_of_scope":
         if not payload.ticket_ref:
@@ -3751,13 +4039,15 @@ async def finish_agent_run(
         # it resolves the state by literal name, not via FSM map.
         await resolved.gateway.transition(ref, to_state="Done")
         actions.append("tracker:transition:Done")
-        await _release_project_lock_for_ticket(
+        await _sweep_inbox_on_ticket_advance(
             session,
             workspace_id=workspace_id,
-            resolved=resolved,
             ticket_ref=payload.ticket_ref,
-            reason="out_of_scope",
+            fsm_stage=payload.fsm_stage,
+            actions=actions,
         )
+        # ELS-142: lock release deferred to
+        # ``maybe_release_project_lock_on_finish`` below.
 
     session.add(
         AuditLog(
@@ -3809,9 +4099,28 @@ async def finish_agent_run(
         import asyncio as _asyncio
         from backend.app.services.dispatcher import (
             maybe_dispatch,
+            maybe_release_project_lock_on_finish,
             release_lock,
         )
 
+        finish_snapshot = None
+        if resolved is not None:
+            ref = _ticket_ref_from(resolved.kind, payload.ticket_ref)
+            finish_snapshot = await _try_ticket_snapshot(resolved.gateway, ref)
+        await maybe_release_project_lock_on_finish(
+            session,
+            workspace_id=workspace_id,
+            ticket_ref=payload.ticket_ref,
+            outcome=payload.outcome,
+            stage_next=payload.stage_next,
+            labels=list((finish_snapshot or {}).get("labels") or []),
+            project_id=(
+                str((finish_snapshot or {})["project_id"])
+                if (finish_snapshot or {}).get("project_id")
+                else None
+            ),
+            settings=settings,
+        )
         await release_lock(
             session,
             workspace_id=workspace_id,

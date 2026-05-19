@@ -130,7 +130,19 @@ def _extract_fsm_stage(labels: list[str], state: str | None = None) -> str | Non
     Caught on askslayer/PAC-32..36 2026-05-17: 5 fresh tickets in
     Todo sat with ``dispatch.no_routine`` audit rows for 2+ hours
     because the poller refused to invent a stage for them.
+
+    Terminal-state short-circuit (2026-05-18): a finished chain
+    leaves accumulated ``stage:*`` breadcrumbs on the ticket. When
+    the auto-merger transitions to Done, the next poll tick sees
+    a state change → fires ``tracker.event.received`` → maps to
+    fsm_stage via this function. Returning the **first** stage
+    label (``planning``) re-dispatched the whole chain — ELS-143
+    spun three full SDLC cycles before we caught it. Done /
+    Canceled / Duplicate mean "no more work expected"; return None
+    so the dispatcher noops.
     """
+    if state in ("Done", "Canceled", "Duplicate"):
+        return None
     for label in labels:
         if isinstance(label, str) and label.startswith(_STAGE_LABEL_PREFIX):
             return label[len(_STAGE_LABEL_PREFIX):].strip() or None

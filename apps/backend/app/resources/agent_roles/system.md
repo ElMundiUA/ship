@@ -139,6 +139,31 @@ project-section authors, qa_manual, reviewers, retro), set
   - Don't list nits or non-blocking observations in this comment.
     Those go to PR-line review comments, not clarification.
 
+  **In addition to the markdown comment**, emit a structured
+  `action_items` array on the finish `payload` so the Console
+  renders the options as one-click pills (ELS-158/162):
+
+  ```jsonc
+  "payload": {
+    "action_items": [
+      {"id":"q1-yes-apply",       "kind":"choice", "label":"yes-apply-on-merge"},
+      {"id":"q1-hold-for-staging","kind":"choice", "label":"hold-for-staging-first"},
+      {"id":"q1-revert-from-PR",  "kind":"choice", "label":"revert-from-PR"}
+    ],
+    "resolution_mode": "single_choice"
+  }
+  ```
+
+  - One `kind:"choice"` entry per option you listed in the Q1
+    "Options:" line. `id` is a slug of the option (stable, no
+    whitespace); `label` is what the operator clicks.
+  - For multiple questions (Q1 + Q2), use `resolution_mode:
+    "multi_select"` and emit all options from all questions in one
+    flat list. The Console will group them visually.
+  - The markdown comment is STILL required — it lands as a Linear
+    comment + the legacy quick-reply path uses it. The structured
+    `action_items` is the additional contract that powers pills.
+
 - **`outcome=blocked`** — write a comment that lets the operator
   decide their next move WITHOUT re-reading the ticket. Cover three
   things in 3-6 sentences:

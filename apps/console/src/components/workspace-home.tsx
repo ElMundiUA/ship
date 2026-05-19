@@ -74,7 +74,15 @@ export function WorkspaceHome({
 }: WorkspaceHomeProps) {
   const reposNeedingUpdate = repos.filter(needsShipTemplateUpdate);
   const decisions = (inboxItems?.items ?? []).slice(0, 4);
-  const decisionsTotal = inboxCounts?.all_open ?? inboxItems?.total ?? 0;
+  // Decisions counter mirrors the /inbox page: only items in
+  // ACTIONABLE_CATEGORIES (`decision_needed` + `failure`). Reports
+  // and `dismiss_silently` rows live in /reports and must not pad
+  // the "needs you" line. Pre-ELS-147 this used `all_open` which
+  // swept in daily-digest and learning-capture rows as if they
+  // were decisions — the operator saw "16 waiting" and clicked
+  // through to a list of reports.
+  const decisionsTotal =
+    inboxCounts?.actionable_new ?? inboxItems?.total ?? 0;
   const prsReadyToMerge = derivePrsReadyToMerge(summary);
   const totalShipped =
     summary.shipped.features_shipped_count +

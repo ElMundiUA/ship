@@ -457,18 +457,18 @@ function ReportActionItemBlock({
 }: {
   workspaceId: string;
   itemId: string;
-  item: { id: string; prompt: string; primary: string; secondary: string };
+  item: { id: string; hint: string; label: string; secondary_label: string };
 }) {
   return (
     <div className="rounded border border-white/10 bg-white/[0.04] p-3">
-      <p className="text-sm text-white/90">{item.prompt}</p>
+      <p className="text-sm text-white/90">{item.hint}</p>
       <div className="mt-3 flex flex-wrap gap-2">
         <ReportActionItemButton
           workspaceId={workspaceId}
           itemId={itemId}
           actionItemId={item.id}
           choice="primary"
-          label={item.primary}
+          label={item.label}
           style="primary"
         />
         <ReportActionItemButton
@@ -476,7 +476,7 @@ function ReportActionItemBlock({
           itemId={itemId}
           actionItemId={item.id}
           choice="secondary"
-          label={item.secondary}
+          label={item.secondary_label}
           style="danger"
         />
       </div>
@@ -505,12 +505,11 @@ function ReportActionItemButton({
       : "border-white/15 bg-white/[0.04] text-white/85 hover:bg-white/[0.08]";
   return (
     <form
-      action={`/api/inbox/${encodeURIComponent(itemId)}/disposition`}
+      action={`/api/inbox/${encodeURIComponent(itemId)}/decide`}
       method="POST"
       className="contents"
     >
       <input type="hidden" name="ws" value={workspaceId} />
-      <input type="hidden" name="action" value="resolve" />
       <input type="hidden" name="action_item_id" value={actionItemId} />
       <input type="hidden" name="choice" value={choice} />
       <button
@@ -1348,6 +1347,10 @@ function mockDetail(id: string): InboxItemDetail {
     snoozed_until: null,
     resolved_at: null,
     resolution: null,
+    category: "decision_needed",
+    priority: 8,
+    lane: "today",
+    resolution_mode: "freeform_only",
     payload: {
       migration_id: "v17",
       drops: ["audit_v1"],

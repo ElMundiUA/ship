@@ -33,16 +33,41 @@ tick gets the next thing.
 `GET /v1/workspaces/{ws}/audit-log?action=agent_run.dispatch&limit=50`
 plus `?action=agent_run.finish&limit=50`. Cross-reference: any
 ticket with `agent_run.dispatch` older than the lock TTL (60 min)
-that has NO matching `agent_run.finish`?
+that has **zero** `agent_run.finish` rows in the same window? That
+is a true orphaned dispatch.
 
-- That's an orphaned dispatch — the runner crashed or the agent
-  exited without calling `/finish`. Lock self-expires (TTL guard),
-  but the **ticket state** is in limbo: stage label says one
-  thing, no PR exists.
-- Fix: post one Linear comment summarising what was attempted
-  (from the agent's last comment if any), and either (a) move
-  the ticket back to the previous stage if no artefact landed, or
-  (b) leave it for the operator and inbox-letter a blocker.
+**Disambiguate before titling the letter.** A ticket can also
+finish `outcome=blocked` repeatedly — the agent IS calling
+`/finish`, the chain is just stuck on a real blocker. Pre-fix the
+classifier filed both states as "orphaned code_review dispatch
+(no agent_run.finish)" — misleading the operator into checking
+runner health when the actual problem was a developer agent
+unable to converge on a fix (Ship-on-Ship/ELS-111 2026-05-19,
+5 reviewer passes, same AC3 blocker, mis-titled as orphan).
+
+Classify by counting finishes for the same ticket in the lookback:
+
+- `finish_count == 0` → **orphaned dispatch.** Runner crashed /
+  exited mid-run / agent exited without calling `/finish`. Title:
+  `"{TICKET}: orphaned {stage} dispatch (runner exit without finish)"`.
+  Fix: post one Linear comment summarising what was attempted, and
+  either (a) move the ticket back to the previous stage if no
+  artefact landed, or (b) leave it for the operator and inbox-
+  letter a blocker.
+
+- `finish_count > 0` AND all finishes are `outcome=blocked` →
+  **agent stuck in a real blocker loop** (not orphaned). Title:
+  `"{TICKET}: {stage} blocked {N}× — agent not converging"`. Body:
+  paste the reviewer/agent's last 1-2 blocker descriptions verbatim
+  so the operator sees what the agent keeps missing. Fix: surface
+  to operator with action_items per the schema above; do NOT
+  retitle this as orphaned.
+
+- `finish_count > 0` AND at least one is `ready_next_step` →
+  the chain DID make progress. Skip; this is normal in-flight.
+
+The wrong label costs the operator a debugging detour — pick the
+correct one or skip the row.
 
 ### Phase 2 — Stuck Linear tickets
 
@@ -203,6 +228,71 @@ If nothing was actionable:
 ```
 
 End the audit `comment` with `[Ship workspace:role-self-heal]`.
+
+## Inbox letter schema — action_items are required
+
+Every inbox letter you file MUST carry a `payload` JSON object with
+`action_items[]` and `resolution_mode` so the operator gets one-tap
+controls in the Console. A letter without these renders as raw
+markdown with no buttons — operators have to fix the underlying
+state by hand (the exact workflow self-heal is supposed to remove).
+
+Use the CLI's `--payload-file` flag (or `--payload-file -` to read
+stdin) with this shape:
+
+```json
+{
+  "resolution_mode": "single_choice",
+  "action_items": [
+    {
+      "id": "ack_handled",
+      "kind": "choice",
+      "label": "Already handled",
+      "hint": "I fixed it manually; close this letter."
+    },
+    {
+      "id": "needs_more_info",
+      "kind": "choice",
+      "label": "Need more context",
+      "hint": "Self-heal flagged this — operator wants to investigate before acting."
+    },
+    {
+      "id": "wont_fix",
+      "kind": "choice",
+      "label": "Not actionable",
+      "hint": "False positive or out of scope. Don't re-file."
+    }
+  ]
+}
+```
+
+Rules:
+
+- Always include `ack_handled` first (default exit ramp for the
+  operator).
+- Add one `kind=choice` per concrete unblock you considered. Each
+  one writes a Linear comment with `label` on the ticket
+  (`ticket_ref` on the letter) so the audit trail shows what the
+  operator chose.
+- For Phase-3 PR-related letters, append:
+  ```json
+  { "id": "pr_review_done",  "kind": "choice", "label": "PR merged manually" }
+  ```
+  The hint should name the PR URL so it's clickable from the
+  operator's preview pane.
+- For Phase-4 cascade-loop letters, append:
+  ```json
+  { "id": "loop_acknowledged", "kind": "choice", "label": "Investigating loop" }
+  ```
+  so the operator can confirm they've seen the spike without the
+  letter persisting through the next tick.
+- Do NOT use `kind=checkbox` (it creates a child ticket) or
+  `kind=ack` (renders a single button — bad UX for self-heal's
+  multi-option flow).
+
+The `body` markdown stays the same — it's the explainer. The
+`action_items` are what makes the operator-side decision a single
+click instead of a manual lock release.
 
 ## Anti-duplication
 

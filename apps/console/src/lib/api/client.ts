@@ -26,11 +26,13 @@ import type {
   ApiWorkspace,
 } from "./types";
 import type {
-  InboxItemDetail,
-  InboxItemEvent,
-  InboxListResponse,
+  InboxCategory,
   InboxCountsResponse,
   InboxFilterState,
+  InboxItemDetail,
+  InboxItemEvent,
+  InboxLane,
+  InboxListResponse,
   InboxStatus,
   InboxType,
 } from "@/lib/inbox-types";
@@ -502,49 +504,11 @@ export function activateRepos(
   );
 }
 
-// --- Knowledge seed (one-shot PR of starter markdown) -----------------------
-
-/**
- * Whitelist of knowledge starter slugs the backend catalog ships today.
- * Must stay in lockstep with
- * ``backend.app.services.catalog.KNOWLEDGE_STARTERS``.
- */
-export const KNOWLEDGE_STARTERS = ["code-style", "ui-runbook"] as const;
-export type KnowledgeStarterSlug = (typeof KNOWLEDGE_STARTERS)[number];
-
-export interface ApiKnowledgeSeedResult {
-  pr_url: string;
-  pr_number: number;
-  branch: string;
-  files: string[];
-  selection: string[];
-}
-
-/**
- * Opens a PR that drops ``.ship/knowledge/<slug>.md`` starter files
- * into the tenant repo. Admin-only on the backend.
- *
- * ``selection === undefined`` ⇒ seed every starter the catalog ships
- * today (matches the wizard's "select all" default). Pass an empty
- * array to get a 412 "empty_knowledge_selection" — useful if you want
- * to force a UX hint rather than a silent no-op.
- */
-export function knowledgeSeed(
-  workspaceId: string,
-  repoId: string,
-  options: { selection?: KnowledgeStarterSlug[]; token?: string } = {},
-): Promise<ApiKnowledgeSeedResult> {
-  const body: Record<string, unknown> = {};
-  if (options.selection !== undefined) body.selection = options.selection;
-  return apiFetch<ApiKnowledgeSeedResult>(
-    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/knowledge_seed`,
-    {
-      method: "POST",
-      body,
-      token: options.token,
-    },
-  );
-}
+// ELS-177 (W1) — KNOWLEDGE_STARTERS, KnowledgeStarterSlug,
+// ApiKnowledgeSeedResult, knowledgeSeed() retired 2026-05-19. The
+// backend POST /knowledge_seed + POST /knowledge/bootstrap routes are
+// gone (workspace-level Knowledge buckets replaced repo-backed
+// `.ship/knowledge/*.md` seeding).
 
 // --- Per-repo tracker binding (Wizard v2 iter 4) ---------------------------
 
@@ -702,59 +666,29 @@ export function getTrackerFsm(
 
 // --- Unified wizard seed PR (Wizard v2 iter 5) -----------------------------
 
-/**
- * CODEOWNERS → routing summary block on :class:`WizardSeedOut` (P5-06).
- *
- * Surfaced in the Wave-8c "what just happened" panel so the operator
- * can see how many routing rules were pre-seeded from CODEOWNERS and
- * which owner handles couldn't be matched to a workspace member yet.
- */
-export interface ApiWizardSeedCodeownersSummary {
-  file_found: boolean;
-  rules_count: number;
-  routing_rules_created: number;
-  unresolved_owners: string[];
-}
-
-/**
- * Repo-intel harvest dispatch handle (P5-06).
- *
- * - ``enqueued=true`` → arq worker is processing the harvest;
- *   ``job_id`` is the polling handle.
- * - ``enqueued=false`` → no worker, the wizard ran the harvest
- *   inline and ``intel_id`` points at the freshly-inserted row.
- */
-export interface ApiWizardSeedIntelHandle {
-  enqueued: boolean;
-  job_id: string | null;
-  intel_id: string | null;
-}
+// ELS-178 (W2) — ApiWizardSeedCodeownersSummary,
+// ApiWizardSeedIntelHandle, codeowners/intel/synthetic_lanes_created/
+// presets/knowledge_slugs fields retired 2026-05-19. Wizard backend no
+// longer populates any of them.
 
 export interface ApiWizardSeedResult {
   pr_url: string;
   pr_number: number;
   branch: string;
   files: string[];
-  presets: string[];
-  knowledge_slugs: string[];
   tracker_kind: string | null;
   run_token_prefix: string | null;
   run_token_rotated: boolean;
-  // ── P5-06 / P5-07 additions ────────────────────────────────
-  // All three default to ``null`` / ``0`` server-side so older FE
-  // builds that don't read them keep deserialising. The Wave-8c
-  // wizard's done step renders them directly.
-  codeowners: ApiWizardSeedCodeownersSummary | null;
-  intel: ApiWizardSeedIntelHandle | null;
-  synthetic_lanes_created: number;
+  /** ELS-182 (W6) — true once the seed PR is merged on GitHub. The
+   *  POST .../wizard_seed dispatch always returns false (fresh PR);
+   *  GET .../wizard_seed/latest flips this when the PR merges. */
+  merged: boolean;
 }
 
 export function wizardSeed(
   workspaceId: string,
   repoId: string,
   body: {
-    presets?: string[] | null;
-    knowledge_slugs?: KnowledgeStarterSlug[] | null;
     tracker_kind?: TrackerKind | null;
     include_fsm?: boolean;
     rotate_run_token?: boolean;
@@ -3218,6 +3152,9 @@ export function removeMember(
 export type InboxListQuery = {
   ownership?: InboxFilterState["ownership"];
   types?: InboxType[];
+  categories?: InboxCategory[];
+  lane?: InboxLane;
+  sort?: "created_desc" | "priority_desc_created_asc";
   /** Optional; omitted uses API default. */
   statuses?: InboxStatus[];
   repo_id?: string;
@@ -3230,6 +3167,9 @@ function buildInboxQuery(opts: InboxListQuery): string {
   const params = new URLSearchParams();
   if (opts.ownership) params.set("ownership", opts.ownership);
   for (const t of opts.types ?? []) params.append("type", t);
+  for (const c of opts.categories ?? []) params.append("category", c);
+  if (opts.lane) params.set("lane", opts.lane);
+  if (opts.sort) params.set("sort", opts.sort);
   for (const s of opts.statuses ?? []) params.append("status", s);
   if (opts.repo_id) params.set("repo_id", opts.repo_id);
   if (opts.play_key) params.set("play_key", opts.play_key);
@@ -3296,6 +3236,31 @@ export function applyInboxDisposition(
 ): Promise<InboxItemDetail> {
   return apiFetch<InboxItemDetail>(
     `/v1/workspaces/${workspaceId}/inbox/${encodeURIComponent(itemId)}/disposition`,
+    { method: "POST", body, token },
+  );
+}
+
+/** ELS-159 — operator's structured pick on an action_items-bearing row.
+ *
+ *  Either `selections` (subset of `payload.action_items[].id`) or
+ *  `freeform` must be non-empty. The backend routes each selection
+ *  per its `kind` (Linear comment for `choice`, ticket creation for
+ *  `checkbox`, no-op for `ack`) and appends the freeform note (if any)
+ *  as a comment on the source ticket.
+ */
+export function decideInboxItem(
+  workspaceId: string,
+  itemId: string,
+  body: {
+    selections?: string[];
+    freeform?: string | null;
+    action_item_id?: string | null;
+    choice?: "primary" | "secondary" | null;
+  },
+  token?: string,
+): Promise<InboxItemDetail> {
+  return apiFetch<InboxItemDetail>(
+    `/v1/workspaces/${workspaceId}/inbox/${encodeURIComponent(itemId)}/decide`,
     { method: "POST", body, token },
   );
 }

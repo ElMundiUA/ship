@@ -79,7 +79,8 @@ shipctl inbox create \
   --title "Daily digest — YYYY-MM-DD" \
   --headline "<≤80 chars: green/yellow/red + why>" \
   --summary "<first line doubles as list headline if --headline omitted>" \
-  --body-file /tmp/digest.md
+  --body-file /tmp/digest.md \
+  --payload-file /tmp/digest-payload.json
 ```
 
 **Report payload contract** — merge into the inbox item JSON (via API
@@ -88,19 +89,22 @@ shipctl inbox create \
 ```json
 {
   "body": "<markdown digest>",
+  "resolution_mode": "per_item_binary",
   "action_items": [
     {
       "id": "finding-01",
-      "prompt": "Repeating clarification on intake scope",
-      "primary": "Document once",
-      "secondary": "Ignore"
+      "kind": "binary",
+      "hint": "Repeating clarification on intake scope",
+      "label": "Document once",
+      "secondary_label": "Ignore"
     }
   ]
 }
 ```
 
-Emit **≥1 `action_items` entry per lesson learned** (Phase 2). Each
-needs `id`, `prompt`, `primary`, and `secondary`. Keep
+Emit **≥1 `kind: "binary"` action item per lesson learned** (Phase 2).
+Each needs `id`, `hint`, `label`, and `secondary_label`. Set
+`resolution_mode` to `per_item_binary`. Keep
 `summary`'s **first line ≤80 characters** so the inbox list stays
 scannable when `--headline` is omitted.
 
@@ -114,6 +118,43 @@ Body sections (Markdown):
    in `blocked` longer than 24h.
 5. **Inbox carryover** — count of `new` inbox letters from prior
    digests still unread. If >5, lead with this in the headline.
+
+### Action items in the payload (ELS-164)
+
+The daily digest is **read-once, ack-after**. If today's digest
+contains zero actionable observations, set:
+
+```json
+{ "resolution_mode": "ack_only", "action_items": [
+  {"id": "ack-digest", "kind": "ack", "label": "Acknowledge"}
+]}
+```
+
+If you found 1+ items in Lessons Learned that warrant a concrete
+follow-up ticket (refactor / metric / regression-test gap),
+ALSO emit them as `kind: "checkbox"` action_items so the operator
+can spawn child tickets in one click:
+
+```json
+{ "resolution_mode": "multi_select", "action_items": [
+  {
+    "id": "fu-001",
+    "kind": "checkbox",
+    "label": "Open ticket: add metric ship_noop_no_ticket_total",
+    "hint": "Picker null path fires 10x/day silently; we need a counter",
+    "target_project_id": "<linear-project-uuid>"
+  },
+  {"id": "ack-digest", "kind": "ack", "label": "Acknowledge digest itself"}
+]}
+```
+
+Rules:
+- Pick `target_project_id` from `list_projects` based on item topic
+  (pipeline-noise → infra/maintenance project; UX issue → product
+  project, etc.). Leave `null` only as a last resort.
+- Maximum 5 checkbox items per digest — discipline the noise.
+- Daily digest is light; if you're tempted to write >5 items, that's
+  weekly-audit territory.
 
 ## Finish
 

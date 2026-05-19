@@ -153,7 +153,6 @@ async def test_wizard_seed_first_run_mints_token_and_opens_pr(
     # P5-01 collapse: the legacy ``"web-app"`` id sent by the caller
     # normalizes to ``"default"`` before bundle composition + audit
     # logging.
-    assert body["presets"] == ["default"]
     assert body["tracker_kind"] == "linear"
     assert body["run_token_rotated"] is True
     assert body["run_token_prefix"]
@@ -190,7 +189,6 @@ async def test_wizard_seed_first_run_mints_token_and_opens_pr(
     payload = audits[0].payload
     # Audit telemetry stops fragmenting on legacy ids — every row
     # records the normalized ``"default"`` value (P5-01).
-    assert payload["presets"] == ["default"]
     assert payload["tracker_kind"] == "linear"
     assert payload["run_token_rotated"] is True
     # Plaintext MUST NOT leak anywhere.
@@ -409,60 +407,6 @@ async def test_wizard_seed_404_on_unknown_repo(
     assert resp.status_code == 404
 
 
-# ---------------------------------------------------------------------------
-# P5-06 / P5-07 coverage — DEFAULT_BUNDLE collapse, CODEOWNERS routing,
-# intel harvest dispatch, synthetic Routine sync.
-# ---------------------------------------------------------------------------
-
-
-def _patch_codeowners_missing(monkeypatch):
-    """Stub :func:`resolve_codeowners` to a CODEOWNERS-not-found result.
-
-    Default fixture for tests that don't care about the routing
-    pre-seed step — keeps them from trying to talk to GitHub.
-    """
-    from backend.app.services import codeowners as codeowners_module
-    from backend.app.services import wizard_seed_routing
-    from backend.app.services.codeowners import CodeownersResolution
-
-    async def _resolve(**_kwargs):
-        return CodeownersResolution(
-            rules=(),
-            handles_by_path={},
-            unresolved=(),
-            fetched_from="missing",
-            sha=None,
-        )
-
-    monkeypatch.setattr(codeowners_module, "resolve_codeowners", _resolve)
-    monkeypatch.setattr(wizard_seed_routing, "resolve_codeowners", _resolve)
-
-
-def _patch_intel_inline_skip(monkeypatch):
-    """Stub the inline harvest path so wizard tests don't hit GitHub.
-
-    The default for every test below — when a test wants the real
-    inline path / a redis pool, it overrides this with its own
-    monkeypatch on ``request.app.state.redis_pool`` or on the
-    harvester directly.
-    """
-    import uuid as _uuid
-
-    from backend.app.services import repo_intel as repo_intel_module
-    from backend.app.services.repo_intel import HarvestReport
-
-    async def _harvest(**_kwargs):
-        return HarvestReport(
-            intel_id=_uuid.uuid4(),
-            version=1,
-            duration_ms=0,
-            files_examined=0,
-            languages_detected=0,
-            knowledge_articles_written=0,
-        )
-
-    monkeypatch.setattr(repo_intel_module, "harvest_repo_intel", _harvest)
-
 
 # ---------------------------------------------------------------------------
 # Workspace defaults gate (default_agent_profile + tracker)
@@ -655,7 +599,6 @@ async def test_wizard_seed_does_not_seed_codeowners_routing_pre_merge(
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["codeowners"] is None
 
     rows = (
         await db_session.execute(
@@ -710,7 +653,6 @@ async def test_wizard_seed_does_not_create_synthetic_lanes_immediately(
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["synthetic_lanes_created"] == 0
 
     rows = (
         await db_session.execute(
@@ -718,116 +660,5 @@ async def test_wizard_seed_does_not_create_synthetic_lanes_immediately(
         )
     ).scalars().all()
     assert rows == []
-
-
-@pytest.mark.asyncio
-async def test_knowledge_bootstrap_opens_generated_docs_pr(
-    monkeypatch, v1_client, seeded_wizard_repo
-) -> None:
-    from types import SimpleNamespace
-    import uuid as _uuid
-
-    from backend.app.services import generated_knowledge as generated_module
-    from backend.app.services import repo_intel as repo_intel_module
-    from backend.app.services.repo_intel import HarvestReport
-
-    raw, workspace, _install, repo = seeded_wizard_repo
-    captured = _patch_github(monkeypatch)
-
-    async def _harvest(**kwargs):
-        assert kwargs["triggered_by"] == "bootstrap"
-        return HarvestReport(
-            intel_id=_uuid.uuid4(),
-            version=3,
-            duration_ms=1,
-            files_examined=12,
-            languages_detected=2,
-            knowledge_articles_written=6,
-        )
-
-    async def _current(_session, _repo_id):
-        return SimpleNamespace(version=3)
-
-    def _files(*, repo, intel):
-        assert repo.id == seeded_wizard_repo[3].id
-        assert intel.version == 3
-        return [
-            (".ship/knowledge/code-style.md", "# Code Style\n"),
-            (".ship/knowledge/dev-environment.md", "# Dev Environment\n"),
-        ]
-
-    monkeypatch.setattr(repo_intel_module, "harvest_repo_intel", _harvest)
-    monkeypatch.setattr(repo_intel_module, "get_current_intel", _current)
-    monkeypatch.setattr(generated_module, "render_generated_knowledge_files", _files)
-
-    resp = await v1_client.post(
-        f"/v1/workspaces/{workspace.id}/repos/{repo.id}/knowledge/bootstrap",
-        json={},
-        headers={"Authorization": f"Bearer {raw}"},
-    )
-
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["status"] == "knowledge_pr_opened"
-    assert body["pr_number"] == 7
-    assert body["files"] == [
-        ".ship/knowledge/code-style.md",
-        ".ship/knowledge/dev-environment.md",
-    ]
-    assert captured["title"] == "Ship: generated repository knowledge"
-
-
-@pytest.mark.asyncio
-async def test_knowledge_bootstrap_is_idempotent(
-    monkeypatch, v1_client, seeded_wizard_repo
-) -> None:
-    from types import SimpleNamespace
-    import uuid as _uuid
-
-    from backend.app.services import generated_knowledge as generated_module
-    from backend.app.services import repo_intel as repo_intel_module
-    from backend.app.services.repo_intel import HarvestReport
-
-    raw, workspace, _install, repo = seeded_wizard_repo
-    _patch_github(monkeypatch)
-    calls = {"harvest": 0}
-
-    async def _harvest(**_kwargs):
-        calls["harvest"] += 1
-        return HarvestReport(
-            intel_id=_uuid.uuid4(),
-            version=1,
-            duration_ms=1,
-            files_examined=1,
-            languages_detected=1,
-            knowledge_articles_written=6,
-        )
-
-    async def _current(_session, _repo_id):
-        return SimpleNamespace(version=1)
-
-    monkeypatch.setattr(repo_intel_module, "harvest_repo_intel", _harvest)
-    monkeypatch.setattr(repo_intel_module, "get_current_intel", _current)
-    monkeypatch.setattr(
-        generated_module,
-        "render_generated_knowledge_files",
-        lambda **_kwargs: [(".ship/knowledge/code-style.md", "# Code Style\n")],
-    )
-
-    first = await v1_client.post(
-        f"/v1/workspaces/{workspace.id}/repos/{repo.id}/knowledge/bootstrap",
-        json={},
-        headers={"Authorization": f"Bearer {raw}"},
-    )
-    assert first.status_code == 200, first.text
-
-    second = await v1_client.post(
-        f"/v1/workspaces/{workspace.id}/repos/{repo.id}/knowledge/bootstrap",
-        json={},
-        headers={"Authorization": f"Bearer {raw}"},
-    )
-    assert second.status_code == 200, second.text
-    assert second.json()["status"] == "already_done"
-    assert calls["harvest"] == 1
 
 

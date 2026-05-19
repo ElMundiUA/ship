@@ -25,8 +25,7 @@ resolve       (none)
 dismiss       if item.type='approval' → close matching escalations
               with resolution='dismissed'
 approve       close matching ``RunEscalation`` rows with
-              resolution='approved' (best-effort; see notes on
-              schema gap below)
+              resolution='approved'
 reject        close matching escalations with resolution='rejected'
 answer        write ``answer_text`` / ``status='answered'`` /
               ``answered_by_user_id`` / ``answered_at`` back to the
@@ -43,19 +42,13 @@ retry         persist a durable retry signal in
 acknowledge   (none)
 ============  =====================================================
 
-**RunEscalation schema gap.** :class:`RunEscalation` does not yet
-carry a ``resolved_at`` / ``resolution`` / ``resolved_by_user_id``
-column (see the model — only ``id``, ``run_id``, ``inbox_item_id``,
-``escalation_reason``, ``created_at`` are present). Until the
-follow-up migration lands, :func:`_close_run_escalations` identifies
-matching rows but cannot mutate them; it logs a WARNING with a
-``TODO`` marker, still records the matches in :class:`SideEffectReport`
-for observability, and writes the audit-trail entries so ops can
-reconcile once the columns exist. Matching uses the only available
-linkage today — ``RunEscalation.inbox_item_id == item.id``, plus a
-join via ``inbox_items.run_id + play_key`` so multi-step approval
-gates that emitted multiple escalations under the same run + play
-all close together (planning §7 contract).
+**RunEscalation close.** :func:`_close_run_escalations` sets
+``resolved_at`` / ``resolution`` / ``resolved_by_user_id`` on every
+matching row (skipping rows already closed). Matching uses
+``RunEscalation.inbox_item_id == item.id``, plus a join via
+``inbox_items.run_id + play_key`` so multi-step approval gates that
+emitted multiple escalations under the same run + play all close
+together (planning §7 contract).
 """
 
 from __future__ import annotations
@@ -220,18 +213,9 @@ def _add_event(
 # ---------------------------------------------------------------------------
 
 
-# Columns the future migration is expected to add to ``run_escalations``
-# so the close becomes a real mutation. Until they exist we treat the
-# "close" as a marker-only operation (audit + event) and log a TODO.
-#
-# Status as of P3-02 (RFC-0010 Phase 3 partial-progress milestone): the
-# *creation* half of the contract is now solid — every inbox item
-# emitted by ``intake.emit_for_run`` with a non-NULL ``run_id`` lands a
-# linkage row, so ``_find_matching_escalations`` always has something to
-# work with. The *closing* half is still gated on this column set
-# landing; tracking PR will bind a real ``resolved_at`` / ``resolution``
-# / ``resolved_by_user_id`` write once the FE settles on closure
-# semantics.
+# Resolution columns on ``run_escalations`` (migration 0074). When absent
+# on a dev sandbox with a stale model, the close degrades to audit +
+# event only.
 _ESCALATION_RESOLUTION_COLUMNS: tuple[str, ...] = (
     "resolved_at",
     "resolution",
@@ -304,15 +288,11 @@ async def _close_run_escalations(
 ) -> list[uuid.UUID]:
     """Close every :class:`RunEscalation` row matching ``item``.
 
-    "Close" today is best-effort: if the model has the resolution
-    columns we set them; otherwise we log a TODO + warning and
-    treat the operation as marker-only (the audit + event rows
-    still go in so ops can correlate later). Matching rows that
-    were already resolved are skipped.
+    Sets resolution columns when present on the model; otherwise
+    logs a warning and records audit + event rows only. Rows that
+    already have ``resolved_at`` are skipped.
 
-    Returns the list of escalation ids that were *identified* as
-    closeable (not necessarily mutated — see schema-gap note in
-    the module docstring).
+    Returns escalation ids that were identified as closeable.
     """
     try:
         matches = await _find_matching_escalations(session, item)
@@ -328,13 +308,6 @@ async def _close_run_escalations(
     closed_ids: list[uuid.UUID] = []
     columns_present = _escalation_columns_present()
     if not columns_present:
-        # TODO(rfc-0010): once ``run_escalations`` grows
-        # ``resolved_at`` / ``resolution`` / ``resolved_by_user_id``
-        # the close becomes a real UPDATE. P3-02 made the *linkage*
-        # half ironclad (every inbox item with a run_id has a row),
-        # but the *closing* half is still marker-only. Until then we
-        # emit the audit trail so ops can reconcile and we don't lose
-        # the signal.
         logger.warning(
             "inbox side-effect: RunEscalation has no resolution "
             "columns (resolved_at/resolution/resolved_by_user_id); "

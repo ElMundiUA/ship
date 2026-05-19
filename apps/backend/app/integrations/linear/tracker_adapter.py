@@ -1908,6 +1908,66 @@ class LinearTracker:
         out.sort(key=lambda c: c.created_at)
         return out
 
+    async def relate_tickets(
+        self,
+        *,
+        blocker: TicketRef,
+        blocked: TicketRef,
+        kind: str = "blocks",
+    ) -> None:
+        """Create an ``issueRelation`` on Linear so the dependency
+        gate (ELS-148+) sees the edge.
+
+        Semantics: ``blocker`` must be Done before ``blocked`` can
+        start. In Linear-speak we ``issueRelationCreate`` with
+        ``issueId=blocker, relatedIssueId=blocked, type='blocks'``
+        — ``inverseRelations`` on the ``blocked`` issue then surfaces
+        the blocker (which is what
+        :meth:`get_ticket_blockers` reads).
+
+        Idempotent at the Linear side — a duplicate relation just
+        returns ``success=false`` (we surface as a no-op log entry).
+
+        Used by the mass-planning intake commit endpoint (ELS-169)
+        to wire ``depends_on`` edges between the freshly-minted
+        anchor tickets.
+        """
+        if blocker.kind != "linear" or blocked.kind != "linear":
+            raise ValueError(
+                "LinearTracker.relate_tickets requires kind='linear' on both refs"
+            )
+        if kind not in ("blocks", "related", "duplicate"):
+            raise ValueError(
+                f"unsupported relation kind {kind!r}; expected blocks/related/duplicate"
+            )
+        mutation = """
+        mutation ShipRelateTickets($input: IssueRelationCreateInput!) {
+          issueRelationCreate(input: $input) {
+            success
+            issueRelation { id type }
+          }
+        }
+        """
+        data = await self._gql(
+            mutation,
+            {
+                "input": {
+                    "issueId": blocker.id,
+                    "relatedIssueId": blocked.id,
+                    "type": kind,
+                }
+            },
+        )
+        success = bool(
+            ((data or {}).get("issueRelationCreate") or {}).get("success")
+        )
+        if not success:
+            logger.info(
+                "LinearTracker.relate_tickets: no-op (likely duplicate) "
+                "blocker=%s blocked=%s kind=%s",
+                blocker.id, blocked.id, kind,
+            )
+
     async def remove_label(self, ticket: TicketRef, label: str) -> None:
         """Strip ``label`` from the issue (no-op if not present)."""
         if ticket.kind != "linear":

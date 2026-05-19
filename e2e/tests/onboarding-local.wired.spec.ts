@@ -14,8 +14,6 @@
  *        in-app route redirects through to ``/onboarding?step=...``.
  *   O2 — ``/onboarding`` lands on a step screen (github / tracker
  *        / confirm) and renders a "next step" affordance.
- *   O3 — Legacy ``?step=configure`` URL 303s to
- *        ``?step=confirm`` (keeps deep-links working).
  *   O4 — ``/onboarding`` from a logged-out browser bounces to
  *        ``/login?reason=...``.
  *
@@ -105,24 +103,6 @@ test.describe("onboarding — laptop profile", () => {
       .getByRole("link", { name: /(install|continue|next|connect|confirm)/i })
       .or(page.getByRole("button", { name: /(install|continue|next|connect|confirm)/i }));
     await expect(forwardCta.first()).toBeVisible({ timeout: 30_000 });
-    await ctx.close();
-  });
-
-  test("O3 — legacy ?step=configure 303s to ?step=confirm", async ({
-    playwright,
-    browser,
-  }) => {
-    const apiCtx = await playwright.request.newContext();
-    const state = await buildLocalStorageState(apiCtx);
-    await apiCtx.dispose();
-
-    const ctx = await browser.newContext({ storageState: state });
-    const page = await ctx.newPage();
-    await page.goto("/onboarding?step=configure");
-    // We don't assert on intermediate redirects because Next's
-    // ``redirect()`` in a server component is a single hop; the
-    // browser's final URL is what we care about.
-    await expect(page).toHaveURL(/\/onboarding\?step=confirm/);
     await ctx.close();
   });
 
