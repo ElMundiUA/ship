@@ -98,6 +98,7 @@ test.describe("settings: API keys (wired, serial)", () => {
     request,
   }) => {
     const ws = await createThrowawayWorkspace(request);
+    const tokenCountBefore = (await listAuthTokens(request)).length;
 
     await page.goto(apiKeysUrl(ws.id));
     await expect(
@@ -114,6 +115,7 @@ test.describe("settings: API keys (wired, serial)", () => {
     await expect(page.getByText(BAD_INPUT_BANNER)).toBeVisible({
       timeout: 15_000,
     });
+    expect((await listAuthTokens(request)).length).toBe(tokenCountBefore);
   });
 
   test("@deployed mint shows one-shot secret then hides after reload", async ({
