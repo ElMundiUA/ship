@@ -26,12 +26,63 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { cn } from "@/lib/cn";
-import { decideInboxItem } from "@/lib/api/client";
 import type {
   InboxActionItem,
   InboxItemDetail,
   InboxResolutionMode,
 } from "@/lib/inbox-types";
+
+// ``InboxActionPanel`` is a client component but the underlying
+// ``decideInboxItem`` helper lives in ``@/lib/api/client`` which is
+// tagged ``import "server-only"`` so the session token can't leak to
+// the browser bundle. Pre-fix the panel imported it directly and the
+// Next.js build failed with "You're importing a component that needs
+// server-only" — every backend deploy was blocked since 2026-05-18
+// because the console image refused to build. Call the server-side
+// bridge at ``/api/inbox/[id]/decide`` instead; the route handler is
+// server code and forwards the call to the backend.
+async function postDecide(
+  workspaceId: string,
+  itemId: string,
+  body: { selections: string[]; freeform: string | null },
+): Promise<InboxItemDetail> {
+  const res = await fetch(`/api/inbox/${encodeURIComponent(itemId)}/decide`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ workspaceId, ...body }),
+  });
+  if (!res.ok) {
+    let code = "unknown";
+    try {
+      const payload = (await res.json()) as { error_code?: string };
+      if (payload?.error_code) code = payload.error_code;
+    } catch {
+      // ignore
+    }
+    throw new Error(humanizeDecideError(code));
+  }
+  return (await res.json()) as InboxItemDetail;
+}
+
+function humanizeDecideError(code: string): string {
+  switch (code) {
+    case "forbidden":
+      return "You don't have permission for that action.";
+    case "not_found":
+      return "Item no longer exists.";
+    case "state_invalid":
+      return "Item already resolved — refresh.";
+    case "validation_failed":
+    case "decide_empty":
+      return "Pick at least one option or write a note.";
+    case "session_expired":
+      return "Session expired. Refresh to sign back in.";
+    case "api_unavailable":
+      return "API is unavailable.";
+    default:
+      return `Could not apply decision (${code}).`;
+  }
+}
 
 type Props = {
   workspaceId: string;
@@ -91,7 +142,7 @@ export function InboxActionPanel({ workspaceId, item, onResolved }: Props) {
     setBusy(true);
     setError(null);
     try {
-      const next = await decideInboxItem(workspaceId, item.id, {
+      const next = await postDecide(workspaceId, item.id, {
         selections,
         freeform: text || null,
       });

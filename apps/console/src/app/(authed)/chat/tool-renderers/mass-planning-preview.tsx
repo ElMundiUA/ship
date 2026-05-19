@@ -14,7 +14,37 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Badge } from "@/components/ui";
-import { apiFetch } from "@/lib/api/client";
+// Client component → can't import apiFetch from "@/lib/api/client"
+// (which pulls server-only deps). Go through the catch-all proxy at
+// /api/v1/... that the route handler attaches the session token to.
+async function clientFetch<T>(
+  path: string,
+  init: { method?: string; body?: unknown } = {},
+): Promise<T> {
+  // path looks like "/v1/workspaces/.../planning/proposals/..."
+  const proxied = path.startsWith("/v1/")
+    ? `/api/v1/${path.slice(4)}`
+    : path;
+  const res = await fetch(proxied, {
+    method: init.method ?? "GET",
+    headers:
+      init.body !== undefined
+        ? { "content-type": "application/json" }
+        : undefined,
+    body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
+  });
+  if (!res.ok) {
+    let code = `http_${res.status}`;
+    try {
+      const body = (await res.json()) as { error_code?: string };
+      if (body?.error_code) code = body.error_code;
+    } catch {
+      // ignore
+    }
+    throw new Error(code);
+  }
+  return (await res.json()) as T;
+}
 import { cn } from "@/lib/cn";
 
 // ---------------------------------------------------------------------------
@@ -116,7 +146,7 @@ function MassPlanningPreviewCard({
     setLoading(true);
     setError(null);
     try {
-      const data = await apiFetch<PlanningProposalOut>(
+      const data = await clientFetch<PlanningProposalOut>(
         `/v1/workspaces/${proposal?.workspace_id ?? ""}/planning/proposals/${proposalId}`,
         { method: "GET" },
       );
@@ -141,7 +171,7 @@ function MassPlanningPreviewCard({
         // path. We pull it from the inbox API's me-context header which
         // every authed page already has. As a pragmatic fallback, look it
         // up via /v1/workspaces and pick the active one.
-        const sess = await apiFetch<{ workspaces: { id: string }[] }>(
+        const sess = await clientFetch<{ workspaces: { id: string }[] }>(
           `/v1/workspaces`,
           { method: "GET" },
         ).catch(() => null);
@@ -149,7 +179,7 @@ function MassPlanningPreviewCard({
         if (!wsId) {
           throw new Error("No workspace in session");
         }
-        const data = await apiFetch<PlanningProposalOut>(
+        const data = await clientFetch<PlanningProposalOut>(
           `/v1/workspaces/${wsId}/planning/proposals/${proposalId}`,
           { method: "GET" },
         );
@@ -182,7 +212,7 @@ function MassPlanningPreviewCard({
       setBusy(true);
       setError(null);
       try {
-        const updated = await apiFetch<PlanningProposalOut>(
+        const updated = await clientFetch<PlanningProposalOut>(
           `/v1/workspaces/${workspaceId}/planning/proposals/${proposalId}`,
           { method: "PATCH", body: { payload: next } },
         );
@@ -202,7 +232,7 @@ function MassPlanningPreviewCard({
     setBusy(true);
     setError(null);
     try {
-      const res = await apiFetch<CommitResponse>(
+      const res = await clientFetch<CommitResponse>(
         `/v1/workspaces/${workspaceId}/planning/mass-import`,
         { method: "POST", body: { proposal_id: proposalId } },
       );
@@ -220,7 +250,7 @@ function MassPlanningPreviewCard({
     setBusy(true);
     setError(null);
     try {
-      await apiFetch(
+      await clientFetch(
         `/v1/workspaces/${workspaceId}/planning/proposals/${proposalId}`,
         { method: "DELETE" },
       );

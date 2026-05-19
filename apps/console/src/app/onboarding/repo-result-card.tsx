@@ -227,11 +227,29 @@ function useActivationMerged(
     async function check() {
       if (cancelled) return;
       try {
-        const { getLatestWizardSeed } = await import("@/lib/api/client");
-        const latest = await getLatestWizardSeed(workspaceId!, repoId!);
-        if (!cancelled && latest?.merged === true) {
-          setMerged(true);
-          return;
+        // Hit the server-side proxy route — ``@/lib/api/client`` is
+        // tagged ``import "server-only"`` so client components can't
+        // import it (the build refuses since 2026-05-18 when ELS-158
+        // first surfaced the constraint). The proxy at
+        // ``/api/onboard/wizard-seed-latest`` already exists for the
+        // same reason.
+        const url = new URL(
+          "/api/onboard/wizard-seed-latest",
+          window.location.origin,
+        );
+        url.searchParams.set("workspace_id", workspaceId!);
+        url.searchParams.set("repo_id", repoId!);
+        const res = await fetch(url.toString(), {
+          credentials: "include",
+        });
+        if (res.ok) {
+          const body = (await res.json()) as {
+            result?: { merged?: boolean };
+          };
+          if (!cancelled && body.result?.merged === true) {
+            setMerged(true);
+            return;
+          }
         }
       } catch {
         // 404 (no seed) / 5xx / network — silently retry until timeout.
