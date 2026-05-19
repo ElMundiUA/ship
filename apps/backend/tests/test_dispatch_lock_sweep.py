@@ -92,10 +92,11 @@ async def test_stale_lock_with_dead_chain_is_released(db_session) -> None:
     run_id = await _insert_dispatch_audit(
         db_session, workspace_id=ws, ticket_ref="PAC-32"
     )
-    # Backdate the dispatch row so the activity-window check fails too.
+    # Backdate dispatch to match the lock's claimed_at (sweeper resolves
+    # owner via project_id fallback within ±5 min of claimed_at).
     await db_session.execute(
         text(
-            "UPDATE audit_log SET created_at = NOW() - INTERVAL '90 minutes' "
+            "UPDATE audit_log SET created_at = NOW() - INTERVAL '70 minutes' "
             "WHERE id = :id"
         ),
         {"id": run_id},
@@ -104,7 +105,7 @@ async def test_stale_lock_with_dead_chain_is_released(db_session) -> None:
         db_session,
         workspace_id=ws,
         key="project:proj-xyz",
-        run_id=run_id,
+        run_id=None,
         age_minutes=70,
     )
 
@@ -132,7 +133,7 @@ async def test_stale_lock_with_dead_chain_is_released(db_session) -> None:
     payload = sweep_rows[0].payload
     assert payload["lock_key"] == "project:proj-xyz"
     assert payload["reason"] == "no_recent_activity"
-    assert payload["owning_run_id"] == str(run_id)
+    assert payload["owning_run_id"] == str(run_id)  # audit_log bigint id
     assert sweep_rows[0].target_id == "PAC-32"
 
 
@@ -144,10 +145,11 @@ async def test_stale_lock_with_active_chain_is_left_alone(
     same ticket) means the lock is still load-bearing — don't release."""
     ws = await _make_workspace(db_session)
     run_id = await _insert_dispatch_audit(
-        db_session, workspace_id=ws, ticket_ref="PAC-99"
+        db_session,
+        workspace_id=ws,
+        ticket_ref="PAC-99",
+        project_id="proj-active",
     )
-    # The owning dispatch is old, but a more recent dispatch on the
-    # same ticket (cascade) keeps the chain alive.
     await db_session.execute(
         text(
             "UPDATE audit_log SET created_at = NOW() - INTERVAL '70 minutes' "
@@ -163,6 +165,7 @@ async def test_stale_lock_with_active_chain_is_left_alone(
             target_id="PAC-99",
             payload={
                 "ticket_ref": "PAC-99",
+                "project_id": "proj-active",
                 "fsm_stage": "code_review",
             },
         )
@@ -173,7 +176,7 @@ async def test_stale_lock_with_active_chain_is_left_alone(
         db_session,
         workspace_id=ws,
         key="project:proj-active",
-        run_id=run_id,
+        run_id=None,
         age_minutes=70,
     )
 
@@ -209,7 +212,7 @@ async def test_non_stale_lock_is_skipped(db_session) -> None:
         db_session,
         workspace_id=ws,
         key="project:proj-young",
-        run_id=run_id,
+        run_id=None,
         age_minutes=15,  # well under the 60-min floor
     )
 

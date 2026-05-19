@@ -213,8 +213,10 @@ async def test_install_callback_without_state_refreshes_known_install(
     )
     assert response.status_code in (302, 303, 307)
     location = response.headers["location"]
-    assert "step=repos" in location
-    assert "github=installed" in location
+    # Multi-workspace installs (0076): callback without ``state`` cannot
+    # pick a workspace — degrade to the wizard github step.
+    assert "step=github" in location
+    assert "error=missing_state" in location
 
     row = (
         await db_session.execute(

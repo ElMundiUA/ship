@@ -53,11 +53,13 @@ def _stale_open_pr(workspace_id, repo_full_name: str, number: int, days_old: int
 
 
 def _install_for(workspace_id, installation_id: int = 555):
+    from datetime import datetime, timezone
+
     return GitHubInstallation(
         workspace_id=workspace_id,
         installation_id=installation_id,
-        status="active",
         account_login="askslayer",
+        installed_at=datetime.now(timezone.utc),
     )
 
 
