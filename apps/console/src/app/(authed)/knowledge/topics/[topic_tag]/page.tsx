@@ -25,13 +25,17 @@ import remarkGfm from "remark-gfm";
 
 import { ApiUnavailable } from "@/components/api-unavailable";
 import { PageBody, PageHeader } from "@/components/app-shell";
+import { ScopePill } from "@/components/scope-pill";
 import {
+  type ApiActivatedRepo,
   type ApiClaimSummary,
   type ApiTopicViewDetail,
   ApiHttpError,
   getTopicView,
+  listActivatedRepos,
 } from "@/lib/api/client";
 import {
+  getCachedMe,
   getCachedSessionToken,
   getCachedWorkspaces,
 } from "@/lib/api/session-cache.server";
@@ -47,10 +51,21 @@ type RouteParams = Promise<{ topic_tag: string }>;
 type SearchParams = Promise<Record<string, string | string[] | undefined>>;
 
 
+// Per ELS-117 AC3: every ``PageHeader`` branch on this route must
+// carry the same ``ScopePill`` the index page does, so wired e2e
+// asserts ``getByTestId("scope-pill")`` on the topic detail page
+// land on a rendered DOM node rather than a 5s timeout.
+type ScopeCtx = {
+  workspaceName: string;
+  repos: ApiActivatedRepo[];
+  me: Awaited<ReturnType<typeof getCachedMe>>;
+};
+
+
 type LoadResult =
-  | { status: "live"; view: ApiTopicViewDetail; workspaceName: string }
-  | { status: "missing" }
-  | { status: "unavailable"; reason: string };
+  | { status: "live"; view: ApiTopicViewDetail; scope: ScopeCtx }
+  | { status: "missing"; scope: ScopeCtx }
+  | { status: "unavailable"; reason: string; scope: ScopeCtx };
 
 
 async function load(
@@ -68,21 +83,62 @@ async function load(
   const resolved = await getResolvedWorkspaceId(searchParams, workspaceRows);
   const workspace = pickWorkspace(workspaceRows, resolved);
 
-  try {
-    const view = await getTopicView(workspace.id, topicTag, token);
-    return { status: "live", view, workspaceName: workspace.name };
-  } catch (err) {
-    if (err instanceof ApiHttpError && err.status === 401) {
-      redirect(
-        `/login?next=%2Fknowledge%2Ftopics%2F${encodeURIComponent(topicTag)}&reason=session_expired`,
-      );
-    }
-    if (err instanceof ApiHttpError && err.status === 404) {
-      return { status: "missing" };
-    }
-    const message = err instanceof Error ? err.message : "Could not load topic.";
-    return { status: "unavailable", reason: message };
+  // ScopePill needs ``workspaceName`` + ``repos`` + ``me`` regardless
+  // of the topic-view fetch outcome; fetch in parallel with the view
+  // so a 404 / 5xx on the view still gives us a populated header.
+  const [reposResult, meResult, viewResult] = await Promise.allSettled([
+    listActivatedRepos(workspace.id, token).catch(
+      () => [] as ApiActivatedRepo[],
+    ),
+    getCachedMe(),
+    getTopicView(workspace.id, topicTag, token),
+  ]);
+
+  const repos: ApiActivatedRepo[] =
+    reposResult.status === "fulfilled" ? reposResult.value : [];
+  const me = meResult.status === "fulfilled" ? meResult.value : null;
+  const scope: ScopeCtx = {
+    workspaceName: workspace.name,
+    repos,
+    me,
+  };
+
+  if (viewResult.status === "fulfilled") {
+    return { status: "live", view: viewResult.value, scope };
   }
+  const err = viewResult.reason;
+  if (err instanceof ApiHttpError && err.status === 401) {
+    redirect(
+      `/login?next=%2Fknowledge%2Ftopics%2F${encodeURIComponent(topicTag)}&reason=session_expired`,
+    );
+  }
+  if (err instanceof ApiHttpError && err.status === 404) {
+    return { status: "missing", scope };
+  }
+  const message = err instanceof Error ? err.message : "Could not load topic.";
+  return { status: "unavailable", reason: message, scope };
+}
+
+
+function renderScopePill(scope: ScopeCtx) {
+  return (
+    <ScopePill
+      workspaceName={scope.workspaceName}
+      repos={scope.repos.map((repo) => ({
+        id: repo.id,
+        full_name: repo.full_name,
+      }))}
+      me={
+        scope.me
+          ? {
+              id: scope.me.id,
+              email: scope.me.email,
+              display_name: scope.me.display_name,
+            }
+          : null
+      }
+    />
+  );
 }
 
 
@@ -97,10 +153,16 @@ export default async function TopicViewPage({
   const sp = (await (searchParams ?? Promise.resolve({}))) ?? {};
   const result = await load(topicTag, sp);
 
+  const scopePill = renderScopePill(result.scope);
+
   if (result.status === "unavailable") {
     return (
       <>
-        <PageHeader kicker="knowledge" title={topicTag} />
+        <PageHeader
+          kicker="knowledge"
+          title={topicTag}
+          scopePill={scopePill}
+        />
         <PageBody>
           <ApiUnavailable scope="knowledge" details={result.reason} />
         </PageBody>
@@ -111,7 +173,11 @@ export default async function TopicViewPage({
   if (result.status === "missing") {
     return (
       <>
-        <PageHeader kicker="knowledge" title={topicTag} />
+        <PageHeader
+          kicker="knowledge"
+          title={topicTag}
+          scopePill={scopePill}
+        />
         <PageBody>
           <p className="text-sm text-white/55">
             No topic view rendered for this tag yet. Either fewer than 3
@@ -129,7 +195,11 @@ export default async function TopicViewPage({
 
   return (
     <>
-      <PageHeader kicker="knowledge / topic" title={view.title} />
+      <PageHeader
+        kicker="knowledge / topic"
+        title={view.title}
+        scopePill={scopePill}
+      />
       <PageBody>
         <div className="mx-auto max-w-6xl space-y-12">
           <header className="space-y-2">
