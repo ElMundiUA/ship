@@ -338,7 +338,13 @@ function MailboxPreview({
   const isClosed = detail.status === "resolved" || detail.status === "dismissed";
 
   return (
-    <div className="flex min-h-[60vh] flex-col rounded-xl border border-white/[0.08] bg-white/[0.015]">
+    // Self-sized: header + body + footer stack tightly. Short letters
+    // (a 3-line refire-cap blocker) no longer leave a 600px void
+    // between the body and the action buttons. Long bodies cap at
+    // ~70vh and scroll internally so the footer stays in the
+    // viewport without forcing the operator to scroll past empty
+    // space first.
+    <div className="flex flex-col rounded-xl border border-white/[0.08] bg-white/[0.015]">
       <header className="border-b border-white/[0.06] px-6 py-4">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] uppercase tracking-[0.18em] text-white/45">
           <span>{meta?.label ?? detail.type}</span>
@@ -378,7 +384,7 @@ function MailboxPreview({
         </p>
       </header>
 
-      <div className="flex-1 overflow-y-auto px-6 py-5">
+      <div className="max-h-[70vh] overflow-y-auto px-6 py-5">
         {body ? (
           <MarkdownBlock>{body}</MarkdownBlock>
         ) : (
