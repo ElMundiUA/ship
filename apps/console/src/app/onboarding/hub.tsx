@@ -24,6 +24,7 @@
 
 import Link from "next/link";
 
+import { Badge, type BadgeTone } from "@/components/ui";
 import type { ApiActivatedRepo } from "@/lib/api/client";
 
 import {
@@ -162,10 +163,17 @@ export function OnboardingHub({
         <WorkspaceDefaultsPanel initial={workspaceDefaults} />
       </div>
 
-      <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2">
-        {cards.map((card) => (
-          <HubCardView key={card.key} card={card} />
-        ))}
+      <div className="mt-6 rounded-2xl border border-white/[0.08] bg-white/[0.02]">
+        <div className="px-4 pb-2 pt-3">
+          <div className="text-[10px] font-bold uppercase tracking-wider text-white/40">
+            Setup sections
+          </div>
+        </div>
+        <ul className="divide-y divide-white/[0.06]">
+          {cards.map((card) => (
+            <HubRowView key={card.key} card={card} />
+          ))}
+        </ul>
       </div>
 
       <footer className="mt-10 flex items-center justify-between gap-3 border-t border-white/[0.08] pt-5">
@@ -193,37 +201,37 @@ interface HubCard {
   href: string;
 }
 
-function HubCardView({ card }: { card: HubCard }) {
-  const toneClass =
+function HubRowView({ card }: { card: HubCard }) {
+  const badgeTone: BadgeTone =
     card.status.tone === "ok"
-      ? "border-aqua/40 bg-aqua/[0.08] text-aqua"
+      ? "ok"
       : card.status.tone === "warn"
-        ? "border-amber-500/40 bg-amber-500/10 text-amber-200"
-        : "border-white/15 bg-white/[0.04] text-white/55";
+        ? "warn"
+        : "neutral";
   return (
-    <Link
-      href={card.href}
-      className="group flex flex-col rounded-2xl border border-white/[0.08] bg-white/[0.02] p-5 shadow-card transition hover:border-aqua/40 hover:bg-aqua/[0.04]"
-      data-testid="onboarding-hub-card"
-      data-card-key={card.key}
-    >
-      <header className="flex items-start justify-between gap-3">
-        <h2 className="font-display text-lg font-bold text-white group-hover:text-aqua">
-          {card.title}
-        </h2>
-        <span
-          className={`rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest ${toneClass}`}
-        >
-          {card.status.label}
+    <li>
+      <Link
+        href={card.href}
+        className="group flex items-start justify-between gap-3 px-4 py-3 transition hover:bg-aqua/[0.04]"
+        data-testid="onboarding-hub-card"
+        data-card-key={card.key}
+      >
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-semibold text-white group-hover:text-aqua">
+              {card.title}
+            </span>
+            <Badge tone={badgeTone}>{card.status.label}</Badge>
+          </div>
+          <p className="mt-0.5 text-[11px] leading-relaxed text-white/60">
+            {card.blurb}
+          </p>
+        </div>
+        <span className="shrink-0 text-[11px] font-semibold text-white/45 group-hover:text-aqua">
+          {card.cta}
         </span>
-      </header>
-      <p className="mt-2 flex-1 text-[12px] leading-relaxed text-white/65">
-        {card.blurb}
-      </p>
-      <span className="mt-4 inline-flex items-center text-[11px] font-semibold uppercase tracking-widest text-white/55 group-hover:text-aqua">
-        {card.cta}
-      </span>
-    </Link>
+      </Link>
+    </li>
   );
 }
 

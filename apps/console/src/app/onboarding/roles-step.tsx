@@ -35,6 +35,7 @@
 import Link from "next/link";
 import { useState } from "react";
 
+import { Badge } from "@/components/ui";
 import type { TrackerKind } from "@/lib/api/client";
 
 const AGENT_PROFILES: { value: string; label: string; hint: string }[] = [
@@ -125,9 +126,15 @@ export function RolesStep({ initial }: { initial: RolesStepInitial }) {
         .
       </p>
 
-      <div className="mt-7 space-y-4">
+      <div className="mt-7 rounded-2xl border border-white/[0.08] bg-white/[0.02]">
+        <div className="px-4 pb-2 pt-3">
+          <div className="text-[10px] font-bold uppercase tracking-wider text-white/40">
+            Workspace roles
+          </div>
+        </div>
+        <ul className="divide-y divide-white/[0.06]">
         {/* Tracker role */}
-        <RoleCard
+        <RoleRow
           label="Tracker"
           description="Where Ship files tickets, clarifications, and approvals."
           ready={trackerReady}
@@ -202,10 +209,10 @@ export function RolesStep({ initial }: { initial: RolesStepInitial }) {
               Couldn&apos;t save tracker ({trackerError}).
             </p>
           )}
-        </RoleCard>
+        </RoleRow>
 
         {/* Documentation role — read-only for now */}
-        <RoleCard
+        <RoleRow
           label="Documentation"
           description="Where curated knowledge buckets live."
           ready={initial.docsCandidates.length > 0}
@@ -235,10 +242,10 @@ export function RolesStep({ initial }: { initial: RolesStepInitial }) {
               )}
             </div>
           )}
-        </RoleCard>
+        </RoleRow>
 
         {/* Default agent */}
-        <RoleCard
+        <RoleRow
           label="Default agent"
           description="Which coding agent gets called when a process state doesn't override."
           ready={agentReady}
@@ -299,10 +306,10 @@ export function RolesStep({ initial }: { initial: RolesStepInitial }) {
               Couldn&apos;t save default agent ({agentError}).
             </p>
           )}
-        </RoleCard>
+        </RoleRow>
 
         {/* Orchestrator — read-only */}
-        <RoleCard
+        <RoleRow
           label="Code orchestrator"
           description="Where pipelines execute. Only GitHub Actions today; GitLab CI / Jenkins are on the roadmap."
           ready={true}
@@ -311,7 +318,8 @@ export function RolesStep({ initial }: { initial: RolesStepInitial }) {
             <strong className="text-white">GitHub Actions</strong> —
             tied to the App you installed in step 1. No action needed.
           </p>
-        </RoleCard>
+        </RoleRow>
+        </ul>
       </div>
 
       <div className="mt-8 flex flex-wrap items-center justify-between gap-3 border-t border-white/[0.08] pt-5">
@@ -334,10 +342,10 @@ export function RolesStep({ initial }: { initial: RolesStepInitial }) {
               initial.workspaceId,
             )}`}
             data-testid="onboarding-roles-continue"
-            className={`rounded-full px-4 py-2 text-xs font-bold transition ${
+            className={`rounded-md px-3 py-1.5 text-sm font-semibold transition ${
               allReady
-                ? "border border-aqua/40 bg-aqua/[0.08] text-aqua hover:bg-aqua/[0.16]"
-                : "border border-white/[0.08] bg-white/[0.02] text-white/40 pointer-events-none"
+                ? "bg-aqua/15 text-aqua hover:bg-aqua/25"
+                : "bg-white/[0.02] text-white/40 pointer-events-none"
             }`}
           >
             Continue →
@@ -348,7 +356,7 @@ export function RolesStep({ initial }: { initial: RolesStepInitial }) {
   );
 }
 
-function RoleCard({
+function RoleRow({
   label,
   description,
   ready,
@@ -360,25 +368,19 @@ function RoleCard({
   children: React.ReactNode;
 }) {
   return (
-    <div className="rounded-2xl border border-white/[0.08] bg-white/[0.02] p-5 shadow-card">
+    <li className="px-4 py-3">
       <header className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="font-display text-base font-bold text-white">
-            {label}
-          </h2>
-          <p className="mt-0.5 text-[11px] text-white/55">{description}</p>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-semibold text-white">{label}</span>
+            <Badge tone={ready ? "ok" : "warn"}>
+              {ready ? "ready" : "needed"}
+            </Badge>
+          </div>
+          <p className="mt-0.5 text-[11px] text-white/60">{description}</p>
         </div>
-        <span
-          className={`rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest ${
-            ready
-              ? "border-aqua/40 bg-aqua/[0.08] text-aqua"
-              : "border-amber-500/40 bg-amber-500/10 text-amber-200"
-          }`}
-        >
-          {ready ? "ready" : "needed"}
-        </span>
       </header>
-      <div className="mt-3">{children}</div>
-    </div>
+      <div className="mt-2">{children}</div>
+    </li>
   );
 }
