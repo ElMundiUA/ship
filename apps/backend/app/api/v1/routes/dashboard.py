@@ -340,6 +340,41 @@ def _match_pr_for_ticket(
     return None
 
 
+async def _dismiss_existing_stuck_pr_letters(
+    session: AsyncSession,
+    workspace_id: uuid.UUID,
+    now: datetime,
+) -> None:
+    """Sunset the legacy ``stuck_pr`` inbox mirror.
+
+    The mirror filed inbox rows for every PR with ``no activity 24h+``
+    on every dashboard render. Operators complained that the row was
+    noise: stale PRs already show on the dashboard widget, and the
+    FSM machinery files higher-signal blocker letters (refire_capped /
+    runner_fail_loop / dev_not_converging / blocked_cascade_exhausted)
+    when the chain genuinely needs operator attention.
+
+    Drop the mirror entirely; this helper auto-resolves any open
+    ``stuck_pr`` rows that previous renders left behind so the inbox
+    empties out within one render cycle. Auto-redispatch of stuck PRs
+    that lack a corresponding FSM blocker is tracked as follow-up
+    work (todo #220).
+    """
+    open_stuck = (
+        await session.execute(
+            select(InboxItem).where(
+                InboxItem.workspace_id == workspace_id,
+                InboxItem.source_table == "stuck_pr",
+                InboxItem.status.in_(_INBOX_OPEN),
+            )
+        )
+    ).scalars().all()
+    for item in open_stuck:
+        item.status = "dismissed"
+        item.resolution = "stuck_pr_mirror_retired"
+        item.resolved_at = now
+
+
 async def _mirror_stuck_prs_to_inbox(
     session: AsyncSession,
     workspace_id: uuid.UUID,
@@ -573,7 +608,16 @@ async def get_ops_dashboard(
         if pr_updated_at is not None and pr_updated_at < stuck_cutoff:
             stuck_prs.append(pr)
 
-    await _mirror_stuck_prs_to_inbox(session, workspace_id, stuck_prs, now)
+    # Stuck PRs surface as a widget on the dashboard itself; mirroring
+    # them into the inbox was duplicate noise — the FSM machinery
+    # already files refire_capped / runner_fail_loop / dev_not_
+    # converging / blocked_cascade_exhausted blocker letters when the
+    # chain genuinely needs operator attention. For PRs that go quiet
+    # without an FSM-side blocker, the right fix is auto-redispatch
+    # (follow-up #220) — not another inbox letter. Dismiss any rows
+    # the previous mirror created so the inbox empties out on the
+    # next render.
+    await _dismiss_existing_stuck_pr_letters(session, workspace_id, now)
     await session.flush()
 
     broken_interventions = [
