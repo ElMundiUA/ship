@@ -639,6 +639,26 @@ async def _looks_like_dev_not_converging(
     the ticket until an operator clears it.
     """
     cutoff = datetime.now(timezone.utc) - RUNNER_FAIL_WINDOW
+    # Picker-null exclusion — mirror the runner-fail detector. If the
+    # picker is bailing the ticket cleanly (refire-cap / overlay-frozen
+    # / priority-skipped), the operator already has a refire-cap letter
+    # with the same intent. Don't double-file. Same window as the rest
+    # of the check.
+    picker_null = (
+        await session.execute(
+            select(AuditLog.id)
+            .where(
+                AuditLog.workspace_id == workspace_id,
+                AuditLog.action == "dispatch.project_lock_released",
+                AuditLog.target_id == ticket_ref,
+                AuditLog.created_at >= cutoff,
+                AuditLog.payload["via"].astext.like("picker_%"),
+            )
+            .limit(1)
+        )
+    ).first()
+    if picker_null is not None:
+        return False
     # Cross-stage reviewer block count. Same JSONB-cast filter shape
     # the refire-cap counter uses.
     review_blocks = (

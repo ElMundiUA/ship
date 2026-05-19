@@ -548,6 +548,48 @@ async def test_below_block_threshold_is_not_dev_not_converging(
 
 
 @pytest.mark.asyncio
+async def test_picker_null_release_excludes_from_dev_not_converging(
+    db_session, seed_workspace
+) -> None:
+    """A ticket that's in refire-cap purgatory / overlay-frozen /
+    priority-skipped already has a refire-cap blocker letter — the
+    dev-not-converging detector must NOT double-file. Mirror of the
+    runner-fail exclusion semantics."""
+    _, _, ws = seed_workspace
+    for i in range(DEV_NOT_CONVERGING_REVIEW_BLOCKS):
+        db_session.add(
+            _stage_finish_row(
+                ws.id, "ELS-803",
+                ago=timedelta(hours=1 + i),
+                stage="code_review",
+                outcome="blocked",
+            )
+        )
+    for i in range(DEV_NOT_CONVERGING_DEV_CYCLES):
+        db_session.add(
+            _stage_finish_row(
+                ws.id, "ELS-803",
+                ago=timedelta(hours=1 + i, minutes=15),
+                stage="dev_implementation",
+                outcome="ready_next_step",
+            )
+        )
+    db_session.add(
+        _picker_null_release(
+            ws.id, "ELS-803",
+            ago=timedelta(minutes=30),
+            via="picker_refire_capped",
+        )
+    )
+    await db_session.flush()
+
+    assert (
+        await _looks_like_dev_not_converging(db_session, ws.id, "ELS-803")
+        is False
+    )
+
+
+@pytest.mark.asyncio
 async def test_file_dev_not_converging_blocker_creates_one_row(
     db_session, seed_workspace
 ) -> None:
