@@ -57,7 +57,7 @@ export function RepoResultCard({
       data-testid="onboarding-done-repo-card"
       data-repo-id={repo?.id ?? ""}
       data-repo-full-name={fullName ?? ""}
-      className="rounded-2xl border border-white/10 bg-white/[0.04] p-5 backdrop-blur-xl shadow-card"
+      className="rounded-2xl border border-white/[0.08] bg-white/[0.04] p-5 backdrop-blur-xl shadow-card"
     >
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
@@ -79,7 +79,7 @@ export function RepoResultCard({
           </p>
         </div>
         {result.tracker_kind && (
-          <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] uppercase tracking-widest text-white/65">
+          <span className="rounded-full border border-white/[0.08] bg-white/[0.04] px-2 py-0.5 text-[10px] uppercase tracking-widest text-white/65">
             tracker · {result.tracker_kind}
           </span>
         )}

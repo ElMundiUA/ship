@@ -525,23 +525,13 @@ export default async function OnboardingPage({
   }
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-ink text-white">
-      <div
-        aria-hidden
-        className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(60%_60%_at_15%_15%,rgba(255,107,107,0.18),transparent),radial-gradient(50%_50%_at_85%_15%,rgba(178,118,255,0.18),transparent),radial-gradient(70%_70%_at_60%_95%,rgba(118,255,217,0.15),transparent)]"
-      />
-      <div
-        aria-hidden
-        className="pointer-events-none absolute inset-0 -z-10 opacity-[0.06] [background-image:linear-gradient(rgba(255,255,255,0.6)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.6)_1px,transparent_1px)] [background-size:48px_48px]"
-      />
-
-      <header className="mx-auto flex w-full max-w-5xl items-center justify-between px-6 py-6">
-        <Link href="/" className="flex items-center gap-2 font-display text-lg font-bold">
-          <span className="grid h-8 w-8 place-items-center rounded-lg bg-gradient-to-br from-coral via-lilac to-aqua text-ink">
-            S
-          </span>
-          Ship
-        </Link>
+    // ELS-183 (W7) — marketing-style chrome stripped 2026-05-19. The
+    // wizard now sits inside the regular Console layout vocabulary
+    // (no radial-gradient background, no 48px grid overlay, no
+    // duplicate Ship brand lockup — `(authed)/layout` already renders
+    // the sidebar and identity).
+    <div className="min-h-screen bg-ink text-white">
+      <header className="mx-auto flex w-full max-w-5xl items-center justify-end px-6 py-6">
         {sessionToken && (
           <Link href="/" className="text-xs text-white/55 hover:text-white">
             Skip to dashboard →
@@ -696,7 +686,7 @@ function Stepper({
                   ? "border-aqua/70 bg-aqua/15 text-aqua"
                   : state === "done"
                   ? "border-aqua/40 bg-aqua/30 text-ink group-hover:border-aqua/70"
-                  : "border-white/15 bg-white/[0.03] text-white/55 group-hover:border-white/35 group-hover:text-white/85")
+                  : "border-white/15 bg-white/[0.02] text-white/55 group-hover:border-white/35 group-hover:text-white/85")
               }
             >
               {state === "done" ? "✓" : i + 1}
@@ -779,7 +769,7 @@ function GitHubStep({
       <p className="font-mono text-[11px] uppercase tracking-[0.3em] text-aqua/85">
         Step 1 of 5 &middot; Connect your code
       </p>
-      <h1 className="mt-2 font-display text-4xl font-bold leading-tight">
+      <h1 className="mt-2 font-display text-2xl font-bold leading-tight">
         {installed ? "Ship is installed on GitHub." : "Install Ship on GitHub."}
       </h1>
       <p className="mt-3 max-w-2xl text-sm leading-relaxed text-white/70">
@@ -821,7 +811,7 @@ function GitHubStep({
             href="https://github.com/settings/installations"
             target="_blank"
             rel="noopener noreferrer"
-            className="rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-5 py-2.5 text-sm font-bold text-ink shadow-glow transition hover:brightness-110"
+            className="rounded-md bg-aqua/15 px-3 py-1.5 text-sm font-semibold text-aqua transition hover:bg-aqua/25"
           >
             Manage on GitHub &rarr;
           </a>
@@ -867,7 +857,7 @@ function GitHubStep({
           <button
             type="submit"
             data-testid="onboarding-install-github"
-            className="rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-5 py-2.5 text-sm font-bold text-ink shadow-glow transition hover:brightness-110"
+            className="rounded-md bg-aqua/15 px-3 py-1.5 text-sm font-semibold text-aqua transition hover:bg-aqua/25"
           >
             Install Ship on GitHub &rarr;
           </button>
@@ -892,7 +882,7 @@ function GitHubStep({
           ].map(([t, b]) => (
             <li
               key={t}
-              className="rounded-xl border border-white/10 bg-white/[0.03] p-3"
+              className="rounded-xl border border-white/[0.08] bg-white/[0.02] p-3"
             >
               <div className="font-semibold text-white">{t}</div>
               <div className="mt-1 text-[11px] text-white/55">{b}</div>
@@ -931,7 +921,7 @@ function ReposStep({
       <p className="font-mono text-[11px] uppercase tracking-[0.3em] text-aqua/85">
         Step 2 of 5 &middot; Pick repos
       </p>
-      <h1 className="mt-2 font-display text-4xl font-bold leading-tight">
+      <h1 className="mt-2 font-display text-2xl font-bold leading-tight">
         Which repos should Ship watch?
       </h1>
       <p className="mt-3 max-w-2xl text-sm leading-relaxed text-white/70">
@@ -962,7 +952,7 @@ function ReposStep({
       )}
 
       {available !== null && repos.length === 0 && (
-        <div className="mt-5 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-xs text-white/70">
+        <div className="mt-5 rounded-xl border border-white/[0.08] bg-white/[0.02] px-4 py-3 text-xs text-white/70">
           The Ship app is installed but it can&apos;t see any repos yet. Open
           the install page on GitHub and grant access to at least one
           repository, then refresh.
@@ -986,7 +976,7 @@ function ReposStep({
             new landing pad after this form posts.
           */}
 
-          <fieldset className="space-y-2 rounded-2xl border border-white/10 bg-white/[0.025] p-3 max-h-[420px] overflow-y-auto">
+          <fieldset className="space-y-2 rounded-2xl border border-white/[0.08] bg-white/[0.025] p-3 max-h-[420px] overflow-y-auto">
             <legend className="px-2 text-[11px] font-bold uppercase tracking-widest text-white/55">
               {repos.length} visible repo{repos.length === 1 ? "" : "s"}
             </legend>
@@ -1045,7 +1035,7 @@ function ReposStep({
             <button
               type="submit"
               data-testid="onboarding-wire-repos"
-              className="rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-4 py-2.5 text-sm font-bold text-ink shadow-glow transition hover:brightness-110"
+              className="rounded-md bg-aqua/15 px-3 py-1.5 text-sm font-semibold text-aqua transition hover:bg-aqua/25"
             >
               Wire selected repos &rarr;
             </button>
@@ -1171,7 +1161,7 @@ function TrackerStep({
       <p className="font-mono text-[11px] uppercase tracking-[0.3em] text-aqua/85">
         Step 3 of 5 &middot; Integrations
       </p>
-      <h1 className="mt-2 font-display text-4xl font-bold leading-tight">
+      <h1 className="mt-2 font-display text-2xl font-bold leading-tight">
         Connect your tools.
       </h1>
       <p className="mt-3 max-w-2xl text-sm leading-relaxed text-white/70">
@@ -1251,7 +1241,7 @@ function TrackerStep({
             className={`flex h-full flex-col rounded-2xl border p-4 backdrop-blur-xl shadow-card transition ${
               connected
                 ? "border-aqua/50 bg-aqua/[0.07]"
-                : "border-white/10 bg-white/[0.03] hover:border-aqua/40"
+                : "border-white/[0.08] bg-white/[0.02] hover:border-aqua/40"
             }`}
             suppressHydrationWarning
           >
@@ -1275,7 +1265,7 @@ function TrackerStep({
                 className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-widest ${
                   connected
                     ? "border-aqua/35 bg-aqua/10 text-aqua"
-                    : "border-white/10 bg-white/[0.04] text-white/55"
+                    : "border-white/[0.08] bg-white/[0.04] text-white/55"
                 }`}
               >
                 {connected ? "Connected" : tile.tag}
@@ -1295,7 +1285,7 @@ function TrackerStep({
                       name={field.name}
                       type={field.type ?? "text"}
                       placeholder={field.placeholder}
-                      className="w-full rounded border border-white/10 bg-white/[0.04] px-2 py-1.5 text-xs text-white outline-none focus:border-aqua/40"
+                      className="w-full rounded border border-white/[0.08] bg-white/[0.04] px-2 py-1.5 text-xs text-white outline-none focus:border-aqua/40"
                       suppressHydrationWarning
                     />
                   </label>
@@ -1305,7 +1295,7 @@ function TrackerStep({
             <button
               type="submit"
               disabled={connected || tile.id === "github"}
-              className="mt-4 rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-4 py-2 text-xs font-bold text-ink shadow-glow transition hover:brightness-110 disabled:cursor-default disabled:bg-none disabled:bg-aqua/15 disabled:text-aqua disabled:shadow-none"
+              className="mt-4 rounded-md bg-aqua/15 px-3 py-1.5 text-sm font-semibold text-aqua transition hover:bg-aqua/25 disabled:cursor-default disabled:bg-aqua/10 disabled:text-aqua/60"
             >
               {connected
                 ? tile.id === "github"
@@ -1328,7 +1318,7 @@ function TrackerStep({
       <form
         action="/api/onboard/tracker-install"
         method="POST"
-        className="mt-7 flex items-center justify-between gap-3 border-t border-white/10 pt-5"
+        className="mt-7 flex items-center justify-between gap-3 border-t border-white/[0.08] pt-5"
         suppressHydrationWarning
       >
         <input type="hidden" name="ws" value={wsId} suppressHydrationWarning />

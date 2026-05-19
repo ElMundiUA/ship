@@ -41,6 +41,7 @@ import type {
   ApiWizardSeedResult,
   TrackerKind,
 } from "@/lib/api/client";
+import { Badge, type BadgeTone } from "@/components/ui";
 
 export interface RepoCardInitial {
   repo: {
@@ -189,7 +190,7 @@ export function RepoCard({
 
   return (
     <section
-      className="rounded-2xl border border-white/10 bg-white/[0.03] p-5 shadow-card"
+      className="rounded-2xl border border-white/[0.08] bg-white/[0.02] p-5 shadow-card"
       data-testid="onboarding-confirm-repo-card"
       data-repo-id={initial.repo.id}
       data-repo-full-name={initial.repo.full_name}
@@ -233,12 +234,26 @@ export function RepoCard({
             )}
           </div>
         </div>
-        <ReadinessBadge
-          ready={readyToSeed && trackerReady}
-          missingSecrets={missingRequiredSecrets.length}
-          trackerReady={trackerReady}
-          updateAvailable={seedState === "update_available"}
-        />
+        {(() => {
+          const ready = readyToSeed && trackerReady;
+          const updateAvailable = seedState === "update_available";
+          const missingSecrets = missingRequiredSecrets.length;
+          let tone: BadgeTone = "neutral";
+          let label = "pending";
+          if (updateAvailable) {
+            tone = "warn";
+            label = "update available";
+          } else if (ready) {
+            tone = "ok";
+            label = "ready";
+          } else if (missingSecrets > 0) {
+            tone = "err";
+            label = `${missingSecrets} secret${missingSecrets === 1 ? "" : "s"} missing`;
+          } else if (!trackerReady) {
+            label = "no tracker";
+          }
+          return <Badge tone={tone}>{label}</Badge>;
+        })()}
       </header>
 
       {seedState === "update_available" && (
@@ -294,8 +309,8 @@ export function RepoCard({
             const stateClass = selected
               ? "border-aqua/60 bg-aqua/[0.1] text-aqua"
               : disabled
-                ? "border-white/10 bg-white/[0.02] text-white/30 cursor-not-allowed"
-                : "border-white/10 bg-white/[0.04] text-white/70 hover:border-aqua/30";
+                ? "border-white/[0.08] bg-white/[0.02] text-white/30 cursor-not-allowed"
+                : "border-white/[0.08] bg-white/[0.04] text-white/70 hover:border-aqua/30";
             return (
               <button
                 key={k}
@@ -353,7 +368,7 @@ export function RepoCard({
                 onChange={(e) =>
                   setTrackerDraft((d) => ({ ...d, team: e.target.value }))
                 }
-                className="mt-2 w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs text-white"
+                className="mt-2 w-full rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-1.5 text-xs text-white"
               >
                 <option value="">— Pick a Linear team —</option>
                 {opts.map((opt) => (
@@ -373,7 +388,7 @@ export function RepoCard({
             onChange={(e) =>
               setTrackerDraft((d) => ({ ...d, project: e.target.value }))
             }
-            className="mt-2 w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs text-white placeholder-white/35"
+            className="mt-2 w-full rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-1.5 text-xs text-white placeholder-white/35"
           />
         )}
 
@@ -480,7 +495,7 @@ export function RepoCard({
             return (
               <div
                 key={a.slug}
-                className="rounded-xl border border-white/10 bg-white/[0.02] p-3"
+                className="rounded-xl border border-white/[0.08] bg-white/[0.02] p-3"
               >
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="min-w-0">
@@ -551,7 +566,7 @@ export function RepoCard({
                           [a.slug]: e.target.value,
                         }))
                       }
-                      className="min-w-[240px] flex-1 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-1.5 font-mono text-xs text-white placeholder-white/35"
+                      className="min-w-[240px] flex-1 rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-1.5 font-mono text-xs text-white placeholder-white/35"
                     />
                     {hasDraft && (
                       <span className="text-[11px] text-white/45">
@@ -638,7 +653,7 @@ export function RepoCard({
       </fieldset>
 
       {/* ── Seed button ────────────────────────────────────────── */}
-      <footer className="mt-6 border-t border-white/10 pt-4">
+      <footer className="mt-6 border-t border-white/[0.08] pt-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-0 text-[11px] leading-snug text-white/55">
             {!readyToSeed ? (
@@ -648,9 +663,9 @@ export function RepoCard({
               </>
             ) : seedState === "update_available" ? (
               <>
-                Re-seed updates Ship's workflow and config files to{" "}
+                Re-seed updates Ship&apos;s workflow and config files to{" "}
                 <code className="text-white/60">v{current}</code>. Review
-                the PR diff like any other change — it's idempotent.
+                the PR diff like any other change — it&apos;s idempotent.
               </>
             ) : (
               <>
@@ -705,7 +720,7 @@ export function RepoCard({
               // them merge it themselves on github.com.
               setPendingSeed(body.result);
             }}
-            className="rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-4 py-2 text-xs font-bold text-ink shadow-glow transition hover:brightness-110 disabled:opacity-40"
+            className="rounded-md bg-aqua/15 px-3 py-1.5 text-sm font-semibold text-aqua transition hover:bg-aqua/25 disabled:cursor-default disabled:opacity-40"
           >
             {seedSaving
               ? "Opening PR..."
@@ -838,60 +853,6 @@ export function RepoCard({
     url.searchParams.set("repo_id", initial.repo.id);
     router.push(url.pathname + url.search);
   }
-}
-
-function ReadinessBadge({
-  ready,
-  missingSecrets,
-  trackerReady,
-  updateAvailable,
-}: {
-  ready: boolean;
-  missingSecrets: number;
-  trackerReady: boolean;
-  /**
-   * True when the repo's installed bundle is older than the
-   * server's canonical bundle. Wins over plain ``ready`` because
-   * "ready" plus an out-of-date workflow file is exactly the
-   * silent-broken state the dogfood failure on 2026-05-02 hit
-   * (canary on v0.5 stuck on legacy lane vocabulary while the
-   * server emitted routines).
-   */
-  updateAvailable?: boolean;
-}) {
-  if (updateAvailable) {
-    return (
-      <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest text-amber-200">
-        update available
-      </span>
-    );
-  }
-  if (ready) {
-    return (
-      <span className="rounded-full border border-aqua/40 bg-aqua/[0.08] px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest text-aqua">
-        ready
-      </span>
-    );
-  }
-  if (missingSecrets > 0) {
-    return (
-      <span className="rounded-full border border-coral/40 bg-coral/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest text-coral">
-        {missingSecrets} secret{missingSecrets === 1 ? "" : "s"} missing
-      </span>
-    );
-  }
-  if (!trackerReady) {
-    return (
-      <span className="rounded-full border border-white/15 bg-white/[0.04] px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest text-white/55">
-        no tracker
-      </span>
-    );
-  }
-  return (
-    <span className="rounded-full border border-white/15 bg-white/[0.04] px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest text-white/55">
-      pending
-    </span>
-  );
 }
 
 function pickConfig(config: Record<string, unknown>, key: string): string | undefined {
@@ -1031,7 +992,7 @@ function ActivationModal({
         className="absolute inset-0 bg-ink/80 backdrop-blur-sm"
         onClick={onDismiss}
       />
-      <div className="relative w-full max-w-md rounded-2xl border border-white/10 bg-ink p-6 shadow-card">
+      <div className="relative w-full max-w-md rounded-2xl border border-white/[0.08] bg-ink p-6 shadow-card">
         <p className="font-mono text-[10px] uppercase tracking-[0.3em] text-aqua/85">
           PR opened &middot; #{seed.pr_number}
         </p>
@@ -1089,7 +1050,7 @@ function ActivationModal({
             onClick={onActivate}
             disabled={activating || blockedMessage !== null}
             data-testid="onboarding-activate-confirm"
-            className="rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-4 py-2 text-xs font-bold text-ink shadow-glow transition hover:brightness-110 disabled:opacity-40"
+            className="rounded-md bg-aqua/15 px-3 py-1.5 text-sm font-semibold text-aqua transition hover:bg-aqua/25 disabled:cursor-default disabled:opacity-40"
           >
             {activating ? "Activating…" : "Activate Ship now →"}
           </button>

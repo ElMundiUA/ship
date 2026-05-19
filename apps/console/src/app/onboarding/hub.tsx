@@ -148,7 +148,7 @@ export function OnboardingHub({
       <p className="font-mono text-[11px] uppercase tracking-[0.3em] text-aqua/85">
         Onboarding
       </p>
-      <h1 className="mt-2 font-display text-4xl font-bold leading-tight">
+      <h1 className="mt-2 font-display text-2xl font-bold leading-tight">
         Workspace setup.
       </h1>
       <p className="mt-3 max-w-2xl text-sm leading-relaxed text-white/70">
@@ -168,7 +168,7 @@ export function OnboardingHub({
         ))}
       </div>
 
-      <footer className="mt-10 flex items-center justify-between gap-3 border-t border-white/10 pt-5">
+      <footer className="mt-10 flex items-center justify-between gap-3 border-t border-white/[0.08] pt-5">
         <Link
           href={`/?ws=${encodeURIComponent(workspaceId)}`}
           className="text-xs text-white/55 hover:text-white"
@@ -203,7 +203,7 @@ function HubCardView({ card }: { card: HubCard }) {
   return (
     <Link
       href={card.href}
-      className="group flex flex-col rounded-2xl border border-white/10 bg-white/[0.03] p-5 shadow-card transition hover:border-aqua/40 hover:bg-aqua/[0.04]"
+      className="group flex flex-col rounded-2xl border border-white/[0.08] bg-white/[0.02] p-5 shadow-card transition hover:border-aqua/40 hover:bg-aqua/[0.04]"
       data-testid="onboarding-hub-card"
       data-card-key={card.key}
     >

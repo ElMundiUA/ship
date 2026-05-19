@@ -111,7 +111,7 @@ export function RolesStep({ initial }: { initial: RolesStepInitial }) {
       <p className="font-mono text-[11px] uppercase tracking-[0.3em] text-aqua/85">
         Step 4 of 5 &middot; Roles
       </p>
-      <h1 className="mt-2 font-display text-4xl font-bold leading-tight">
+      <h1 className="mt-2 font-display text-2xl font-bold leading-tight">
         Pick which tool plays which role.
       </h1>
       <p className="mt-3 max-w-2xl text-sm leading-relaxed text-white/70">
@@ -183,7 +183,7 @@ export function RolesStep({ initial }: { initial: RolesStepInitial }) {
                     setTrackerSaving(false);
                   }
                 }}
-                className="rounded-lg border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs text-white"
+                className="rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-1.5 text-xs text-white"
               >
                 <option value="">— pick a tracker —</option>
                 {trackerOptions.map((kind) => (
@@ -281,7 +281,7 @@ export function RolesStep({ initial }: { initial: RolesStepInitial }) {
                   setAgentSaving(false);
                 }
               }}
-              className="rounded-lg border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs text-white"
+              className="rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-1.5 text-xs text-white"
             >
               <option value="">— pick a default agent —</option>
               {AGENT_PROFILES.map((p) => (
@@ -314,7 +314,7 @@ export function RolesStep({ initial }: { initial: RolesStepInitial }) {
         </RoleCard>
       </div>
 
-      <div className="mt-8 flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-5">
+      <div className="mt-8 flex flex-wrap items-center justify-between gap-3 border-t border-white/[0.08] pt-5">
         <span className="text-[11px] text-white/45">
           {allReady
             ? "All set. Continue to review repos."
@@ -337,7 +337,7 @@ export function RolesStep({ initial }: { initial: RolesStepInitial }) {
             className={`rounded-full px-4 py-2 text-xs font-bold transition ${
               allReady
                 ? "border border-aqua/40 bg-aqua/[0.08] text-aqua hover:bg-aqua/[0.16]"
-                : "border border-white/10 bg-white/[0.03] text-white/40 pointer-events-none"
+                : "border border-white/[0.08] bg-white/[0.02] text-white/40 pointer-events-none"
             }`}
           >
             Continue →
@@ -360,7 +360,7 @@ function RoleCard({
   children: React.ReactNode;
 }) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5 shadow-card">
+    <div className="rounded-2xl border border-white/[0.08] bg-white/[0.02] p-5 shadow-card">
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="font-display text-base font-bold text-white">

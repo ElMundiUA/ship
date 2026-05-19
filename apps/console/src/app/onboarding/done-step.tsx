@@ -78,7 +78,7 @@ export async function DoneStep({
         Done
       </p>
       <h1
-        className="mt-2 font-display text-4xl font-bold leading-tight"
+        className="mt-2 font-display text-2xl font-bold leading-tight"
         data-testid="onboarding-done-title"
       >
         {repoCount === 0
@@ -111,7 +111,7 @@ export async function DoneStep({
 
       <WhatsNextGrid workspaceId={wsId} />
 
-      <footer className="mt-10 flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-5">
+      <footer className="mt-10 flex flex-wrap items-center justify-between gap-3 border-t border-white/[0.08] pt-5">
         <Link
           href={dashboardHref}
           className="rounded-md bg-aqua/15 px-3 py-1.5 text-sm font-semibold text-aqua transition hover:bg-aqua/25"
@@ -128,7 +128,7 @@ function NoReposEmptyState({ wsId }: { wsId: string | null }) {
     ? `/onboarding?step=repos&ws=${encodeURIComponent(wsId)}`
     : "/onboarding?step=repos";
   return (
-    <div className="mt-7 rounded-2xl border border-white/10 bg-white/[0.04] p-5 text-xs text-white/70 backdrop-blur-xl shadow-card">
+    <div className="mt-7 rounded-2xl border border-white/[0.08] bg-white/[0.04] p-5 text-xs text-white/70 backdrop-blur-xl shadow-card">
       <p>
         No activated repos to show. Activate at least one and run the
         seed PR — the wizard will land you back here once it&apos;s
