@@ -25,13 +25,16 @@ import remarkGfm from "remark-gfm";
 
 import { ApiUnavailable } from "@/components/api-unavailable";
 import { PageBody, PageHeader } from "@/components/app-shell";
+import { ScopePill } from "@/components/scope-pill";
 import {
   type ApiClaimSummary,
   type ApiTopicViewDetail,
   ApiHttpError,
   getTopicView,
+  listActivatedRepos,
 } from "@/lib/api/client";
 import {
+  getCachedMe,
   getCachedSessionToken,
   getCachedWorkspaces,
 } from "@/lib/api/session-cache.server";
@@ -47,11 +50,30 @@ type RouteParams = Promise<{ topic_tag: string }>;
 type SearchParams = Promise<Record<string, string | string[] | undefined>>;
 
 
-type LoadResult =
-  | { status: "live"; view: ApiTopicViewDetail; workspaceName: string }
-  | { status: "missing" }
-  | { status: "unavailable"; reason: string };
+type ScopeContext = {
+  workspaceName: string;
+  repos: { id: string; full_name: string }[];
+  me: {
+    id: string;
+    email: string;
+    display_name: string | null;
+  } | null;
+};
 
+type LoadResult =
+  | { status: "live"; view: ApiTopicViewDetail; scope: ScopeContext }
+  | { status: "missing"; scope: ScopeContext }
+  | { status: "unavailable"; reason: string; scope: ScopeContext };
+
+function buildScopePill(scope: ScopeContext) {
+  return (
+    <ScopePill
+      workspaceName={scope.workspaceName}
+      repos={scope.repos}
+      me={scope.me}
+    />
+  );
+}
 
 async function load(
   topicTag: string,
@@ -68,9 +90,28 @@ async function load(
   const resolved = await getResolvedWorkspaceId(searchParams, workspaceRows);
   const workspace = pickWorkspace(workspaceRows, resolved);
 
+  const [repos, me] = await Promise.all([
+    listActivatedRepos(workspace.id, token).catch(() => []),
+    getCachedMe(),
+  ]);
+  const scope: ScopeContext = {
+    workspaceName: workspace.name,
+    repos: repos.map((repo) => ({
+      id: repo.id,
+      full_name: repo.full_name,
+    })),
+    me: me
+      ? {
+          id: me.id,
+          email: me.email,
+          display_name: me.display_name,
+        }
+      : null,
+  };
+
   try {
     const view = await getTopicView(workspace.id, topicTag, token);
-    return { status: "live", view, workspaceName: workspace.name };
+    return { status: "live", view, scope };
   } catch (err) {
     if (err instanceof ApiHttpError && err.status === 401) {
       redirect(
@@ -78,10 +119,10 @@ async function load(
       );
     }
     if (err instanceof ApiHttpError && err.status === 404) {
-      return { status: "missing" };
+      return { status: "missing", scope };
     }
     const message = err instanceof Error ? err.message : "Could not load topic.";
-    return { status: "unavailable", reason: message };
+    return { status: "unavailable", reason: message, scope };
   }
 }
 
@@ -97,10 +138,12 @@ export default async function TopicViewPage({
   const sp = (await (searchParams ?? Promise.resolve({}))) ?? {};
   const result = await load(topicTag, sp);
 
+  const scopePill = buildScopePill(result.scope);
+
   if (result.status === "unavailable") {
     return (
       <>
-        <PageHeader kicker="knowledge" title={topicTag} />
+        <PageHeader kicker="knowledge" title={topicTag} scopePill={scopePill} />
         <PageBody>
           <div data-testid="topic-view-unavailable">
             <ApiUnavailable scope="knowledge" details={result.reason} />
@@ -113,7 +156,7 @@ export default async function TopicViewPage({
   if (result.status === "missing") {
     return (
       <>
-        <PageHeader kicker="knowledge" title={topicTag} />
+        <PageHeader kicker="knowledge" title={topicTag} scopePill={scopePill} />
         <PageBody>
           <p
             data-testid="topic-view-empty"
@@ -134,7 +177,11 @@ export default async function TopicViewPage({
 
   return (
     <>
-      <PageHeader kicker="knowledge / topic" title={view.title} />
+      <PageHeader
+        kicker="knowledge / topic"
+        title={view.title}
+        scopePill={scopePill}
+      />
       <PageBody>
         <div className="mx-auto max-w-6xl space-y-12">
           <header className="space-y-2">

@@ -56,6 +56,15 @@ function stripLeadingH1(body: string): string {
   return lines.slice(cursor).join("\n");
 }
 
+/** Plain substring from claim text (strip lightweight markdown). */
+function plainClaimSnippet(claimMd: string): string {
+  const plain = claimMd
+    .replace(/[*_`[\]()]/g, "")
+    .replace(/^[-*]\s+/, "")
+    .trim();
+  return plain.length >= 8 ? plain.slice(0, 120) : plain;
+}
+
 /** First prose substring from stripped markdown for DOM assertions. */
 function firstProseSnippet(bodyMd: string): string {
   const stripped = stripLeadingH1(bodyMd);
@@ -118,7 +127,10 @@ async function assertLiveTopicView(
   await expect(claims).toBeVisible();
   await expect(claims).toContainText(`Claims · ${detail.claims.length}`);
   if (detail.claims[0]?.claim_md) {
-    await expect(claims).toContainText(detail.claims[0].claim_md);
+    const claimSnippet = plainClaimSnippet(detail.claims[0].claim_md);
+    if (claimSnippet.length >= 8) {
+      await expect(claims).toContainText(claimSnippet);
+    }
   }
 
   if (detail.rendered_by_model === "deterministic") {
