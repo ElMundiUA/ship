@@ -80,6 +80,10 @@ from backend.app.integrations.gateway.tracker import TicketRef
 from backend.app.services.linear_provisioner import (
     OVERLAY_FREEZE_LABEL_PREFIXES,
 )
+from backend.app.services.file_overlap import (
+    build_file_coordination_warning,
+    load_file_coordination_warning_from_audit,
+)
 from backend.app.services.tracker_resolver import resolve_for_workspace
 
 
@@ -194,6 +198,9 @@ class TaskTicketOut(BaseModel):
     # agent run, the per-ticket ``body`` already carries the
     # immediate task brief).
     project_context: str | None = None
+    # ELS-154 — blockquote prepended by the CLI when sibling open PRs
+    # touch high-risk paths (migrations / hard path overlap).
+    file_coordination_warning: str | None = None
 
 
 class TaskResponseOut(BaseModel):
@@ -1136,6 +1143,30 @@ async def get_next_task(
         project_id=pick.get("project_id"),
         full=is_anchor_pick,
     )
+    file_coordination_warning = await load_file_coordination_warning_from_audit(
+        session,
+        workspace_id=workspace_id,
+        ticket_ref=ticket_ref,
+    )
+    if (
+        file_coordination_warning is None
+        and state == "dev_implementation"
+        and not is_anchor_pick
+    ):
+        settings = get_settings()
+        pick_project_id = pick.get("project_id")
+        if settings.enable_file_overlap_warnings and pick_project_id:
+            snapshot_fn = getattr(resolved.gateway, "get_ticket_snapshot", None)
+            overlap = await build_file_coordination_warning(
+                session,
+                workspace_id=workspace_id,
+                ticket_ref=ticket_ref,
+                project_id=str(pick_project_id),
+                tracker_kind=resolved.kind,
+                snapshot_fn=snapshot_fn,
+                settings=settings,
+            )
+            file_coordination_warning = overlap.warning_markdown
     return TaskResponseOut(
         fsm_stage=state,
         tracker_kind=resolved.kind,
@@ -1149,6 +1180,7 @@ async def get_next_task(
             state=str(pick.get("status") or "") or None,
             fsm_stage=state,
             project_context=project_context,
+            file_coordination_warning=file_coordination_warning,
         ),
     )
 
