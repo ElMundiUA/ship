@@ -340,6 +340,41 @@ def _match_pr_for_ticket(
     return None
 
 
+async def _dismiss_existing_stuck_pr_letters(
+    session: AsyncSession,
+    workspace_id: uuid.UUID,
+    now: datetime,
+) -> None:
+    """Sunset the legacy ``stuck_pr`` inbox mirror.
+
+    The mirror filed inbox rows for every PR with ``no activity 24h+``
+    on every dashboard render. Operators complained that the row was
+    noise: stale PRs already show on the dashboard widget, and the
+    FSM machinery files higher-signal blocker letters (refire_capped /
+    runner_fail_loop / dev_not_converging / blocked_cascade_exhausted)
+    when the chain genuinely needs operator attention.
+
+    Drop the mirror entirely; this helper auto-resolves any open
+    ``stuck_pr`` rows that previous renders left behind so the inbox
+    empties out within one render cycle. Auto-redispatch of stuck PRs
+    that lack a corresponding FSM blocker is tracked as follow-up
+    work (todo #220).
+    """
+    open_stuck = (
+        await session.execute(
+            select(InboxItem).where(
+                InboxItem.workspace_id == workspace_id,
+                InboxItem.source_table == "stuck_pr",
+                InboxItem.status.in_(_INBOX_OPEN),
+            )
+        )
+    ).scalars().all()
+    for item in open_stuck:
+        item.status = "dismissed"
+        item.resolution = "stuck_pr_mirror_retired"
+        item.resolved_at = now
+
+
 async def _mirror_stuck_prs_to_inbox(
     session: AsyncSession,
     workspace_id: uuid.UUID,
@@ -362,7 +397,48 @@ async def _mirror_stuck_prs_to_inbox(
             item.resolution = "dismissed"
             item.resolved_at = now
 
+    # Pre-fetch open blocker letters for THIS workspace so we can
+    # skip mirroring stuck PRs whose ticket is already surfaced as a
+    # higher-signal letter (refire_capped / runner_fail_loop /
+    # dev_not_converging / blocked_cascade_exhausted / clarification).
+    # Pre-fix the dashboard spammed "Stuck work: PR #N" on every
+    # render in addition to the per-failure-class blocker letter the
+    # FSM machinery already filed — operator saw the same situation
+    # twice and couldn't tell which one to act on. The blocker
+    # letter is authoritative; stuck_pr is the lower-signal
+    # observation.
+    open_blockers = (
+        await session.execute(
+            select(InboxItem.payload).where(
+                InboxItem.workspace_id == workspace_id,
+                InboxItem.status.in_(_INBOX_OPEN),
+                # ``improvement`` covered because fsm_self_heal phase-1
+                # files orphan-dispatch findings as improvements, not
+                # blockers — same situation as a stuck_pr from the
+                # operator's POV.
+                InboxItem.type.in_(("blocker", "clarification", "improvement")),
+            )
+        )
+    ).all()
+    tickets_already_surfaced: set[str] = set()
+    for (payload,) in open_blockers:
+        if not isinstance(payload, dict):
+            continue
+        ticket = payload.get("ticket_ref")
+        if isinstance(ticket, str) and ticket:
+            tickets_already_surfaced.add(ticket)
+
     for pr in stuck_prs:
+        # Skip mirror when the PR's source ticket already has an open
+        # blocker / clarification letter. Operator already has the
+        # actionable signal; stuck_pr would be duplicate noise.
+        # We extract the ticket ref from the PR title (e.g.
+        # ``feat(ELS-156): ...``) since stuck_pr rows don't carry a
+        # ticket_ref column.
+        ticket_ref = _ticket_ref_from_pr_title(pr.title or "")
+        if ticket_ref and ticket_ref in tickets_already_surfaced:
+            continue
+
         exists = await session.scalar(
             select(func.count(InboxItem.id)).where(
                 InboxItem.workspace_id == workspace_id,
@@ -384,12 +460,31 @@ async def _mirror_stuck_prs_to_inbox(
                     "kind": "stuck_pr",
                     "pr_number": pr.number,
                     "html_url": pr.html_url,
+                    "ticket_ref": ticket_ref,
                 },
                 status="new",
                 source_table="stuck_pr",
                 source_id=pr.id,
             )
         )
+
+
+_TICKET_REF_RE = re.compile(r"\b([A-Z][A-Z0-9]+-\d+)\b")
+
+
+def _ticket_ref_from_pr_title(title: str) -> str | None:
+    """Parse a Linear-style ticket ref (``ELS-156`` / ``PAC-23``) out
+    of a PR title like ``feat(ELS-156): file overlap warning``.
+
+    Returns the first match. PR titles from cursor-bot are templated
+    so first-match is reliable. Used by the stuck-PR mirror to
+    dedup against open blocker letters that carry the same ticket
+    ref in their payload.
+    """
+    if not title:
+        return None
+    m = _TICKET_REF_RE.search(title)
+    return m.group(1) if m else None
 
 
 @router.get("/ops", response_model=DashboardOpsOut)
@@ -513,7 +608,16 @@ async def get_ops_dashboard(
         if pr_updated_at is not None and pr_updated_at < stuck_cutoff:
             stuck_prs.append(pr)
 
-    await _mirror_stuck_prs_to_inbox(session, workspace_id, stuck_prs, now)
+    # Stuck PRs surface as a widget on the dashboard itself; mirroring
+    # them into the inbox was duplicate noise — the FSM machinery
+    # already files refire_capped / runner_fail_loop / dev_not_
+    # converging / blocked_cascade_exhausted blocker letters when the
+    # chain genuinely needs operator attention. For PRs that go quiet
+    # without an FSM-side blocker, the right fix is auto-redispatch
+    # (follow-up #220) — not another inbox letter. Dismiss any rows
+    # the previous mirror created so the inbox empties out on the
+    # next render.
+    await _dismiss_existing_stuck_pr_letters(session, workspace_id, now)
     await session.flush()
 
     broken_interventions = [
