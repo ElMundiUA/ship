@@ -351,6 +351,86 @@ async def _scan_one_workspace(
                 ref = row.get("id") or row.get("identifier")
                 if not ref:
                     continue
+
+                # Runner-fail cooldown — short-circuit BEFORE the
+                # "recent dispatch" check. Pre-fix the scan had the
+                # order reversed: any dispatch in the last 60min
+                # caused us to skip even the detection, so a ticket
+                # whose runner crashes every cron tick would never
+                # trip the loop check (the crash counts as a "recent
+                # dispatch" itself).
+                #
+                # Operator-facing letter exists in the last 24h →
+                # operator already decided how to handle this. The
+                # cron's job is to stay out of the way, not race the
+                # operator. Also release any project_lock the
+                # crashing ticket is currently holding so siblings
+                # can dispatch into the freed slot.
+                #
+                # askslayer/Visitor 2026-05-19: PAC-32 + PAC-13
+                # crash every cron tick, held two project_locks
+                # continuously, blocked 12 sibling PAC-* tickets
+                # entirely. C2 had filed letters but operator's
+                # resolve flipped them to status=resolved; the scan
+                # had no signal to stop re-firing. This cooldown
+                # honours both open and recently-resolved letters.
+                fail_letter_cutoff = (
+                    datetime.now(timezone.utc) - timedelta(hours=24)
+                )
+                fail_letter = (
+                    await session.execute(
+                        select(AuditLog.id)
+                        .where(
+                            AuditLog.workspace_id == install.workspace_id,
+                            AuditLog.action == "agent_run.dispatch",
+                            AuditLog.target_id == ref,
+                            AuditLog.created_at >= fail_letter_cutoff,
+                        )
+                        .limit(1)
+                    )
+                ).first()
+                from backend.app.db.models.inbox import InboxItem as _Inbox
+                runner_letter = (
+                    await session.execute(
+                        select(_Inbox.id, _Inbox.payload)
+                        .where(
+                            _Inbox.workspace_id == install.workspace_id,
+                            _Inbox.intake_handle == f"runner-fail:{ref}",
+                            _Inbox.created_at >= fail_letter_cutoff,
+                        )
+                        .limit(1)
+                    )
+                ).first()
+                if runner_letter is not None:
+                    # Free this ticket's project_lock if it's
+                    # holding one — siblings should be free to use
+                    # the slot. Find project_id from the most-recent
+                    # dispatch audit row.
+                    from sqlalchemy import text as _text
+                    recent_dispatch = (
+                        await session.execute(
+                            select(AuditLog.payload).where(
+                                AuditLog.workspace_id == install.workspace_id,
+                                AuditLog.action == "agent_run.dispatch",
+                                AuditLog.target_id == ref,
+                            ).order_by(AuditLog.created_at.desc()).limit(1)
+                        )
+                    ).first()
+                    if recent_dispatch is not None:
+                        proj = (recent_dispatch[0] or {}).get("project_id")
+                        if proj:
+                            await session.execute(
+                                _text(
+                                    "DELETE FROM agent_dispatch_locks "
+                                    "WHERE workspace_id=:ws AND key=:k"
+                                ),
+                                {
+                                    "ws": install.workspace_id,
+                                    "k": f"project:{proj}",
+                                },
+                            )
+                    continue
+
                 recent = (
                     await session.execute(
                         select(AuditLog.id)
