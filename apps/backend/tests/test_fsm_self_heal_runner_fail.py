@@ -172,6 +172,53 @@ async def test_finishes_via_payload_ticket_ref_also_count(
 
 
 @pytest.mark.asyncio
+async def test_refire_capped_ticket_is_excluded_from_runner_fail(
+    db_session, seed_workspace
+) -> None:
+    """False-positive shape caught on Ship-on-Ship 2026-05-19 right
+    after C2 first deploy. ELS-117 / ELS-119 / ELS-146 / ELS-155 each
+    had 3+ ``agent_run.dispatch`` rows with zero matching ``finish``
+    in the 4h window — looks like a runner-fail to C2's counter —
+    but actually the workflow *did* fire, shipctl called
+    ``_next_task``, and the picker returned null because
+    ``agent_run.refire_capped`` had already triggered. The runner
+    exited correctly with no work to do; not a crash. The refire-cap
+    path owns the operator surfacing with its own blocker letter,
+    so C2 must bail."""
+    _, _, ws = seed_workspace
+    # The shape that would normally trip C2: 3 dispatches, 0 finishes.
+    for i in range(3):
+        db_session.add(
+            _dispatch_row(ws.id, "ELS-117", ago=timedelta(hours=1 + i))
+        )
+    # The refire-cap audit row that owns the operator surfacing.
+    # Fires once per 24h cap window — older than the 4h C2 window,
+    # but still within 24h.
+    db_session.add(
+        AuditLog(
+            workspace_id=ws.id,
+            action="agent_run.refire_capped",
+            target_kind="ticket",
+            target_id="ELS-117",
+            created_at=datetime.now(timezone.utc) - timedelta(hours=8),
+            payload={
+                "fsm_stage": "code_review",
+                "fire_count": 3,
+                "limit": 3,
+                "window_hours": 24,
+            },
+        )
+    )
+    await db_session.flush()
+
+    # C2 must NOT fire — refire-cap owns this ticket.
+    assert (
+        await _looks_like_runner_fail_loop(db_session, ws.id, "ELS-117")
+        is False
+    )
+
+
+@pytest.mark.asyncio
 async def test_file_runner_fail_blocker_creates_one_row(
     db_session, seed_workspace
 ) -> None:

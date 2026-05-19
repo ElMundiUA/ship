@@ -409,7 +409,13 @@ async def _looks_like_runner_fail_loop(
     ticket in the same window, that path owns the operator
     surfacing — bail.
     """
-    cutoff = datetime.now(timezone.utc) - RUNNER_FAIL_WINDOW
+    # ``agent_run.refire_capped`` fires once per 24h cap window (the
+    # picker has an ``already_capped`` short-circuit). Use the wider
+    # window for the exclusion check, not the 4h runner-fail window,
+    # so a cap that triggered 8h ago still suppresses C2 — the
+    # refire-cap blocker letter is still open and the ticket is
+    # still in cap purgatory.
+    cap_exclusion_cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
     refire_capped = (
         await session.execute(
             select(AuditLog.id)
@@ -417,13 +423,14 @@ async def _looks_like_runner_fail_loop(
                 AuditLog.workspace_id == workspace_id,
                 AuditLog.action == "agent_run.refire_capped",
                 AuditLog.target_id == ticket_ref,
-                AuditLog.created_at >= cutoff,
+                AuditLog.created_at >= cap_exclusion_cutoff,
             )
             .limit(1)
         )
     ).first()
     if refire_capped is not None:
         return False
+    cutoff = datetime.now(timezone.utc) - RUNNER_FAIL_WINDOW
     dispatch_count = (
         await session.execute(
             select(AuditLog.id)
