@@ -3909,16 +3909,32 @@ async def finish_agent_run(
         #     once :func:`tracker.transition` runs further below.
         #
         # (B) ``stage_next`` is null — the agent finished blocked with
-        #     no cascade target. Pre-2026-05-19 this meant the picker
-        #     re-fired the same stage every tick until the 24h refire
-        #     cap kicked in (3 in 24h), producing a 24h ticket idle.
+        #     no cascade target. For REVIEW-style stages (where the
+        #     reviewer/validation/auto-merger agent is the gate and
+        #     a missing stage_next means "human needs to act"), this
+        #     is the dominant FSM bottleneck: picker re-fires the same
+        #     stage every tick until the 24h refire cap kicks in.
         #     Measured on Ship-on-Ship 2026-05-12..19: 77% of
-        #     ``code_review`` blocks were null-next, the dominant FSM
-        #     bottleneck. Treat as effectively ``needs_clarification``:
-        #     stamp ``needs:clarification`` on the ticket so the picker
-        #     skips, file a blocker inbox row immediately so the
-        #     operator can act in <1 minute instead of waiting 24h.
-        if not payload.stage_next and resolved is not None and payload.ticket_ref:
+        #     ``code_review`` blocks were null-next. Treat as
+        #     effectively ``needs_clarification``: stamp the label so
+        #     the picker skips + file a blocker inbox row immediately.
+        #
+        #     For non-review stages (dev_implementation transient
+        #     refire-loops), the picker's existing refire cap handles
+        #     the budget and we don't want an inbox row per dev retry
+        #     — keeps the legacy "transient blocked finishes stay in
+        #     audit log only" behavior intact (see
+        #     test_blocked_finish_does_not_create_inbox_row).
+        _BLOCKED_NO_NEXT_REVIEW_STAGES = {
+            "code_review", "pr_review", "validation",
+            "qa_manual", "qa_automation", "auto_merge",
+        }
+        if (
+            not payload.stage_next
+            and resolved is not None
+            and payload.ticket_ref
+            and payload.fsm_stage in _BLOCKED_NO_NEXT_REVIEW_STAGES
+        ):
             ref = _ticket_ref_from(resolved.kind, payload.ticket_ref)
             add_signal = getattr(resolved.gateway, "add_signal_label", None)
             if add_signal is not None:
