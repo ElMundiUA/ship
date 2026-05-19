@@ -6,6 +6,7 @@ import {
   InboxLaneFilterChips,
   useInboxLaneFilter,
 } from "@/components/inbox/inbox-lane-filters";
+import { MailboxKeyboardNav } from "@/components/inbox/mailbox-keyboard-nav";
 import { StaleBadge } from "@/components/inbox/stale-badge";
 import { EmptyState } from "@/components/ui";
 import { cn } from "@/lib/cn";
@@ -33,8 +34,16 @@ export function InboxMailboxListClient({
 }) {
   const { lane, setLane, visible, counts } = useInboxLaneFilter(items);
 
+  const hrefForId = (id: string) =>
+    buildSelectHref({ id, ownership, workspaceScope });
+
   return (
     <div className="flex min-h-[60vh] flex-col rounded-xl border border-white/[0.08] bg-white/[0.015]">
+      <MailboxKeyboardNav
+        itemIds={visible.map((i) => i.id)}
+        selectedId={selectedId}
+        buildHref={hrefForId}
+      />
       {ownershipTabs}
       <InboxLaneFilterChips
         allCount={items.length}

@@ -350,7 +350,10 @@ function MailboxPreview({
     // ~70vh and scroll internally so the footer stays in the
     // viewport without forcing the operator to scroll past empty
     // space first.
-    <div className="flex flex-col rounded-xl border border-white/[0.08] bg-white/[0.015]">
+    <div
+      className="flex flex-col rounded-xl border border-white/[0.08] bg-white/[0.015]"
+      data-mailbox-preview
+    >
       <header className="border-b border-white/[0.06] px-6 py-4">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] uppercase tracking-[0.18em] text-white/45">
           <span>{meta?.label ?? detail.type}</span>
