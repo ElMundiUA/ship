@@ -71,6 +71,31 @@ STALE_DISPATCH_WINDOW = timedelta(minutes=60)
 # the GH Actions logs.
 RUNNER_FAIL_THRESHOLD: Final[int] = 3
 RUNNER_FAIL_WINDOW = timedelta(hours=4)
+
+# ``dev_not_converging`` thresholds (post-mortem of Ship-on-Ship/
+# ELS-117/ELS-7/ELS-111, 2026-05-19). When a reviewer-style gate
+# (``code_review`` / ``validation`` / ``auto_merge``) blocks the same
+# ticket repeatedly AND the developer agent does re-run between each
+# block but the PR head SHA never changes (reviewer rejects the same
+# logic flaw each pass), the chain is in a "dev keeps cycling but not
+# pushing the fix" loop. Refire-cap catches the symptom (3 blocks
+# in 24h) but the diagnosis it ships ("breadcrumb label not added")
+# is wrong for this class — the breadcrumb IS being added, the
+# developer just isn't moving the diff.
+#
+# Detection shape: in the same 4h window the runner-fail detector
+# uses, look for ≥3 blocked finishes at reviewer-style stages AND
+# ≥2 ready_next_step finishes at ``dev_implementation``. The dev
+# successes prove the runner is alive (not a runner-fail loop) and
+# that dev is iterating; the reviewer blocks prove the fix isn't
+# landing. File a dedicated letter with action_items that point the
+# operator at the actual PR instead of a generic refire-cap blurb.
+DEV_NOT_CONVERGING_REVIEW_BLOCKS: Final[int] = 3
+DEV_NOT_CONVERGING_DEV_CYCLES: Final[int] = 2
+DEV_NOT_CONVERGING_REVIEW_STAGES: Final[frozenset[str]] = frozenset(
+    {"code_review", "validation", "auto_merge", "pr_review",
+     "qa_manual", "qa_automation"}
+)
 # Stages the backstop scan considers. We exclude ``self_heal`` /
 # decomposition (special chains) and the legacy intake-substage
 # names — those are handled by the labels-as-breadcrumb path.
@@ -365,6 +390,25 @@ async def _scan_one_workspace(
                     )
                     continue
 
+                # Dev-not-converging detection. Distinct from runner-
+                # fail: the runner IS calling /finish, the chain IS
+                # cycling reviewer→dev→reviewer, but the developer
+                # agent isn't pushing a fix that lands the reviewer's
+                # blocker. Caught on Ship-on-Ship/ELS-117/ELS-7/ELS-
+                # 111 2026-05-19 — 5 reviewer passes each on the same
+                # commit SHA, refire-cap firing but with a misleading
+                # "breadcrumb label not added" generic diagnosis. The
+                # dedicated letter points the operator at the PR with
+                # explicit "apply reviewer's fix manually / close +
+                # comment recipe / override" action_items.
+                if await _looks_like_dev_not_converging(
+                    session, install.workspace_id, ref
+                ):
+                    await _file_dev_not_converging_blocker(
+                        session, install.workspace_id, ref, stage
+                    )
+                    continue
+
                 # No fresh dispatch on this (ws, ticket) — re-fire.
                 await maybe_dispatch(
                     session,
@@ -564,6 +608,169 @@ async def _file_runner_fail_blocker(
             status="new",
             intake_handle=handle,
             intake_reason="runner_fail_loop",
+        )
+    )
+
+
+async def _looks_like_dev_not_converging(
+    session: AsyncSession,
+    workspace_id,
+    ticket_ref: str,
+) -> bool:
+    """Detect "reviewer keeps blocking + dev keeps cycling but doesn't
+    converge" loop.
+
+    Three conditions must all hold in :data:`RUNNER_FAIL_WINDOW`:
+
+    1. ≥ :data:`DEV_NOT_CONVERGING_REVIEW_BLOCKS` ``agent_run.finish``
+       rows with ``outcome=blocked`` at a reviewer-style stage
+       (:data:`DEV_NOT_CONVERGING_REVIEW_STAGES`) — reviewer keeps
+       rejecting the work.
+    2. ≥ :data:`DEV_NOT_CONVERGING_DEV_CYCLES` ``agent_run.finish``
+       rows with ``outcome=ready_next_step`` at ``dev_implementation``
+       — developer agent is alive and producing finishes (rules out
+       runner-fail; that detector owns zero-finish cases).
+    3. The picker-null exclusion (refire-cap / overlay / priority)
+       inherited via the caller-side checks isn't tripped — that's
+       handled before we reach the dev-not-converging check.
+
+    Returns True when all three hold. The caller files
+    :func:`_file_dev_not_converging_blocker` and skips re-dispatching
+    the ticket until an operator clears it.
+    """
+    cutoff = datetime.now(timezone.utc) - RUNNER_FAIL_WINDOW
+    # Cross-stage reviewer block count. Same JSONB-cast filter shape
+    # the refire-cap counter uses.
+    review_blocks = (
+        await session.execute(
+            select(AuditLog.id)
+            .where(
+                AuditLog.workspace_id == workspace_id,
+                AuditLog.action == "agent_run.finish",
+                AuditLog.created_at >= cutoff,
+                AuditLog.payload["outcome"].astext == "blocked",
+                AuditLog.payload["fsm_stage"].astext.in_(
+                    DEV_NOT_CONVERGING_REVIEW_STAGES
+                ),
+                (AuditLog.target_id == ticket_ref)
+                | (AuditLog.payload["ticket_ref"].astext == ticket_ref),
+            )
+        )
+    ).all()
+    if len(review_blocks) < DEV_NOT_CONVERGING_REVIEW_BLOCKS:
+        return False
+    dev_successes = (
+        await session.execute(
+            select(AuditLog.id)
+            .where(
+                AuditLog.workspace_id == workspace_id,
+                AuditLog.action == "agent_run.finish",
+                AuditLog.created_at >= cutoff,
+                AuditLog.payload["outcome"].astext == "ready_next_step",
+                AuditLog.payload["fsm_stage"].astext == "dev_implementation",
+                (AuditLog.target_id == ticket_ref)
+                | (AuditLog.payload["ticket_ref"].astext == ticket_ref),
+            )
+        )
+    ).all()
+    return len(dev_successes) >= DEV_NOT_CONVERGING_DEV_CYCLES
+
+
+async def _file_dev_not_converging_blocker(
+    session: AsyncSession,
+    workspace_id,
+    ticket_ref: str,
+    stage: str,
+) -> None:
+    """File one ``dev_not_converging`` blocker letter (dedup by
+    intake_handle).
+
+    Operator-facing diagnosis: the developer agent is alive and the
+    chain is cycling, but the reviewer's blocker isn't landing in the
+    PR diff. Letter body points at the underlying PR and gives the
+    operator three concrete next steps.
+    """
+    from backend.app.db.models.inbox import InboxItem
+
+    handle = f"dev-stuck:{ticket_ref}"
+    existing = (
+        await session.execute(
+            select(InboxItem.id).where(
+                InboxItem.workspace_id == workspace_id,
+                InboxItem.intake_handle == handle,
+                InboxItem.status == "new",
+            )
+        )
+    ).first()
+    if existing is not None:
+        return
+    session.add(
+        InboxItem(
+            workspace_id=workspace_id,
+            repo_id=None,
+            type="blocker",
+            title=(
+                f"{ticket_ref}: developer not converging — reviewer "
+                f"keeps rejecting at {stage}"
+            )[:300],
+            summary=(
+                f"In the last {int(RUNNER_FAIL_WINDOW.total_seconds() // 3600)}h "
+                f"the reviewer-style gate ({stage}) has blocked "
+                f"{ticket_ref} ≥{DEV_NOT_CONVERGING_REVIEW_BLOCKS}× and "
+                f"the developer agent successfully ran "
+                f"≥{DEV_NOT_CONVERGING_DEV_CYCLES}× between blocks — but "
+                f"the reviewer's blocker is not landing in the PR. The "
+                f"dev agent is iterating without converging. Read the "
+                f"reviewer's last comment on the PR, apply the fix "
+                f"manually (or close + comment a recipe on Linear), "
+                f"then resolve this letter."
+            )[:2000],
+            payload={
+                "ticket_ref": ticket_ref,
+                "fsm_stage": stage,
+                "resolution_mode": "single_choice",
+                "action_items": [
+                    {
+                        "id": "applied_manually",
+                        "kind": "choice",
+                        "label": "Applied reviewer fix manually",
+                        "hint": (
+                            "Operator pushed the diff the reviewer "
+                            "asked for. fsm_self_heal will re-pick "
+                            "on the next tick."
+                        ),
+                    },
+                    {
+                        "id": "closed_with_recipe",
+                        "kind": "choice",
+                        "label": "Closed PR, commented recipe on Linear",
+                        "hint": (
+                            "PR was too tangled to rescue; operator "
+                            "left an explicit fix recipe in a Linear "
+                            "comment so the next dev agent can pick "
+                            "up fresh."
+                        ),
+                    },
+                    {
+                        "id": "override_force_merge",
+                        "kind": "choice",
+                        "label": "Override reviewer / force merge",
+                        "hint": (
+                            "Reviewer was wrong; merge as-is and "
+                            "audit-trail the override."
+                        ),
+                    },
+                    {
+                        "id": "already_handled",
+                        "kind": "choice",
+                        "label": "Already handled",
+                        "hint": "Ticket cancelled / merged elsewhere / not actionable.",
+                    },
+                ],
+            },
+            status="new",
+            intake_handle=handle,
+            intake_reason="dev_not_converging",
         )
     )
 
