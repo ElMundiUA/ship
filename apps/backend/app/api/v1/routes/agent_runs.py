@@ -84,6 +84,7 @@ from backend.app.services.file_overlap import (
     build_file_coordination_warning,
     load_file_coordination_warning_from_audit,
 )
+from backend.app.services.file_overlap_telemetry import evaluate_file_overlap_honour
 from backend.app.services.tracker_resolver import resolve_for_workspace
 
 
@@ -4101,6 +4102,33 @@ async def finish_agent_run(
         )
         # ELS-142: lock release deferred to
         # ``maybe_release_project_lock_on_finish`` below.
+
+    if (
+        payload.outcome == "ready_next_step"
+        and payload.ticket_ref
+        and payload.fsm_stage == "dev_implementation"
+    ):
+        try:
+            honour_action = await evaluate_file_overlap_honour(
+                session,
+                workspace_id=workspace_id,
+                ticket_ref=payload.ticket_ref,
+                run_id=payload.run_id,
+                fsm_stage=payload.fsm_stage,
+                comment=payload.comment,
+                settings=settings,
+            )
+            if honour_action:
+                actions.append(f"audit:{honour_action}")
+        except Exception as exc:  # noqa: BLE001 — must not block finish
+            logger.warning(
+                "agent_run.finish: file_overlap honour failed ws=%s "
+                "ticket=%s run=%s err=%s",
+                workspace_id,
+                payload.ticket_ref,
+                payload.run_id,
+                exc,
+            )
 
     session.add(
         AuditLog(

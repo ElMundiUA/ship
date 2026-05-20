@@ -75,6 +75,7 @@ _ALLOWED_ACTION_PREFIXES = (
     "improvement.",
     "clarification.",
     "agent.",
+    "agent_dispatch.",
     "process.",
 )
 

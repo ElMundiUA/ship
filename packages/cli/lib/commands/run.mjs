@@ -330,7 +330,8 @@ async function _runCommandImpl(ctx, rest) {
   // 5) Mint a run_id + render prompt with finish-protocol values
   // already substituted so the agent can call /agent-runs/finish from
   // inside Cursor without holding any extra config.
-  const runId = `run_${crypto.randomBytes(8).toString("hex")}`;
+  const runId = (process.env.SHIP_RUN_ID || "").trim()
+    || `run_${crypto.randomBytes(8).toString("hex")}`;
   const renderedPrompt = renderPrompt({
     patternBody: roleBody,
     baseBody: systemBody,

@@ -223,7 +223,9 @@ from backend.app.services.tracker_fsm import (
 #         carries only repo metadata + API base + stack hints; the
 #         CLI's ``--routine X`` collapses straight to specialist
 #         resolution against the server-side agent-role registry.
-BUNDLE_VERSION: str = "0.36"
+# ``0.37`` → ``ship-agent-run.yml`` adds optional ``ship_run_id`` dispatch
+#         input for ELS-156 file-overlap honour telemetry correlation.
+BUNDLE_VERSION: str = "0.37"
 
 # Default knowledge starters for PR 1. Empty by design: generated knowledge is
 # analyzed post-merge and proposed in a second PR. Historical callers can still

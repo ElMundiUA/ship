@@ -42,6 +42,7 @@ from backend.app.api.v1.routes import (
     linear_oauth,
     local_tracker,
     members,
+    metrics_file_overlap,
     native_integrations,
     navigator_memories,
     notifications,
@@ -80,6 +81,7 @@ api_router.include_router(knowledge_import_sources.router)
 api_router.include_router(knowledge_canon.router)
 api_router.include_router(knowledge.router)
 api_router.include_router(members.router)
+api_router.include_router(metrics_file_overlap.router)
 # Unified inbox surface (RFC-0010 §5). List/detail/disposition over
 # inbox_items + inbox_item_events. Reassignment delegates to the
 # routing service (services.inbox.routing). Owner-or-admin RBAC for
