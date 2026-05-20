@@ -1148,11 +1148,11 @@ async def get_next_task(
         workspace_id=workspace_id,
         ticket_ref=ticket_ref,
     )
-    if (
-        file_coordination_warning is None
-        and state == "dev_implementation"
-        and not is_anchor_pick
-    ):
+    # Open sibling-PR / file-coordination context is useful to every
+    # role that touches the diff, not just the dev: the reviewer and
+    # auto-merger weigh merge-order against overlapping open PRs too.
+    # Surface it for any non-anchor pick.
+    if file_coordination_warning is None and not is_anchor_pick:
         settings = get_settings()
         pick_project_id = pick.get("project_id")
         if settings.enable_file_overlap_warnings and pick_project_id:
@@ -1169,13 +1169,16 @@ async def get_next_task(
             file_coordination_warning = overlap.warning_markdown
 
     body = pick.get("body") if isinstance(pick.get("body"), str) else None
-    # dev_not_converging fix: a dev re-dispatched after a review block
-    # needs to see the reviewer's verdict, not just the original brief.
-    # Stitch the latest non-dev SDLC feedback (+ operator hints) onto
-    # the task body for dev_implementation picks. Best-effort.
-    if state == "dev_implementation" and ticket_ref:
+    # Conversation context for EVERY role (not just the dev): the recent
+    # SDLC verdict thread + operator hints. The dev gets it framed as
+    # "feedback to address" (the dev_not_converging fix); reviewer /
+    # validation / auto-merger get it as neutral "recent activity" so
+    # they honour operator decisions and prior verdicts. Best-effort.
+    if ticket_ref:
         feedback = await _fetch_reviewer_feedback_section(
-            resolved=resolved, ticket_ref=ticket_ref
+            resolved=resolved,
+            ticket_ref=ticket_ref,
+            for_dev=(state == "dev_implementation"),
         )
         if feedback:
             body = f"{body}\n\n{feedback}" if body else feedback
@@ -1931,20 +1934,27 @@ _REVIEWER_FEEDBACK_CAP_BYTES = 6 * 1024
 
 
 async def _fetch_reviewer_feedback_section(
-    *, resolved, ticket_ref: str
+    *, resolved, ticket_ref: str, for_dev: bool = True
 ) -> str | None:
-    """Markdown ``## Reviewer feedback to address`` block for a dev
-    re-run, or ``None`` when there's nothing to surface.
+    """Markdown ticket-conversation block for an agent pick, or ``None``
+    when there's nothing to surface.
 
-    Best-effort: one ``list_comments`` call, gated by the caller to
-    ``dev_implementation`` picks. Any tracker error degrades to
-    ``None`` — a missing feedback block must never block the run.
+    Every SDLC role benefits from the recent verdict thread, not just
+    the dev: the reviewer should honour an operator's decision and not
+    re-flag a resolved finding, the auto-merger reads the reviewer's
+    verdict, validation sees what the reviewer cared about. ``for_dev``
+    only switches the framing — an imperative "fix this" block for the
+    developer re-run vs a neutral "recent activity" context block for
+    everyone else.
 
-    A comment counts as feedback when it carries a ``[Ship SDLC:role-…]``
+    Best-effort: one ``list_comments`` call. Any tracker error degrades
+    to ``None`` — a missing context block must never block the run.
+
+    A comment counts as a verdict when it carries a ``[Ship SDLC:role-…]``
     marker for any role **other than** ``role-developer`` (the dev's own
-    finish comments). We take the most recent such verdict, then append
-    any operator hints posted after it (the operator is steering this
-    specific re-run, so those win)."""
+    finish comments are low-signal "Done." notes). We take the most
+    recent such verdict, then append any operator hints posted after it
+    (the operator is steering this specific re-run, so those win)."""
     list_fn = getattr(resolved.gateway, "list_comments", None)
     if list_fn is None:
         return None
@@ -1985,12 +1995,21 @@ async def _fetch_reviewer_feedback_section(
         joined = encoded[:_REVIEWER_FEEDBACK_CAP_BYTES].decode(
             "utf-8", "ignore"
         ) + "\n\n…(truncated)"
+    if for_dev:
+        return (
+            "## Reviewer feedback to address\n\n"
+            "A previous review **blocked** this PR and sent it back to "
+            "you. Fix every point below in this run — re-implementing "
+            "the original brief without addressing these will just get "
+            "blocked again.\n\n"
+            f"{joined}"
+        )
     return (
-        "## Reviewer feedback to address\n\n"
-        "A previous review **blocked** this PR and sent it back to you. "
-        "Fix every point below in this run — re-implementing the "
-        "original brief without addressing these will just get blocked "
-        "again.\n\n"
+        "## Recent ticket activity\n\n"
+        "Prior SDLC verdicts and operator notes on this ticket. Take "
+        "them into account — don't re-flag a finding a previous pass "
+        "already resolved, and honour any operator decision recorded "
+        "below.\n\n"
         f"{joined}"
     )
 

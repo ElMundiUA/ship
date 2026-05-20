@@ -101,6 +101,24 @@ async def test_other_sdlc_roles_count_as_feedback() -> None:
 
 
 @pytest.mark.asyncio
+async def test_non_dev_roles_get_neutral_framing() -> None:
+    """reviewer / validation / auto-merger see the same verdict thread
+    but framed as neutral context, not an imperative "fix this"."""
+    resolved = _resolved(
+        [
+            _c("Blocked: missing null guard.\n\n[Ship SDLC:role-reviewer]", minutes_ago=10),
+        ]
+    )
+    out = await _fetch_reviewer_feedback_section(
+        resolved=resolved, ticket_ref="ELS-1", for_dev=False
+    )
+    assert out is not None
+    assert "Recent ticket activity" in out
+    assert "Reviewer feedback to address" not in out
+    assert "missing null guard" in out
+
+
+@pytest.mark.asyncio
 async def test_no_comments_returns_none() -> None:
     out = await _fetch_reviewer_feedback_section(resolved=_resolved([]), ticket_ref="ELS-1")
     assert out is None
