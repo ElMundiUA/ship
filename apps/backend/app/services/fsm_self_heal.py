@@ -462,6 +462,37 @@ async def _scan_one_workspace(
                 # cause is always runner-side (workflow file, secret,
                 # cursor account), never something self-heal can fix
                 # by re-dispatching.
+                # needs_clarification guard — if the ticket's most
+                # recent finish was ``outcome=needs_clarification``,
+                # the agent (reviewer / auto-merger) explicitly asked
+                # the operator a question and the chain is correctly
+                # parked. That's neither a runner crash nor a dev-not-
+                # converging loop; the clarification letter is the
+                # authoritative signal. Both detectors would otherwise
+                # mis-fire on the dispatch-without-ready_next_step
+                # shape. Caught on Ship-on-Ship/ELS-118/ELS-154/ELS-111
+                # 2026-05-20: auto_merger stalled needs_clarification
+                # (migration / scope / conflict), C2 piled a
+                # runner_fail_loop + dev_not_converging letter on top
+                # of the legit clarification.
+                last_finish_outcome = (
+                    await session.execute(
+                        select(AuditLog.payload["outcome"].astext)
+                        .where(
+                            AuditLog.workspace_id == install.workspace_id,
+                            AuditLog.action == "agent_run.finish",
+                            (
+                                (AuditLog.target_id == ref)
+                                | (AuditLog.payload["ticket_ref"].astext == ref)
+                            ),
+                        )
+                        .order_by(AuditLog.created_at.desc())
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+                if last_finish_outcome == "needs_clarification":
+                    continue
+
                 if await _looks_like_runner_fail_loop(
                     session, install.workspace_id, ref
                 ):
