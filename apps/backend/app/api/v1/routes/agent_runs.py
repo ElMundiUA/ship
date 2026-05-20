@@ -74,6 +74,7 @@ from backend.app.services.dispatcher import (
     ENV_SEPARATION_ACK_KEY,
     ENV_SEPARATION_PENDING_KEY,
     env_separation_handle,
+    normalize_routine_id,
 )
 from backend.app.db.session import get_session
 from backend.app.integrations.gateway.tracker import TicketRef
@@ -4813,7 +4814,15 @@ async def post_dispatch_routine(
             detail="GitHub App installation missing or suspended",
         )
 
-    inputs: dict[str, str] = {"routine_id": payload.routine_id}
+    # Normalise stage label → canonical routine id. The runner names the
+    # working branch ``ship-<routine_id>-<ticket>``, so dispatching with
+    # a stage name (``dev_implementation``) instead of the routine
+    # (``developer``) forks a divergent branch and a duplicate PR for a
+    # ticket already in flight. ``maybe_dispatch`` resolves this on the
+    # event path; the manual endpoint must too.
+    routine_id = normalize_routine_id(payload.routine_id)
+
+    inputs: dict[str, str] = {"routine_id": routine_id}
     if payload.ticket_ref:
         inputs["ticket_ref"] = payload.ticket_ref
 
@@ -4834,7 +4843,8 @@ async def post_dispatch_routine(
             target_kind="workspace_repo",
             target_id=str(repo.id),
             payload={
-                "routine_id": payload.routine_id,
+                "routine_id": routine_id,
+                "routine_id_requested": payload.routine_id,
                 "ticket_ref": payload.ticket_ref,
                 "workflow_file": "ship-agent-run.yml",
             },
@@ -4846,6 +4856,6 @@ async def post_dispatch_routine(
         accepted=True,
         repo_full_name=repo.full_name,
         workflow_file="ship-agent-run.yml",
-        routine_id=payload.routine_id,
+        routine_id=routine_id,
         ticket_ref=payload.ticket_ref,
     )

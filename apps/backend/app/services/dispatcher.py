@@ -80,6 +80,22 @@ _STAGE_TO_ROUTINE: dict[str, str] = {
 }
 
 
+def normalize_routine_id(value: str) -> str:
+    """Map an FSM *stage* label to its canonical *routine* id, or pass a
+    routine id through unchanged.
+
+    Callers of the manual dispatch endpoint may pass either the stage
+    label (``dev_implementation``) or the routine id (``developer``).
+    The runner names the working branch ``ship-<routine_id>-<ticket>``,
+    so a stage label forks a divergent branch and a duplicate PR for a
+    ticket already in flight on its canonical branch. ``maybe_dispatch``
+    resolves stage→routine before firing; the manual endpoint must do
+    the same. Idempotent — a value that's already a routine id (or an
+    unknown string) is returned unchanged.
+    """
+    return _STAGE_TO_ROUTINE.get(value, value)
+
+
 log = logging.getLogger(__name__)
 
 
@@ -1295,6 +1311,7 @@ __all__ = [
     "count_active_locks",
     "maybe_dispatch",
     "maybe_dispatch_workspace_bundle",
+    "normalize_routine_id",
     "release_lock",
     "sweep_expired_locks",
 ]
