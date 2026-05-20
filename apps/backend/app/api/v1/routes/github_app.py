@@ -206,14 +206,23 @@ async def install_callback(
                 )
             ).first() is not None
     else:
-        row = None
-        any_existing = (
+        # No workspace hint (GitHub-UI direct install or a repo-selection
+        # edit that didn't pass through our wizard). We can't pick a
+        # workspace to *create* a new binding, but if this install is
+        # already known we do an idempotent refresh of the existing row
+        # — most-recent wins when several workspaces share the install,
+        # since the redirect carries no signal to disambiguate — and
+        # bounce the user into the picker. Only a genuinely unknown
+        # install with no state is a hard error.
+        row = (
             await session.execute(
-                select(GitHubInstallation.id)
+                select(GitHubInstallation)
                 .where(GitHubInstallation.installation_id == installation_id)
+                .order_by(GitHubInstallation.updated_at.desc())
                 .limit(1)
             )
-        ).first() is not None
+        ).scalar_one_or_none()
+        any_existing = row is not None
 
     if row is None and decoded_workspace_id is None:
         # Brand new install but the redirect didn't come through our
@@ -221,7 +230,6 @@ async def install_callback(
         # silently attach to the user's first workspace — instead nudge
         # them back through the wizard where the "Install" button mints
         # a state token bound to a specific workspace.
-        _ = any_existing  # reserved for future "already-installed" diag
         return RedirectResponse(
             url=(
                 f"{settings.console_url.rstrip('/')}/onboarding"
@@ -758,7 +766,10 @@ async def _apply_pull_request_event(
 # by convention; the small risk of a 2-char Linear team key shipping
 # in the wild is worth eating to keep the hook quiet on planning-tag
 # PRs that mention no real tracker id.
-_TICKET_REF_PR_TITLE_RE = re.compile(r"\b([A-Z][A-Z0-9]{2,9}-\d+)\b")
+from backend.app.services.ticket_ref import (
+    TICKET_REF_PR_TITLE_RE,
+    parse_ticket_refs_from_pr_title,
+)
 
 
 async def _find_other_open_prs_by_ticket(
@@ -785,9 +796,8 @@ async def _find_other_open_prs_by_ticket(
         GitHubInstallation as _GI,
         WorkspaceRepo as _WR,
     )
-    from backend.app.integrations.github.app_auth import (
-        fetch_installation_token as _ftok,
-    )
+    from backend.app.integrations.gateway.code_host import RepoRef
+    from backend.app.integrations.github.code_host_adapter import GitHubCodeHost
 
     if not ticket_refs:
         return {}
@@ -811,30 +821,20 @@ async def _find_other_open_prs_by_ticket(
             if install is None:
                 continue
             try:
-                token = await _ftok(
-                    install.installation_id,
-                    settings=settings,
-                    client=client,
+                owner, _, name = repo.full_name.partition("/")
+                host = GitHubCodeHost(
+                    install.installation_id, settings=settings, client=client
                 )
-                # Paginate is overkill; the call site already filters
-                # to one workspace's repos and concurrent open agent
-                # PRs on a single repo rarely exceed a page.
-                r = await client.get(
-                    f"https://api.github.com/repos/{repo.full_name}/pulls",
-                    params={"state": "open", "per_page": 100},
-                    headers={
-                        "Authorization": f"token {token}",
-                        "Accept": "application/vnd.github+json",
-                    },
+                open_prs = await host.list_open_pull_requests(
+                    RepoRef(kind="github", owner=owner, repo=name), limit=100
                 )
-                if r.status_code != 200:
-                    continue
-                for pr in r.json() or []:
+                for pr in open_prs:
                     pr_url = pr.get("html_url") or ""
                     if not pr_url or pr_url == exclude_pr_html_url:
                         continue
-                    title = pr.get("title") or ""
-                    refs_in_title = _TICKET_REF_PR_TITLE_RE.findall(title)
+                    refs_in_title = parse_ticket_refs_from_pr_title(
+                        pr.get("title") or ""
+                    )
                     for ref in refs_in_title:
                         if ref in ticket_set:
                             out[ref].append(pr_url)
@@ -882,7 +882,7 @@ async def _transition_linked_tickets_on_merge(
     """
     if not pr_title:
         return
-    refs = _TICKET_REF_PR_TITLE_RE.findall(pr_title)
+    refs = TICKET_REF_PR_TITLE_RE.findall(pr_title)
     if not refs:
         return
     # De-dup while preserving order so the audit log reads in title order.
@@ -1026,7 +1026,7 @@ async def _release_project_lock_for_merged_pr(
     up via the bound tracker, delete the lock row. Best-effort: a
     missing ticket id or tracker hiccup just leaves the TTL to expire.
     """
-    refs = _TICKET_REF_PR_TITLE_RE.findall(pr_title)
+    refs = TICKET_REF_PR_TITLE_RE.findall(pr_title)
     if not refs:
         return
     ticket_ref = refs[0]

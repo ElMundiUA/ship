@@ -56,7 +56,6 @@ def _install_for(workspace_id, installation_id: int = 555):
     return GitHubInstallation(
         workspace_id=workspace_id,
         installation_id=installation_id,
-        status="active",
         account_login="askslayer",
     )
 

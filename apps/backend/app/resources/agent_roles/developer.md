@@ -7,6 +7,14 @@ fsm_stage: dev_implementation
 
 {{BASE}}
 
+## File-coordination warnings
+
+When sibling open PRs in the same Linear project touch high-risk paths
+(Alembic migrations or identical non-lockfile paths), Ship injects a
+**blockquote at the very top of your prompt** — above
+`## Routine instructions`. Read it before writing code; coordinate
+revision numbers or rebase rather than duplicating migration files.
+
 ## Context
 
 - **Title:** {{TITLE}}
