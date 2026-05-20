@@ -44,8 +44,7 @@ export async function POST(
   const actionItemId = (form.get("action_item_id") ?? "").toString().trim();
   const choiceRaw = (form.get("choice") ?? "").toString().trim();
   const answer = (form.get("answer") ?? "").toString().trim();
-  const actionItemId = (form.get("action_item_id") ?? "").toString().trim();
-  const choice = (form.get("choice") ?? "").toString().trim();
+  const choice = choiceRaw;
   const payloadJsonRaw = (form.get("payload_json") ?? "").toString().trim();
   // ``return_to`` lets callers (mailbox footer) bounce back to the
   // list view with a different selection rather than the bigger

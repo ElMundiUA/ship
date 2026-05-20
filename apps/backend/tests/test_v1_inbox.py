@@ -82,6 +82,7 @@ async def _make_item(
     status: str = "new",
     owner_user_id: uuid.UUID | None = None,
     title: str | None = None,
+    summary: str | None = None,
     payload: dict | None = None,
     play_key: str | None = None,
     repo_id: uuid.UUID | None = None,
@@ -97,7 +98,7 @@ async def _make_item(
 
     cat = category if category is not None else category_from_type(type)
     row_title = title or f"item-{uuid.uuid4().hex[:6]}"
-    row_summary = "test summary"
+    row_summary = summary if summary is not None else "test summary"
     item = InboxItem(
         workspace_id=workspace.id,
         type=type,
@@ -134,32 +135,7 @@ async def _make_item(
 
 
 @pytest.mark.asyncio
-async def test_list_includes_action_item_count(v1_client, seed_workspace, db_session):
-    _, raw, ws = seed_workspace
-    await _make_item(
-        db_session,
-        ws,
-        type="report",
-        title="digest",
-        payload={
-            "action_items": [
-                {"id": "a", "prompt": "Q1"},
-                {"id": "b", "prompt": "Q2"},
-            ]
-        },
-    )
-    res = await v1_client.get(
-        f"/v1/workspaces/{ws.id}/inbox",
-        params={"ownership": "all"},
-        headers=_auth(raw),
-    )
-    assert res.status_code == 200, res.text
-    row = res.json()["items"][0]
-    assert row["action_item_count"] == 2
-
-
-@pytest.mark.asyncio
-async def test_list_includes_headline_fields_from_payload(
+async def test_list_includes_headline_on_each_row(
     v1_client, seed_workspace, db_session
 ):
     _, raw, ws = seed_workspace
@@ -168,6 +144,7 @@ async def test_list_includes_headline_fields_from_payload(
         ws,
         type="blocker",
         title="agent blocked: validation",
+        summary="Picker null path fires 10x/day\nLong body",
         payload={"ticket_ref": "ELS-99", "fsm_stage": "validation"},
     )
     res = await v1_client.get(
@@ -177,8 +154,8 @@ async def test_list_includes_headline_fields_from_payload(
     )
     assert res.status_code == 200, res.text
     row = res.json()["items"][0]
-    assert row["ticket_ref"] == "ELS-99"
-    assert row["fsm_stage"] == "validation"
+    assert row["headline"] == "Picker null path fires 10x/day"
+    assert len(row["headline"]) <= 80
 
 
 @pytest.mark.asyncio

@@ -69,6 +69,7 @@ from backend.app.core.sentry import record_inbox_exception_breadcrumb
 from backend.app.db.models.inbox import InboxItem
 from backend.app.db.models.pipelines import PullRequest
 from backend.app.db.models.tenancy import AuditLog, Workspace
+from backend.app.services.inbox.headline import derive_headline
 from backend.app.services.inbox.sweep import sweep_auto_resolvable
 from backend.app.services.dispatcher import (
     ENV_SEPARATION_ACK_KEY,

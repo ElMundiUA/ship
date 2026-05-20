@@ -5,7 +5,7 @@ non-null at the database layer. Backfill legacy rows from the first line of
 ``summary``, else truncated ``title``.
 
 Revision ID: 0076_inbox_headline_not_null
-Revises: 0075_planning_proposals
+Revises: 0077_lock_run_id_bigint
 Create Date: 2026-05-19
 """
 
@@ -18,7 +18,7 @@ from alembic import op
 
 
 revision: str = "0076_inbox_headline_not_null"
-down_revision: Union[str, None] = "0075_planning_proposals"
+down_revision: Union[str, None] = "0077_lock_run_id_bigint"
 branch_labels: Union[str, tuple[str, ...], None] = None
 depends_on: Union[str, tuple[str, ...], None] = None
 

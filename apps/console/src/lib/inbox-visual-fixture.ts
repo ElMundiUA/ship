@@ -18,6 +18,10 @@ function baseRow(type: (typeof INBOX_TYPES)[number], index: number): InboxItem {
       type === "blocker"
         ? "agent blocked: validation"
         : `ELS-146 visual fixture ${type}`,
+    headline:
+      type === "blocker"
+        ? "agent blocked: validation"
+        : `ELS-146 visual fixture ${type}`,
     summary: null,
     intake_handle: null,
     intake_reason: type === "clarification" ? "agent_run_clarification" : null,
