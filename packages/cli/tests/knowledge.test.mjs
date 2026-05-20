@@ -96,10 +96,7 @@ test("knowledge fetch: missing bucket slug exits 1 before network", async () => 
     knowledgeRouter(req, res, {}),
   );
   try {
-    const r = await runShipctl(["--base-url", baseUrl, "knowledge", "fetch"], {
-      SHIP_API_TOKEN: TEST_TOKEN,
-      SHIP_WORKSPACE_ID: TEST_WS_ID,
-    });
+    const r = await runShipctl(["--base-url", baseUrl, "knowledge", "fetch"]);
     assert.equal(r.status, 1);
     assert.match(r.stderr, /Usage: shipctl knowledge fetch/);
     assert.equal(requests.length, 0);
@@ -122,8 +119,10 @@ test("knowledge fetch: --base-url beats SHIP_WORKSPACE_API_BASE and SHIP_API_BAS
     const r = await runShipctl(
       ["--base-url", flagPort.baseUrl, "knowledge", "fetch", BUCKET, "--json"],
       {
-        SHIP_WORKSPACE_API_BASE: envPort.baseUrl,
-        SHIP_API_BASE: genericPort.baseUrl,
+        env: {
+          SHIP_WORKSPACE_API_BASE: envPort.baseUrl,
+          SHIP_API_BASE: genericPort.baseUrl,
+        },
       },
     );
     assert.equal(r.status, 0, r.stderr);
@@ -133,6 +132,28 @@ test("knowledge fetch: --base-url beats SHIP_WORKSPACE_API_BASE and SHIP_API_BAS
   } finally {
     await closeMockServer(flagPort.server);
     await closeMockServer(envPort.server);
+    await closeMockServer(genericPort.server);
+  }
+});
+
+test("knowledge fetch: SHIP_WORKSPACE_API_BASE wins over SHIP_API_BASE without --base-url", async () => {
+  const workspacePort = await startMockServer((req, res) => knowledgeRouter(req, res, {}));
+  const genericPort = await startMockServer((req, res) => {
+    res.writeHead(500);
+    res.end("generic-server");
+  });
+  try {
+    const r = await runShipctl(["knowledge", "fetch", BUCKET, "--json"], {
+      env: {
+        SHIP_WORKSPACE_API_BASE: workspacePort.baseUrl,
+        SHIP_API_BASE: genericPort.baseUrl,
+      },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(workspacePort.requests.length > 0);
+    assert.equal(genericPort.requests.length, 0);
+  } finally {
+    await closeMockServer(workspacePort.server);
     await closeMockServer(genericPort.server);
   }
 });
@@ -162,7 +183,7 @@ test("knowledge fetch: SHIP_WORKSPACE_ID skips GET /v1/workspaces", async () => 
   );
   try {
     const r = await runShipctl(["--base-url", baseUrl, "knowledge", "fetch", BUCKET, "--json"], {
-      SHIP_WORKSPACE_ID: TEST_WS_ID,
+      env: { SHIP_WORKSPACE_ID: TEST_WS_ID },
     });
     assert.equal(r.status, 0, r.stderr);
     assert.equal(
@@ -220,7 +241,7 @@ test("knowledge fetch: --workspace flag overrides env", async () => {
         altWs,
         "--json",
       ],
-      { SHIP_WORKSPACE_ID: TEST_WS_ID },
+      { env: { SHIP_WORKSPACE_ID: TEST_WS_ID } },
     );
     assert.equal(r.status, 0, r.stderr);
     assert.ok(
