@@ -323,6 +323,10 @@ class Settings(BaseSettings):
     enable_partial_trackers: bool = Field(
         default=False, alias="SHIP_ENABLE_PARTIAL_TRACKERS"
     )
+    # Warn-only: surface sibling open-PR file overlap before dev_implementation.
+    enable_file_overlap_warnings: bool = Field(
+        default=False, alias="SHIP_ENABLE_FILE_OVERLAP_WARNINGS"
+    )
 
     # --- Agent (C12) ----------------------------------------------------------
     # Pilot ships OpenAI as the default backend because ``OPENAI_API_KEY`` is

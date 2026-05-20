@@ -34,6 +34,16 @@ import type {
 } from "@/lib/inbox-types";
 import { reportActionItemDecisions } from "@/lib/inbox-types";
 
+// ``InboxActionPanel`` is a client component but the underlying
+// ``decideInboxItem`` helper lives in ``@/lib/api/client`` which is
+// tagged ``import "server-only"`` so the session token can't leak to
+// the browser bundle. Pre-fix the panel imported it directly and the
+// Next.js build failed with "You're importing a component that needs
+// server-only" — every backend deploy was blocked since 2026-05-18
+// because the console image refused to build. Call the server-side
+// bridge at ``/api/inbox/[id]/decide`` instead; the route handler is
+// server code and forwards the call to the backend.
+
 type Props = {
   workspaceId: string;
   item: InboxItemDetail;
@@ -385,7 +395,12 @@ function SingleChoiceRow({
     );
   }
   return (
-    <div className="flex flex-wrap gap-2">
+    // Stack choices vertically — long labels (e.g. "Closed PR,
+    // commented recipe on Linear") rendered as a horizontal pill row
+    // wrap awkwardly and force the operator to scan zig-zag across
+    // the preview. One per row keeps scanning top-to-bottom and lets
+    // the optional ``hint`` fit alongside the label on hover.
+    <div className="flex flex-col gap-1.5">
       {items.map((i, idx) => (
         <button
           key={i.id}
@@ -393,14 +408,14 @@ function SingleChoiceRow({
           disabled={disabled}
           onClick={() => onPick(i.id)}
           title={i.hint || undefined}
-          className="group inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/[0.04] px-3 py-1 text-xs font-semibold text-white transition hover:border-aqua hover:bg-aqua/15 hover:text-aqua disabled:opacity-40"
+          className="group inline-flex w-full items-center gap-2 rounded-md border border-white/15 bg-white/[0.04] px-3 py-2 text-left text-xs font-semibold text-white transition hover:border-aqua hover:bg-aqua/15 hover:text-aqua disabled:opacity-40"
         >
           {idx < 9 && (
             <span className="font-mono text-[9px] font-bold text-white/40 group-hover:text-aqua/70">
               {idx + 1}
             </span>
           )}
-          {i.label}
+          <span className="flex-1">{i.label}</span>
         </button>
       ))}
     </div>

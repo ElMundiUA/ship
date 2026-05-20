@@ -109,3 +109,33 @@ export async function shipApiDelete(
     },
   });
 }
+
+export type ApiAuthToken = {
+  id: string;
+  name: string;
+  prefix: string;
+  workspace_id?: string | null;
+};
+
+export async function listAuthTokens(
+  request: APIRequestContext,
+): Promise<ApiAuthToken[]> {
+  const res = await shipApiGet(request, "/v1/auth/tokens");
+  if (!res.ok()) {
+    throw new Error(`GET /v1/auth/tokens → ${res.status()}`);
+  }
+  return (await res.json()) as ApiAuthToken[];
+}
+
+export async function revokeAuthToken(
+  request: APIRequestContext,
+  tokenId: string,
+): Promise<void> {
+  const res = await shipApiDelete(
+    request,
+    `/v1/auth/tokens/${encodeURIComponent(tokenId)}`,
+  );
+  if (!res.ok()) {
+    throw new Error(`DELETE /v1/auth/tokens/${tokenId} → ${res.status()}`);
+  }
+}

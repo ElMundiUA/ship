@@ -123,6 +123,38 @@ class GitHubCodeHost(CodeHostGateway):
         )
         return response.json()
 
+    async def list_open_pull_requests(
+        self, ref: RepoRef, *, limit: int = 30
+    ) -> list[dict[str, Any]]:
+        """Return open PRs for ``ref``, capped at ``limit`` per repo."""
+        out: list[dict[str, Any]] = []
+        page = 1
+        per_page = min(100, max(limit, 1))
+        while len(out) < limit:
+            response = await self._request(
+                "GET",
+                f"/repos/{ref.owner}/{ref.repo}/pulls",
+                params={"state": "open", "per_page": per_page, "page": page},
+            )
+            batch = response.json() or []
+            if not isinstance(batch, list) or not batch:
+                break
+            for item in batch:
+                out.append(
+                    {
+                        "number": item.get("number"),
+                        "title": item.get("title") or "",
+                        "html_url": item.get("html_url") or "",
+                        "state": item.get("state"),
+                    }
+                )
+                if len(out) >= limit:
+                    break
+            if len(batch) < per_page:
+                break
+            page += 1
+        return out[:limit]
+
     async def list_pull_request_files(
         self, ref: PullRequestRef, *, limit: int = 100
     ) -> list[dict[str, Any]]:

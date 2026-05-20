@@ -50,6 +50,7 @@ import {
   type ApiAvailableRepo,
   type ApiTrackerBinding,
 } from "@/lib/api/client";
+import { cn } from "@/lib/cn";
 import { getSessionToken } from "@/lib/api/session";
 
 import { ConfirmStep } from "./confirm-step";
@@ -980,49 +981,71 @@ function ReposStep({
             <legend className="px-2 text-[11px] font-bold uppercase tracking-widest text-white/55">
               {repos.length} visible repo{repos.length === 1 ? "" : "s"}
             </legend>
-            {repos.map((r, i) => (
-              <label
-                key={r.external_id}
-                className="flex cursor-pointer items-start gap-3 rounded-xl border border-white/5 bg-white/[0.02] p-3 has-[:checked]:border-aqua/50 has-[:checked]:bg-aqua/[0.06]"
-              >
-                <input
-                  type="checkbox"
-                  name="repo_id"
-                  value={String(r.external_id)}
-                  defaultChecked={r.activated || (!hasActivation && i === 0)}
-                  className="mt-1"
-                  suppressHydrationWarning
-                />
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-semibold text-white">
-                      {r.full_name}
-                    </span>
-                    {r.private && (
-                      <span className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-white/65">
-                        private
-                      </span>
-                    )}
-                    {r.activated && (
-                      <span className="rounded bg-aqua/15 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-aqua">
-                        activated
-                      </span>
-                    )}
-                    <span className="rounded bg-white/5 px-1.5 py-0.5 font-mono text-[10px] tracking-wide text-white/45">
-                      {r.default_branch}
-                    </span>
-                  </div>
-                  {r.description && (
-                    <div className="mt-1 line-clamp-2 text-[11px] text-white/55">
-                      {r.description}
-                    </div>
+            {repos.map((r, i) => {
+              const claimedBy = r.claimed_by_workspace_slug;
+              const claimed = Boolean(claimedBy);
+              return (
+                <label
+                  key={r.external_id}
+                  className={cn(
+                    "flex items-start gap-3 rounded-xl border p-3",
+                    claimed
+                      ? "cursor-not-allowed border-white/5 bg-white/[0.015] opacity-55"
+                      : "cursor-pointer border-white/5 bg-white/[0.02] has-[:checked]:border-aqua/50 has-[:checked]:bg-aqua/[0.06]",
                   )}
-                  <div className="mt-1 font-mono text-[10px] text-white/35">
-                    {r.html_url}
+                  title={
+                    claimed
+                      ? `Already wired in workspace "${claimedBy}". Deactivate it there first if you want this workspace to own the repo.`
+                      : undefined
+                  }
+                >
+                  <input
+                    type="checkbox"
+                    name="repo_id"
+                    value={String(r.external_id)}
+                    defaultChecked={
+                      r.activated || (!hasActivation && i === 0 && !claimed)
+                    }
+                    disabled={claimed}
+                    className="mt-1"
+                    suppressHydrationWarning
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-semibold text-white">
+                        {r.full_name}
+                      </span>
+                      {r.private && (
+                        <span className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-white/65">
+                          private
+                        </span>
+                      )}
+                      {r.activated && (
+                        <span className="rounded bg-aqua/15 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-aqua">
+                          activated
+                        </span>
+                      )}
+                      {claimed && (
+                        <span className="rounded bg-amber-500/15 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-amber-200">
+                          in {claimedBy}
+                        </span>
+                      )}
+                      <span className="rounded bg-white/5 px-1.5 py-0.5 font-mono text-[10px] tracking-wide text-white/45">
+                        {r.default_branch}
+                      </span>
+                    </div>
+                    {r.description && (
+                      <div className="mt-1 line-clamp-2 text-[11px] text-white/55">
+                        {r.description}
+                      </div>
+                    )}
+                    <div className="mt-1 font-mono text-[10px] text-white/35">
+                      {r.html_url}
+                    </div>
                   </div>
-                </div>
-              </label>
-            ))}
+                </label>
+              );
+            })}
           </fieldset>
 
           <div className="flex items-center justify-between gap-3 pt-2">

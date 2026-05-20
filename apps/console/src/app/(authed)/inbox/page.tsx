@@ -22,7 +22,10 @@ import { InboxMailboxListClient } from "@/components/inbox/inbox-mailbox-list-cl
 import { InboxActionPanel } from "@/components/inbox/inbox-action-panel";
 import { MailboxFooter } from "@/components/inbox/mailbox-footer";
 import { MarkdownBlock } from "@/components/markdown-block";
+import { EmptyState } from "@/components/ui";
+import { formatInboxHeadline } from "@/lib/inbox-copy";
 import { cn } from "@/lib/cn";
+import { relativeTime } from "@/lib/format";
 import {
   ApiHttpError,
   getInboxItem,
@@ -37,6 +40,7 @@ import {
   INBOX_ACTIONABLE_CATEGORIES,
   INBOX_LIST_DEFAULT_STATUSES,
   INBOX_TYPE_META,
+  parseChecklistActionItems,
   type InboxItemDetail,
   type InboxListResponse,
   type InboxType,
@@ -228,6 +232,8 @@ export default async function InboxMailboxPage({
             detailError={detailError}
             workspaceId={workspaceId}
             workspaceScope={wsScope}
+            ownership={ownership}
+            selectedId={selectedId}
             empty={list.items.length === 0}
           />
         </div>
@@ -298,23 +304,45 @@ function OwnershipTabs({
 // Right pane: the preview
 // ---------------------------------------------------------------------------
 
+function buildMailboxReturnTo({
+  selectedId,
+  ownership,
+  workspaceScope,
+}: {
+  selectedId: string;
+  ownership: Ownership;
+  workspaceScope?: string;
+}): string {
+  const params = new URLSearchParams();
+  params.set("selected", selectedId);
+  if (ownership !== "all") params.set("ownership", ownership);
+  if (workspaceScope) params.set("ws", workspaceScope);
+  return `/inbox?${params.toString()}`;
+}
+
 function MailboxPreview({
   detail,
   detailError,
   workspaceId,
   workspaceScope,
+  ownership,
   empty,
 }: {
   detail: InboxItemDetail | null;
   detailError: string | null;
   workspaceId: string;
   workspaceScope?: string;
+  ownership: Ownership;
+  selectedId: string | null;
   empty: boolean;
 }) {
   if (empty) {
     return (
-      <div className="flex min-h-[60vh] items-center justify-center rounded-xl border border-white/[0.08] bg-white/[0.015] px-6 text-center text-sm text-white/55">
-        Pick a workspace lens on the left — there&rsquo;s nothing here right now.
+      <div className="flex min-h-[60vh] items-center justify-center rounded-xl border border-white/[0.08] bg-white/[0.015] p-6">
+        <EmptyState
+          title="Inbox empty"
+          body="Nothing waiting on you — agents working."
+        />
       </div>
     );
   }
@@ -336,12 +364,35 @@ function MailboxPreview({
   const meta = INBOX_TYPE_META[detail.type as InboxType];
   const body = readBody(detail);
   const isClosed = detail.status === "resolved" || detail.status === "dismissed";
+  const previewHeadline = formatInboxHeadline(detail);
+  const checklistItems = parseChecklistActionItems(detail.payload);
+  const returnTo = buildMailboxReturnTo({
+    selectedId: detail.id,
+    ownership,
+    workspaceScope,
+  });
 
   return (
-    <div className="flex min-h-[60vh] flex-col rounded-xl border border-white/[0.08] bg-white/[0.015]">
+    // Self-sized: header + body + footer stack tightly. Short letters
+    // (a 3-line refire-cap blocker) no longer leave a 600px void
+    // between the body and the action buttons. Long bodies cap at
+    // ~70vh and scroll internally so the footer stays in the
+    // viewport without forcing the operator to scroll past empty
+    // space first.
+    <div
+      className="flex flex-col rounded-xl border border-white/[0.08] bg-white/[0.015]"
+      data-mailbox-preview
+    >
       <header className="border-b border-white/[0.06] px-6 py-4">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] uppercase tracking-[0.18em] text-white/45">
           <span>{meta?.label ?? detail.type}</span>
+          <span className="text-white/15">·</span>
+          <span
+            className="text-white/55 normal-case tracking-normal"
+            title={new Date(detail.created_at).toLocaleString()}
+          >
+            received {relativeTime(detail.created_at)}
+          </span>
           {isClosed && (
             <>
               <span className="text-white/15">·</span>
@@ -355,7 +406,7 @@ function MailboxPreview({
             </>
           )}
         </div>
-        <h1 className="mt-1 text-lg font-semibold text-white">{detail.title}</h1>
+        <h1 className="mt-1 text-lg font-semibold text-white">{previewHeadline}</h1>
         {detail.owner && (
           <p className="mt-1 text-xs text-white/55">
             Owner:{" "}
@@ -378,7 +429,7 @@ function MailboxPreview({
         </p>
       </header>
 
-      <div className="flex-1 overflow-y-auto px-6 py-5">
+      <div className="max-h-[70vh] overflow-y-auto px-6 py-5">
         {body ? (
           <MarkdownBlock>{body}</MarkdownBlock>
         ) : (
@@ -387,14 +438,15 @@ function MailboxPreview({
       </div>
 
       <footer className="space-y-3 border-t border-white/[0.06] px-6 py-4">
-        <InboxActionPanel
-          workspaceId={workspaceId}
-          item={detail}
-        />
-        {/* Legacy MailboxFooter still hosts snooze / reassign / dismiss
-            controls; the primary decide flow now lives in the panel
-            above. */}
-        <MailboxFooter detail={detail} workspaceId={workspaceId} />
+        {checklistItems.length > 0 && !isClosed ? (
+          <MailboxFooter
+            detail={detail}
+            workspaceId={workspaceId}
+            returnTo={returnTo}
+          />
+        ) : (
+          <InboxActionPanel workspaceId={workspaceId} item={detail} />
+        )}
       </footer>
     </div>
   );

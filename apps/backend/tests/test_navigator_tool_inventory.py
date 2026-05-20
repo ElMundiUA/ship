@@ -37,6 +37,7 @@ EXPECTED_TOOLS: frozenset[str] = frozenset(
         "config_put",
         "web_fetch",
         "project_create",
+        "propose_mass_plan",
         "ticket_create",
         "dashboard_get",
         "knowledge_bucket_get",
@@ -63,6 +64,7 @@ EXPECTED_TOOLS: frozenset[str] = frozenset(
         "audit_search",
         "recall",
         "recall_context",
+        "propose_mass_plan",
     }
 )
 

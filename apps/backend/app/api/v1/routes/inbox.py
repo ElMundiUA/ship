@@ -334,6 +334,56 @@ def _to_owner_out(user: User | None) -> InboxOwnerOut | None:
     )
 
 
+def _is_mailbox_checklist_entry(entry: object) -> bool:
+    """ELS-146 mailbox checklist row (prompt + primary/secondary choices)."""
+    if not isinstance(entry, dict):
+        return False
+    row_id = entry.get("id")
+    prompt = entry.get("prompt")
+    primary = entry.get("primary")
+    secondary = entry.get("secondary")
+    if not isinstance(row_id, str) or not row_id.strip():
+        return False
+    if not isinstance(prompt, str) or not prompt.strip():
+        return False
+    for side in (primary, secondary):
+        if not isinstance(side, dict):
+            return False
+        label = side.get("label")
+        choice = side.get("choice")
+        if not isinstance(label, str) or not label.strip():
+            return False
+        if not isinstance(choice, str) or not choice.strip():
+            return False
+    return True
+
+
+def _mailbox_checklist_entries(payload: dict | None) -> list[dict]:
+    raw = (payload or {}).get("action_items")
+    if not isinstance(raw, list):
+        return []
+    return [e for e in raw if _is_mailbox_checklist_entry(e)]
+
+
+def _mailbox_checklist_only(payload: dict | None) -> bool:
+    raw = (payload or {}).get("action_items")
+    if not isinstance(raw, list) or len(raw) == 0:
+        return False
+    return all(_is_mailbox_checklist_entry(e) for e in raw)
+
+
+def _valid_mailbox_checklist_choice(entry: dict, choice: str) -> bool:
+    primary = entry.get("primary") if isinstance(entry.get("primary"), dict) else {}
+    secondary = (
+        entry.get("secondary") if isinstance(entry.get("secondary"), dict) else {}
+    )
+    allowed = {
+        str(primary.get("choice", "")).strip(),
+        str(secondary.get("choice", "")).strip(),
+    }
+    return choice in allowed
+
+
 async def _load_runs_by_id(
     session: AsyncSession, run_ids: set[uuid.UUID]
 ) -> dict[uuid.UUID, RoutineRun]:
@@ -1218,6 +1268,84 @@ async def _apply_binary_decide(
     return await _build_detail(session, item)
 
 
+async def _apply_mailbox_checklist_pick_if_partial(
+    session: AsyncSession,
+    item: InboxItem,
+    auth: AuthContext,
+    payload: dict,
+    action: str,
+) -> InboxItemDetail | None:
+    """Record one checklist answer; resolve only after the last row is answered."""
+    action_item_id = str(payload.get("action_item_id") or "").strip()
+    choice = str(payload.get("choice") or "").strip()
+    if not action_item_id or not choice:
+        return None
+    if not _mailbox_checklist_only(item.payload):
+        return None
+
+    entries = _mailbox_checklist_entries(item.payload)
+    by_id = {str(e["id"]).strip(): e for e in entries}
+    if action_item_id not in by_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="invalid action_item_id",
+        )
+    if not _valid_mailbox_checklist_choice(by_id[action_item_id], choice):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="invalid choice",
+        )
+
+    base = dict(item.payload or {})
+    answers = dict(base.get("checklist_answers") or {})
+    answers[action_item_id] = choice
+    base["checklist_answers"] = answers
+
+    raw_items = base.get("action_items")
+    if not isinstance(raw_items, list):
+        raw_items = []
+    base["action_items"] = [
+        e
+        for e in raw_items
+        if not (
+            isinstance(e, dict)
+            and str(e.get("id", "")).strip() == action_item_id
+        )
+    ]
+
+    merge_extra = {
+        k: v
+        for k, v in payload.items()
+        if k not in ("action_item_id", "choice")
+    }
+    item.payload = base | merge_extra
+
+    session.add(
+        InboxItemEvent(
+            item_id=item.id,
+            actor_user_id=auth.user.id,
+            actor_kind="user",
+            action="checklist_answer",
+            payload={
+                "action_item_id": action_item_id,
+                "choice": choice,
+            },
+        )
+    )
+
+    if _mailbox_checklist_entries(item.payload):
+        await session.flush()
+        await session.refresh(item)
+        return await _build_detail(session, item)
+
+    if action != "resolve":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="checklist complete requires action resolve",
+        )
+    return None
+
+
 @router.post("/{item_id}/disposition", response_model=InboxItemDetail)
 async def post_disposition(
     workspace_id: uuid.UUID,
@@ -1248,6 +1376,12 @@ async def post_disposition(
         payload = {**payload, "answer": body.answer}
     if body.resolution is not None:
         payload = {**payload, "resolution": body.resolution}
+
+    partial = await _apply_mailbox_checklist_pick_if_partial(
+        session, item, auth, payload, body.action
+    )
+    if partial is not None:
+        return partial
 
     prior_status = item.status
     await _validate_report_bulk_disposition(session, body.action, item)

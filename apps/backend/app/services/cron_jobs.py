@@ -666,6 +666,19 @@ def register_all() -> None:
         job_id="inbox_action_items_backfill",
     )
 
+    # Pull-request cache reconciler (askslayer/visitor 2026-05-19).
+    # The webhook-fed pull_requests cache drifts to ``state=open``
+    # after GitHub merges/closes a PR if the webhook misses (paused
+    # install, replay queue, hand-merge), then the dashboard's stuck-
+    # PR mirror regenerates inbox letters the operator can't dismiss.
+    # Every 30 min walk rows >3d stale and refresh from GitHub. See
+    # :mod:`pr_cache_reconciler` for the algorithm.
+    register_cron(
+        fn=_pr_cache_reconcile_tick,
+        cron_expr="*/30 * * * *",
+        job_id="pr_cache_reconcile",
+    )
+
 
 @cron_with_lock(lock=CronLockId.INBOX_STALE_SWEEP, name="inbox_stale_sweep")
 async def _inbox_stale_sweep_tick() -> None:
@@ -716,6 +729,29 @@ async def _inbox_action_items_backfill_tick() -> None:
     )
 
     await backfill_inbox_action_items_tick()
+
+
+@cron_with_lock(
+    lock=CronLockId.PR_CACHE_RECONCILE,
+    name="pr_cache_reconcile",
+)
+async def _pr_cache_reconcile_tick() -> None:
+    """Refresh stale ``pull_requests`` rows from GitHub when the
+    webhook missed a merge/close event.
+
+    See :mod:`pr_cache_reconciler` for thresholds + per-tick budget.
+    Idempotent: rows whose cache already matches GitHub get a touched
+    ``updated_at_external`` so the next tick walks the next batch.
+    """
+    from backend.app.services.pr_cache_reconciler import (
+        reconcile_stale_pull_requests,
+    )
+
+    updated = await reconcile_stale_pull_requests()
+    if updated:
+        logging.getLogger("ship.pr_cache_reconciler").info(
+            "pr_cache_reconciler: refreshed %d stale rows", updated,
+        )
 
 
 __all__ = ["register_all"]

@@ -69,6 +69,7 @@ from backend.app.core.sentry import record_inbox_exception_breadcrumb
 from backend.app.db.models.inbox import InboxItem
 from backend.app.db.models.pipelines import PullRequest
 from backend.app.db.models.tenancy import AuditLog, Workspace
+from backend.app.services.inbox.headline import derive_headline
 from backend.app.services.inbox.sweep import sweep_auto_resolvable
 from backend.app.services.dispatcher import (
     ENV_SEPARATION_ACK_KEY,
@@ -77,9 +78,12 @@ from backend.app.services.dispatcher import (
 )
 from backend.app.db.session import get_session
 from backend.app.integrations.gateway.tracker import TicketRef
-from backend.app.services.inbox.headline import derive_headline
 from backend.app.services.linear_provisioner import (
     OVERLAY_FREEZE_LABEL_PREFIXES,
+)
+from backend.app.services.file_overlap import (
+    build_file_coordination_warning,
+    load_file_coordination_warning_from_audit,
 )
 from backend.app.services.tracker_resolver import resolve_for_workspace
 
@@ -195,6 +199,9 @@ class TaskTicketOut(BaseModel):
     # agent run, the per-ticket ``body`` already carries the
     # immediate task brief).
     project_context: str | None = None
+    # ELS-154 — blockquote prepended by the CLI when sibling open PRs
+    # touch high-risk paths (migrations / hard path overlap).
+    file_coordination_warning: str | None = None
 
 
 class TaskResponseOut(BaseModel):
@@ -242,7 +249,6 @@ class InboxItemIn(BaseModel):
         "report",
     ] = "improvement"
     title: str = Field(min_length=1, max_length=300)
-    headline: str | None = Field(default=None, max_length=80)
     summary: str | None = Field(default=None, max_length=2000)
     # Markdown body for the preview pane. ≤32KB so a long retro
     # digest fits without paginating.
@@ -784,28 +790,24 @@ async def get_next_task(
                 # row in the operator inbox. The audit-row dedup
                 # gates this same-window check, so we don't re-issue
                 # blocker letters either.
-                tracker_title = (
-                    f"Tracker {resolved.kind} unreachable — agents stalled"
-                )[:300]
-                tracker_summary = (
-                    "The bound tracker adapter is rejecting calls "
-                    "(likely an OAuth token expiry / revocation). "
-                    "Re-authorize the workspace integration to "
-                    "restore agent picks. Subsequent stage picks "
-                    "in this hour are short-circuited to keep the "
-                    "audit log readable.\n\n"
-                    f"First error: {str(exc)[:400]}"
-                )[:2000]
                 session.add(
                     InboxItem(
                         workspace_id=workspace_id,
                         repo_id=None,
                         type="blocker",
-                        title=tracker_title,
-                        headline=derive_headline(
-                            summary=tracker_summary, title=tracker_title
-                        ),
-                        summary=tracker_summary,
+                        title=(
+                            f"Tracker {resolved.kind} unreachable — "
+                            f"agents stalled"
+                        )[:300],
+                        summary=(
+                            "The bound tracker adapter is rejecting calls "
+                            "(likely an OAuth token expiry / revocation). "
+                            "Re-authorize the workspace integration to "
+                            "restore agent picks. Subsequent stage picks "
+                            "in this hour are short-circuited to keep the "
+                            "audit log readable.\n\n"
+                            f"First error: {str(exc)[:400]}"
+                        )[:2000],
                         payload={
                             "tracker_kind": resolved.kind,
                             "fsm_stage": state,
@@ -1022,35 +1024,31 @@ async def get_next_task(
                         },
                     )
                 )
-                refire_title = (
-                    f"Refire cap hit on {ticket_ref} at {state} — routine paused"
-                )[:300]
-                refire_summary = (
-                    f"The {state} routine has finished against "
-                    f"{ticket_ref} {fire_count} times in the last "
-                    f"{int(_REFIRE_CAP_WINDOW.total_seconds() // 3600)}h. "
-                    "Agent tokens are being burnt without the "
-                    "ticket advancing — usually because the "
-                    "breadcrumb label that's supposed to exclude "
-                    "the ticket on the next pick isn't being "
-                    "added (provisioner gap, transition no-op, "
-                    "label rename). The picker is now refusing "
-                    "to hand this ticket back to the routine "
-                    f"until the {int(_REFIRE_CAP_WINDOW.total_seconds() // 3600)}h "
-                    "window elapses. Investigate the missing "
-                    "breadcrumb or move the ticket past this "
-                    "stage manually."
-                )[:2000]
                 session.add(
                     InboxItem(
                         workspace_id=workspace_id,
                         repo_id=None,
                         type="blocker",
-                        title=refire_title,
-                        headline=derive_headline(
-                            summary=refire_summary, title=refire_title
-                        ),
-                        summary=refire_summary,
+                        title=(
+                            f"Refire cap hit on {ticket_ref} at "
+                            f"{state} — routine paused"
+                        )[:300],
+                        summary=(
+                            f"The {state} routine has finished against "
+                            f"{ticket_ref} {fire_count} times in the last "
+                            f"{int(_REFIRE_CAP_WINDOW.total_seconds() // 3600)}h. "
+                            "Agent tokens are being burnt without the "
+                            "ticket advancing — usually because the "
+                            "breadcrumb label that's supposed to exclude "
+                            "the ticket on the next pick isn't being "
+                            "added (provisioner gap, transition no-op, "
+                            "label rename). The picker is now refusing "
+                            "to hand this ticket back to the routine "
+                            f"until the {int(_REFIRE_CAP_WINDOW.total_seconds() // 3600)}h "
+                            "window elapses. Investigate the missing "
+                            "breadcrumb or move the ticket past this "
+                            "stage manually."
+                        )[:2000],
                         payload={
                             "tracker_kind": resolved.kind,
                             "fsm_stage": state,
@@ -1146,6 +1144,30 @@ async def get_next_task(
         project_id=pick.get("project_id"),
         full=is_anchor_pick,
     )
+    file_coordination_warning = await load_file_coordination_warning_from_audit(
+        session,
+        workspace_id=workspace_id,
+        ticket_ref=ticket_ref,
+    )
+    if (
+        file_coordination_warning is None
+        and state == "dev_implementation"
+        and not is_anchor_pick
+    ):
+        settings = get_settings()
+        pick_project_id = pick.get("project_id")
+        if settings.enable_file_overlap_warnings and pick_project_id:
+            snapshot_fn = getattr(resolved.gateway, "get_ticket_snapshot", None)
+            overlap = await build_file_coordination_warning(
+                session,
+                workspace_id=workspace_id,
+                ticket_ref=ticket_ref,
+                project_id=str(pick_project_id),
+                tracker_kind=resolved.kind,
+                snapshot_fn=snapshot_fn,
+                settings=settings,
+            )
+            file_coordination_warning = overlap.warning_markdown
     return TaskResponseOut(
         fsm_stage=state,
         tracker_kind=resolved.kind,
@@ -1159,6 +1181,7 @@ async def get_next_task(
             state=str(pick.get("status") or "") or None,
             fsm_stage=state,
             project_context=project_context,
+            file_coordination_warning=file_coordination_warning,
         ),
     )
 
@@ -1699,19 +1722,16 @@ async def _record_orphan_skips(
                 },
             )
         )
-    orphan_title = f"Orphan tickets skipped at stage {fsm_stage}"[:300]
-    orphan_summary = (
-        f"{len(refs)} ticket(s) at FSM stage {fsm_stage!r} have no "
-        "tracker project attached and were skipped by the agent "
-        "picker. Re-home them under a project (or close)."
-    )[:2000]
     session.add(
         InboxItem(
             workspace_id=workspace_id,
             type="improvement",
-            title=orphan_title,
-            headline=derive_headline(summary=orphan_summary, title=orphan_title),
-            summary=orphan_summary,
+            title=f"Orphan tickets skipped at stage {fsm_stage}"[:300],
+            summary=(
+                f"{len(refs)} ticket(s) at FSM stage {fsm_stage!r} have no "
+                "tracker project attached and were skipped by the agent "
+                "picker. Re-home them under a project (or close)."
+            )[:2000],
             payload={
                 "kind": "orphan_skipped",
                 "tracker_kind": tracker_kind,
@@ -2112,18 +2132,12 @@ async def post_inbox_item(
     summary_text = payload.summary
     if summary_text is None and body_text:
         summary_text = body_text[:200]
-    summary_stored = (summary_text or "")[:2000] or None
     item = InboxItem(
         workspace_id=workspace_id,
         repo_id=None,
         type=payload.type,
         title=payload.title[:300],
-        headline=derive_headline(
-            headline=payload.headline,
-            summary=summary_stored,
-            title=payload.title[:300],
-        ),
-        summary=summary_stored,
+        summary=(summary_text or "")[:2000] or None,
         payload=item_payload,
         status="new",
         intake_handle=None,
@@ -3479,22 +3493,13 @@ async def finish_agent_run(
     # inbox item so the operator notices, but still record the run.
     if payload.outcome in {"ready_next_step", "needs_clarification", "out_of_scope"} \
             and resolved is None:
-        no_tracker_title = (
-            f"agent finished but no tracker bound ({payload.outcome})"
-        )[:300]
-        no_tracker_summary = (
-            payload.summary or payload.comment or ""
-        )[:2000] or None
         session.add(
             InboxItem(
                 workspace_id=workspace_id,
                 repo_id=None,
                 type="blocker",
-                title=no_tracker_title,
-                headline=derive_headline(
-                    summary=no_tracker_summary, title=no_tracker_title
-                ),
-                summary=no_tracker_summary,
+                title=f"agent finished but no tracker bound ({payload.outcome})"[:300],
+                summary=(payload.summary or payload.comment or "")[:2000] or None,
                 payload={
                     "run_id": payload.run_id,
                     "fsm_stage": payload.fsm_stage,
@@ -3898,16 +3903,13 @@ async def finish_agent_run(
         ticket_snapshot = await _try_ticket_snapshot(resolved.gateway, ref)
         # Mirror to inbox so the operator sees it without scanning the
         # tracker — the agent's question is the inbox row's summary.
-        clar_title = f"clarification: {payload.ticket_ref}"[:300]
-        clar_summary = (payload.summary or payload.comment or "")[:2000] or None
         session.add(
             InboxItem(
                 workspace_id=workspace_id,
                 repo_id=None,
                 type="clarification",
-                title=clar_title,
-                headline=derive_headline(summary=clar_summary, title=clar_title),
-                summary=clar_summary,
+                title=f"clarification: {payload.ticket_ref}"[:300],
+                summary=(payload.summary or payload.comment or "")[:2000] or None,
                 payload={
                     "run_id": payload.run_id,
                     "fsm_stage": payload.fsm_stage,
@@ -3931,98 +3933,155 @@ async def finish_agent_run(
         # ``via=agent_run.finish`` audit per release) couldn't fire.
 
     elif payload.outcome == "blocked":
-        # Two sub-cases:
+        # Three sub-cases:
         #
         # (A) ``stage_next`` is set — the agent picked a cascade target
-        #     (e.g. reviewer bouncing to dev_implementation). The cascade
-        #     matrix handles the re-dispatch downstream. No inbox row,
-        #     no label change; the picker reads the new ``stage:*`` label
-        #     once :func:`tracker.transition` runs further below.
+        #     explicitly. The cascade matrix below picks it up; nothing
+        #     to do here.
         #
-        # (B) ``stage_next`` is null — the agent finished blocked with
-        #     no cascade target. Pre-2026-05-19 this meant the picker
-        #     re-fired the same stage every tick until the 24h refire
-        #     cap kicked in (3 in 24h), producing a 24h ticket idle.
-        #     Measured on Ship-on-Ship 2026-05-12..19: 77% of
-        #     ``code_review`` blocks were null-next, the dominant FSM
-        #     bottleneck. Treat as effectively ``needs_clarification``:
-        #     stamp ``needs:clarification`` on the ticket so the picker
-        #     skips, file a blocker inbox row immediately so the
-        #     operator can act in <1 minute instead of waiting 24h.
-        if not payload.stage_next and resolved is not None and payload.ticket_ref:
-            ref = _ticket_ref_from(resolved.kind, payload.ticket_ref)
-            add_signal = getattr(resolved.gateway, "add_signal_label", None)
-            if add_signal is not None:
-                try:
-                    await add_signal(ref, key="needs_clarification")
-                    actions.append("tracker:label:needs_clarification")
-                except Exception as exc:  # noqa: BLE001 — best-effort
-                    logger.info(
-                        "blocked+no_next label add failed ws=%s ticket=%s: %s",
-                        workspace_id, payload.ticket_ref, exc,
+        # (B) ``stage_next`` is null AND review-style stage AND we
+        #     haven't already auto-cascaded this ticket out of
+        #     blocked+no_next twice in the window → silently rewrite
+        #     ``stage_next`` to ``dev_implementation``. Reviewer-side
+        #     blockers default to "dev re-runs and fixes" — that's the
+        #     reviewer.md prompt contract (commit a045e38). If the
+        #     agent still emits no cascade target the server applies
+        #     the default rather than bothering the operator. Belt and
+        #     braces: refire-cap (3 same-stage blocks in 24h) and
+        #     dev_not_converging (3 review-blocks + 2 dev cycles)
+        #     catch the longer loops downstream.
+        #
+        # (C) ``stage_next`` is null AND we've already auto-cascaded
+        #     this ticket twice in the 4h window → the auto-cascade
+        #     isn't fixing the underlying problem. File a blocker
+        #     letter once so the operator can investigate (refire-cap
+        #     will also fire on the third same-stage block — this
+        #     letter is the lower-latency early warning).
+        #
+        # (D) Non-review stages (dev_implementation transient blocks)
+        #     stay inbox-quiet — refire-cap handles the budget.
+        _BLOCKED_NO_NEXT_REVIEW_STAGES = {
+            "code_review", "pr_review", "validation",
+            "qa_manual", "qa_automation", "auto_merge",
+        }
+        if (
+            not payload.stage_next
+            and resolved is not None
+            and payload.ticket_ref
+            and payload.fsm_stage in _BLOCKED_NO_NEXT_REVIEW_STAGES
+        ):
+            # Count prior auto-cascades for this ticket in 4h. We tag
+            # each one with ``actions=["cascade:blocked_no_next_auto"]``
+            # in the finish audit, so a SQL count of that marker tells
+            # us how many times the server has already retried.
+            auto_cascade_cutoff = datetime.now(timezone.utc) - timedelta(hours=4)
+            prior_autos = (
+                await session.execute(
+                    select(AuditLog.id)
+                    .where(
+                        AuditLog.workspace_id == workspace_id,
+                        AuditLog.action == "agent_run.finish",
+                        AuditLog.created_at >= auto_cascade_cutoff,
+                        (
+                            (AuditLog.target_id == payload.ticket_ref)
+                            | (
+                                AuditLog.payload["ticket_ref"].astext
+                                == payload.ticket_ref
+                            )
+                        ),
+                        AuditLog.payload["auto_cascade_from_no_next"].astext
+                        == "true",
                     )
-            blocked_title = (
-                f"{payload.ticket_ref}: {payload.fsm_stage or 'agent'} "
-                f"blocked without cascade target"
-            )[:300]
-            blocked_summary = (
-                f"Agent finished outcome=blocked with stage_next=null "
-                f"at fsm_stage={payload.fsm_stage}. Picker can't route "
-                f"the fix anywhere; ticket sits idle until you act."
-            )[:2000]
-            session.add(
-                InboxItem(
-                    workspace_id=workspace_id,
-                    repo_id=None,
-                    type="blocker",
-                    title=blocked_title,
-                    headline=derive_headline(
-                        summary=blocked_summary, title=blocked_title
-                    ),
-                    summary=blocked_summary,
-                    payload={
-                        "ticket_ref": payload.ticket_ref,
-                        "fsm_stage": payload.fsm_stage,
-                        "run_id": payload.run_id,
-                        "resolution_mode": "single_choice",
-                        "action_items": [
-                            {
-                                "id": "send_to_dev",
-                                "kind": "choice",
-                                "label": "Send to dev_implementation",
-                                "hint": (
-                                    "Agent should re-run dev to fix the "
-                                    "blockers listed in its comment."
-                                ),
-                            },
-                            {
-                                "id": "send_to_validation",
-                                "kind": "choice",
-                                "label": "Send to validation",
-                                "hint": (
-                                    "QA missed something; re-validate against "
-                                    "this commit."
-                                ),
-                            },
-                            {
-                                "id": "mark_handled",
-                                "kind": "choice",
-                                "label": "Already handled",
-                                "hint": (
-                                    "Operator fixed it manually or the PR "
-                                    "is no longer relevant."
-                                ),
-                            },
-                        ],
-                    },
-                    status="new",
-                    intake_handle=None,
-                    intake_reason="blocked_without_cascade",
                 )
-            )
-            actions.append("inbox:blocker:blocked_no_next")
-        # else: stage_next is set — cascade matrix handles re-dispatch;
-        # nothing to do here. (Lock release happens via
+            ).all()
+            if len(prior_autos) < 2:
+                # Path (B): silent auto-cascade. Rewrite stage_next so
+                # the cascade matrix downstream fires dev_implementation
+                # for this ticket. Tag the action + audit row so prior-
+                # autos query above can find this run on the next pass.
+                # NOTE: we mutate ``payload`` because pydantic v2 lets
+                # us — the cascade matrix reads ``payload.stage_next``
+                # below.
+                payload.stage_next = "dev_implementation"
+                actions.append("cascade:blocked_no_next_auto")
+                logger.info(
+                    "blocked+no_next auto-cascade ws=%s ticket=%s stage=%s",
+                    workspace_id, payload.ticket_ref, payload.fsm_stage,
+                )
+            else:
+                # Path (C): auto-cascade exhausted, escalate. File a
+                # blocker letter with the same action_items the
+                # operator had before — but only AFTER the auto-
+                # cascade failed twice, not on every blocked+no_next.
+                ref = _ticket_ref_from(resolved.kind, payload.ticket_ref)
+                add_signal = getattr(
+                    resolved.gateway, "add_signal_label", None,
+                )
+                if add_signal is not None:
+                    try:
+                        await add_signal(ref, key="needs_clarification")
+                        actions.append("tracker:label:needs_clarification")
+                    except Exception as exc:  # noqa: BLE001
+                        logger.info(
+                            "blocked+no_next label add failed ws=%s "
+                            "ticket=%s: %s",
+                            workspace_id, payload.ticket_ref, exc,
+                        )
+                cascade_title = (
+                    f"{payload.ticket_ref}: {payload.fsm_stage} "
+                    f"keeps blocking despite auto-retries"
+                )[:300]
+                cascade_summary = (
+                    f"Server auto-cascaded {payload.ticket_ref} "
+                    f"from {payload.fsm_stage} to "
+                    f"dev_implementation twice in the last 4h; "
+                    f"the reviewer is still blocking. Either "
+                    f"the dev agent isn't converging on the fix "
+                    f"or the reviewer's block needs operator "
+                    f"input."
+                )[:2000]
+                session.add(
+                    InboxItem(
+                        workspace_id=workspace_id,
+                        repo_id=None,
+                        type="blocker",
+                        title=cascade_title,
+                        headline=derive_headline(
+                            summary=cascade_summary, title=cascade_title
+                        ),
+                        summary=cascade_summary,
+                        payload={
+                            "ticket_ref": payload.ticket_ref,
+                            "fsm_stage": payload.fsm_stage,
+                            "run_id": payload.run_id,
+                            "auto_cascade_attempts": len(prior_autos),
+                            "resolution_mode": "single_choice",
+                            "action_items": [
+                                {
+                                    "id": "applied_manually",
+                                    "kind": "choice",
+                                    "label": "Applied reviewer fix manually",
+                                },
+                                {
+                                    "id": "override_force_merge",
+                                    "kind": "choice",
+                                    "label": "Override reviewer / force merge",
+                                },
+                                {
+                                    "id": "mark_handled",
+                                    "kind": "choice",
+                                    "label": "Already handled",
+                                },
+                            ],
+                        },
+                        status="new",
+                        intake_handle=f"blocked-cascade-exhausted:{payload.ticket_ref}",
+                        intake_reason="blocked_cascade_exhausted",
+                    )
+                )
+                actions.append("inbox:blocker:cascade_exhausted")
+        # else: stage_next is set OR non-review stage — cascade matrix
+        # / refire-cap handle the rest. (Lock release happens via
         # ``maybe_release_project_lock_on_finish`` below.)
 
     elif payload.outcome == "out_of_scope":
@@ -4073,6 +4132,12 @@ async def finish_agent_run(
                 # snapshot and exited noop with ``ticket_ref:null``
                 # (askslayer/PAC-20,21,22,23 2026-05-15).
                 "description": payload.description,
+                # Marker for the blocked+no_next auto-cascade counter
+                # (path (B) above). Read by the next /finish call to
+                # decide whether to keep auto-cascading or escalate.
+                "auto_cascade_from_no_next": (
+                    "cascade:blocked_no_next_auto" in actions
+                ),
             },
         )
     )
