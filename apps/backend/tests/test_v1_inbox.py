@@ -145,7 +145,9 @@ async def test_list_includes_action_item_count(v1_client, seed_workspace, db_ses
         },
     )
     res = await v1_client.get(
-        f"/v1/workspaces/{ws.id}/inbox", headers=_auth(raw)
+        f"/v1/workspaces/{ws.id}/inbox",
+        params={"ownership": "all"},
+        headers=_auth(raw),
     )
     assert res.status_code == 200, res.text
     row = res.json()["items"][0]
@@ -165,7 +167,9 @@ async def test_list_includes_headline_fields_from_payload(
         payload={"ticket_ref": "ELS-99", "fsm_stage": "validation"},
     )
     res = await v1_client.get(
-        f"/v1/workspaces/{ws.id}/inbox", headers=_auth(raw)
+        f"/v1/workspaces/{ws.id}/inbox",
+        params={"ownership": "all"},
+        headers=_auth(raw),
     )
     assert res.status_code == 200, res.text
     row = res.json()["items"][0]
@@ -378,9 +382,10 @@ async def test_counts_endpoint_groups_by_type_and_status(
 
 
 @pytest.mark.asyncio
-async def test_counts_actionable_excludes_reports(
+async def test_counts_actionable_includes_attention_reports(
     v1_client, seed_workspace, db_session
 ):
+    """Attention-category reports count toward actionable_new (ELS-146)."""
     _, raw, ws = seed_workspace
     await _make_item(
         db_session, ws, type="report", category="attention", status="new"
@@ -393,7 +398,7 @@ async def test_counts_actionable_excludes_reports(
     )
     assert res.status_code == 200
     body = res.json()
-    assert body["actionable_new"] == 1
+    assert body["actionable_new"] == 2
     assert body["reports_new"] == 1
 
 
