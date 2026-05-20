@@ -638,6 +638,119 @@ async def test_no_blockers_does_not_refuse(
     assert result.reason != "blocked_by_dependency"
 
 
+@pytest.mark.asyncio
+async def test_file_overlap_warning_attached_on_dev_dispatch(
+    db_session, monkeypatch
+) -> None:
+    """Overlap check is warn-only: dispatch fires and audit carries warning."""
+    from datetime import datetime, timezone
+
+    from backend.app.db.models.integrations import (
+        GitHubInstallation,
+        WorkspaceRepo,
+    )
+    from backend.app.integrations.gateway.tracker import TicketRef
+    from backend.app.services import tracker_resolver as tracker_resolver_module
+    from backend.app.services.file_overlap import FileOverlapResult
+
+    ws = await _make_workspace(db_session)
+    install = GitHubInstallation(
+        workspace_id=ws,
+        installation_id=99001,
+        account_login="acme",
+        account_type="Organization",
+        installed_at=datetime.now(timezone.utc),
+    )
+    db_session.add(install)
+    await db_session.flush()
+    repo = WorkspaceRepo(
+        workspace_id=ws,
+        installation_id=install.id,
+        provider="github",
+        external_id=9001,
+        full_name="acme/ship",
+        default_branch="main",
+        private=False,
+        html_url="https://github.com/acme/ship",
+        activated_at=datetime.now(timezone.utc),
+    )
+    db_session.add(repo)
+    await db_session.flush()
+
+    settings = dispatcher.get_settings()
+    monkeypatch.setattr(settings, "tracker_poll_fire", True, raising=False)
+    monkeypatch.setattr(
+        settings, "enable_file_overlap_warnings", True, raising=False
+    )
+
+    class _StubGateway:
+        async def get_ticket_snapshot(self, ticket: TicketRef):
+            return {"labels": [], "project_id": "proj-els"}
+
+    class _Resolved:
+        kind = "linear"
+        gateway = _StubGateway()
+
+    async def _resolve(*_args, **_kwargs):
+        return _Resolved()
+
+    monkeypatch.setattr(
+        tracker_resolver_module, "resolve_for_workspace", _resolve
+    )
+
+    async def _overlap(*_args, **_kwargs):
+        return FileOverlapResult(
+            warning_markdown="> **File-coordination warning**: test",
+            file_overlap_warnings=[
+                {
+                    "sibling_ticket_ref": "ELS-144",
+                    "overlap_kind": "schema",
+                    "paths": ["apps/backend/migrations/versions/"],
+                }
+            ],
+        )
+
+    monkeypatch.setattr(
+        dispatcher, "build_file_coordination_warning", _overlap
+    )
+
+    async def _dispatch_workflow(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(
+        dispatcher, "dispatch_workflow", _dispatch_workflow
+    )
+
+    result = await maybe_dispatch(
+        db_session,
+        workspace_id=ws,
+        ticket_ref="ELS-147",
+        trigger_kind="tracker_poll",
+        fsm_stage="dev_implementation",
+        settings=settings,
+    )
+    assert result.fired is True
+    dispatch_row = (
+        await db_session.execute(
+            select(AuditLog).where(
+                AuditLog.workspace_id == ws,
+                AuditLog.action == "agent_run.dispatch",
+                AuditLog.target_id == "ELS-147",
+            )
+        )
+    ).scalar_one()
+    assert "file_coordination_warning" in dispatch_row.payload
+    overlap_row = (
+        await db_session.execute(
+            select(AuditLog).where(
+                AuditLog.workspace_id == ws,
+                AuditLog.action == "dispatch.file_overlap_warning",
+            )
+        )
+    ).scalar_one()
+    assert overlap_row.target_id == "ELS-147"
+
+
 # ---------------------------------------------------------------------------
 # Workspace-bundle dispatch (ELS-125) — separate cap, no compete with SDLC
 # ---------------------------------------------------------------------------

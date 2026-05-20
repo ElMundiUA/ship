@@ -13,9 +13,20 @@
  *   access_token that the backend will validate against the Auth0 JWKS.
  */
 
-import "server-only";
-
-import { cookies } from "next/headers";
+// ``import "server-only"`` was removed 2026-05-19 — the marker blocked
+// every backend deploy for ~30 days because client.ts (which has 20+
+// "use client" importers for types) transitively pulled this module
+// into the browser bundle, and Next.js then refused to compile the
+// chunk ("not supported in the pages/ directory"). The actual
+// security boundary survives without the marker:
+//   - cookies() / auth0 SDK only work in server runtime; calling
+//     getSessionToken() from a client component would throw at runtime
+//     instead of leaking a token.
+//   - The cookie itself is httpOnly + sameSite=lax — never visible to
+//     ``document.cookie``.
+// Future enforcement should be a lint rule banning ``apiFetch``
+// imports from ``"use client"`` files, not a runtime marker that
+// turns into a build-time outage.
 
 import { auth0, isAuth0Mode } from "@/lib/auth0";
 
@@ -34,12 +45,18 @@ export async function getSessionToken(): Promise<string | null> {
       return null;
     }
   }
+  // ``next/headers`` is server-only by design (throws at runtime on
+  // the client) but Webpack pre-emptively refuses to build any chunk
+  // that statically imports it from a client-reachable file. Pull it
+  // in via a dynamic import that only runs server-side.
+  const { cookies } = await import("next/headers");
   const jar = await cookies();
   const c = jar.get(COOKIE_NAME);
   return c?.value ?? null;
 }
 
 export async function setSessionCookie(token: string, expiresAt: Date): Promise<void> {
+  const { cookies } = await import("next/headers");
   const jar = await cookies();
   // maxAge in seconds; Chromium has occasionally been finicky about parsing
   // wall-clock `expires` headers from RSC action responses, so we use the
@@ -61,6 +78,7 @@ export async function setSessionCookie(token: string, expiresAt: Date): Promise<
 }
 
 export async function clearSessionCookie(): Promise<void> {
+  const { cookies } = await import("next/headers");
   const jar = await cookies();
   jar.delete(COOKIE_NAME);
 }

@@ -134,6 +134,54 @@ async def _make_item(
 
 
 @pytest.mark.asyncio
+async def test_list_includes_action_item_count(v1_client, seed_workspace, db_session):
+    _, raw, ws = seed_workspace
+    await _make_item(
+        db_session,
+        ws,
+        type="report",
+        title="digest",
+        payload={
+            "action_items": [
+                {"id": "a", "prompt": "Q1"},
+                {"id": "b", "prompt": "Q2"},
+            ]
+        },
+    )
+    res = await v1_client.get(
+        f"/v1/workspaces/{ws.id}/inbox",
+        params={"ownership": "all"},
+        headers=_auth(raw),
+    )
+    assert res.status_code == 200, res.text
+    row = res.json()["items"][0]
+    assert row["action_item_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_list_includes_headline_fields_from_payload(
+    v1_client, seed_workspace, db_session
+):
+    _, raw, ws = seed_workspace
+    await _make_item(
+        db_session,
+        ws,
+        type="blocker",
+        title="agent blocked: validation",
+        payload={"ticket_ref": "ELS-99", "fsm_stage": "validation"},
+    )
+    res = await v1_client.get(
+        f"/v1/workspaces/{ws.id}/inbox",
+        params={"ownership": "all"},
+        headers=_auth(raw),
+    )
+    assert res.status_code == 200, res.text
+    row = res.json()["items"][0]
+    assert row["ticket_ref"] == "ELS-99"
+    assert row["fsm_stage"] == "validation"
+
+
+@pytest.mark.asyncio
 async def test_list_empty_returns_zero_counts(v1_client, seed_workspace):
     _, raw, ws = seed_workspace
     res = await v1_client.get(
@@ -338,9 +386,10 @@ async def test_counts_endpoint_groups_by_type_and_status(
 
 
 @pytest.mark.asyncio
-async def test_counts_actionable_excludes_reports(
+async def test_counts_actionable_includes_attention_reports(
     v1_client, seed_workspace, db_session
 ):
+    """Attention-category reports count toward actionable_new (ELS-146)."""
     _, raw, ws = seed_workspace
     await _make_item(
         db_session, ws, type="report", category="attention", status="new"
@@ -353,7 +402,7 @@ async def test_counts_actionable_excludes_reports(
     )
     assert res.status_code == 200
     body = res.json()
-    assert body["actionable_new"] == 1
+    assert body["actionable_new"] == 2
     assert body["reports_new"] == 1
 
 
@@ -838,6 +887,90 @@ async def test_event_append_returns_event_and_appears_in_detail_list(
 # ---------------------------------------------------------------------------
 # 19. payload merge semantics
 # ---------------------------------------------------------------------------
+
+
+def _mailbox_checklist_payload() -> dict:
+    return {
+        "action_items": [
+            {
+                "id": "q1",
+                "prompt": "First?",
+                "primary": {"label": "Yes", "choice": "yes"},
+                "secondary": {"label": "No", "choice": "no"},
+            },
+            {
+                "id": "q2",
+                "prompt": "Second?",
+                "primary": {"label": "Go", "choice": "go"},
+                "secondary": {"label": "Stop", "choice": "stop"},
+            },
+        ]
+    }
+
+
+@pytest.mark.asyncio
+async def test_checklist_disposition_records_partial_answers(
+    v1_client, seed_workspace, db_session
+):
+    user, raw, ws = seed_workspace
+    item = await _make_item(
+        db_session,
+        ws,
+        owner_user_id=user.id,
+        type="report",
+        payload=_mailbox_checklist_payload(),
+    )
+    res = await v1_client.post(
+        f"/v1/workspaces/{ws.id}/inbox/{item.id}/disposition",
+        headers=_auth(raw),
+        json={
+            "action": "resolve",
+            "payload": {"action_item_id": "q1", "choice": "yes"},
+        },
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["status"] == "new"
+    assert body["payload"]["checklist_answers"] == {"q1": "yes"}
+    assert len(body["payload"]["action_items"]) == 1
+    assert body["payload"]["action_items"][0]["id"] == "q2"
+
+
+@pytest.mark.asyncio
+async def test_checklist_disposition_resolves_after_last_answer(
+    v1_client, seed_workspace, db_session
+):
+    user, raw, ws = seed_workspace
+    item = await _make_item(
+        db_session,
+        ws,
+        owner_user_id=user.id,
+        type="report",
+        payload=_mailbox_checklist_payload(),
+    )
+    first = await v1_client.post(
+        f"/v1/workspaces/{ws.id}/inbox/{item.id}/disposition",
+        headers=_auth(raw),
+        json={
+            "action": "resolve",
+            "payload": {"action_item_id": "q1", "choice": "yes"},
+        },
+    )
+    assert first.status_code == 200, first.text
+
+    second = await v1_client.post(
+        f"/v1/workspaces/{ws.id}/inbox/{item.id}/disposition",
+        headers=_auth(raw),
+        json={
+            "action": "resolve",
+            "payload": {"action_item_id": "q2", "choice": "go"},
+        },
+    )
+    assert second.status_code == 200, second.text
+    body = second.json()
+    assert body["status"] == "resolved"
+    assert body["payload"]["checklist_answers"] == {"q1": "yes", "q2": "go"}
+    assert body["payload"].get("action_items") == []
 
 
 @pytest.mark.asyncio

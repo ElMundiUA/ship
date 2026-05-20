@@ -162,14 +162,16 @@ export function ButtonDanger({
   children,
   onClick,
   className,
+  type = "button",
 }: {
   children: ReactNode;
   onClick?: () => void;
   className?: string;
+  type?: "button" | "submit";
 }) {
   return (
     <button
-      type="button"
+      type={type}
       onClick={onClick}
       className={cn(
         "inline-flex items-center gap-1.5 rounded-full border border-coral/40 bg-coral/10 px-3 py-1.5 text-xs font-semibold text-coral transition hover:border-coral/70 hover:bg-coral/20",

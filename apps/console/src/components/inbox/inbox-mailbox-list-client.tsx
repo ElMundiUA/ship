@@ -6,26 +6,18 @@ import {
   InboxLaneFilterChips,
   useInboxLaneFilter,
 } from "@/components/inbox/inbox-lane-filters";
+import { MailboxKeyboardNav } from "@/components/inbox/mailbox-keyboard-nav";
 import { StaleBadge } from "@/components/inbox/stale-badge";
+import { EmptyState } from "@/components/ui";
 import { cn } from "@/lib/cn";
+import { relativeTime } from "@/lib/format";
 import {
-  INBOX_TYPE_META,
-  type InboxItem,
-  type InboxType,
-} from "@/lib/inbox-types";
+  formatInboxHeadline,
+  formatIntakeReasonTooltip,
+} from "@/lib/inbox-copy";
+import { ROW_KICKER, type InboxItem } from "@/lib/inbox-types";
 
 type Ownership = "mine" | "unassigned" | "all";
-
-const ROW_TONE: Record<InboxType, string> = {
-  clarification: "bg-sun",
-  approval: "bg-aqua",
-  improvement: "bg-lilac",
-  failure: "bg-coral",
-  blocker: "bg-coral",
-  exception: "bg-coral/60",
-  stuck: "bg-white/30",
-  report: "bg-white/15",
-};
 
 export function InboxMailboxListClient({
   items,
@@ -42,8 +34,16 @@ export function InboxMailboxListClient({
 }) {
   const { lane, setLane, visible, counts } = useInboxLaneFilter(items);
 
+  const hrefForId = (id: string) =>
+    buildSelectHref({ id, ownership, workspaceScope });
+
   return (
     <div className="flex min-h-[60vh] flex-col rounded-xl border border-white/[0.08] bg-white/[0.015]">
+      <MailboxKeyboardNav
+        itemIds={visible.map((i) => i.id)}
+        selectedId={selectedId}
+        buildHref={hrefForId}
+      />
       {ownershipTabs}
       <InboxLaneFilterChips
         allCount={items.length}
@@ -53,10 +53,17 @@ export function InboxMailboxListClient({
       />
 
       {visible.length === 0 ? (
-        <div className="flex-1 px-4 py-10 text-center text-sm text-white/55">
-          {ownership === "mine"
-            ? "Nothing on your plate."
-            : "Inbox empty."}
+        <div className="flex flex-1 items-center justify-center p-4">
+          {items.length === 0 ? (
+            <EmptyState
+              title="Inbox empty"
+              body="Nothing waiting on you — agents working."
+            />
+          ) : (
+            <p className="text-center text-sm text-white/55">
+              No items in this lane — try another filter.
+            </p>
+          )}
         </div>
       ) : (
         <ul
@@ -90,49 +97,66 @@ function MailboxRow({
   ownership: Ownership;
   workspaceScope?: string;
 }) {
-  const meta = INBOX_TYPE_META[item.type];
+  const kicker = ROW_KICKER[item.type];
   const isUnread = item.status === "new";
+  const headline = formatInboxHeadline(item);
+  const decisionCount = item.action_item_count ?? 0;
+  const intakeTip = formatIntakeReasonTooltip(item.intake_reason);
+
   return (
     <Link
       href={buildSelectHref({ id: item.id, ownership, workspaceScope })}
       className={cn(
-        "group relative flex items-start gap-3 px-4 py-3 transition",
+        "group relative flex items-center gap-2.5 px-4 py-2 transition",
         selected ? "bg-aqua/[0.08]" : "hover:bg-white/[0.03]",
       )}
-      aria-current={selected ? "true" : undefined}
+      aria-current={selected ? "page" : undefined}
+      title={intakeTip}
     >
       <span
         aria-hidden
         className={cn(
-          "mt-1 inline-block h-2 w-2 shrink-0 rounded-full",
-          isUnread ? ROW_TONE[item.type] : "bg-white/15",
+          "inline-block h-2 w-2 shrink-0 rounded-full",
+          isUnread ? kicker.tone : "bg-white/15",
         )}
       />
       <div className="min-w-0 flex-1">
-      <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.18em] text-white/40">
-        <span>{meta.label.replace(/s$/, "")}</span>
-        <StaleBadge
-          createdAt={item.created_at}
-          status={item.status}
-          snoozedUntil={item.snoozed_until}
-        />
-      </div>
-      <p
-        className={cn(
-          "mt-1 truncate text-sm",
-          selected
-            ? "font-semibold text-white"
-            : isUnread
-              ? "font-semibold text-white/95"
-              : "text-white/70",
-        )}
-      >
-        {item.title}
-      </p>
-      {item.summary &&
-        item.summary.trim().toLowerCase() !== item.title.trim().toLowerCase() && (
-          <p className="mt-0.5 truncate text-xs text-white/50">{item.summary}</p>
-        )}
+        <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.18em] text-white/40">
+          <span>
+            <span aria-hidden>{kicker.glyph} </span>
+            {kicker.label}
+          </span>
+          <span className="text-white/15">·</span>
+          <time
+            className="normal-case tracking-normal text-white/55"
+            dateTime={item.created_at}
+            title={new Date(item.created_at).toLocaleString()}
+          >
+            {relativeTime(item.created_at)}
+          </time>
+          <StaleBadge
+            createdAt={item.created_at}
+            status={item.status}
+            snoozedUntil={item.snoozed_until}
+          />
+          {decisionCount > 0 && (
+            <span className="rounded-full border border-white/15 bg-white/[0.06] px-1.5 py-0.5 text-[9px] font-semibold text-white/70">
+              {decisionCount} {decisionCount === 1 ? "decision" : "decisions"}
+            </span>
+          )}
+        </div>
+        <p
+          className={cn(
+            "truncate text-sm leading-tight",
+            selected
+              ? "font-semibold text-white"
+              : isUnread
+                ? "font-semibold text-white/95"
+                : "text-white/70",
+          )}
+        >
+          {headline}
+        </p>
       </div>
     </Link>
   );

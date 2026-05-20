@@ -5,9 +5,22 @@
  * — never from the browser directly. That keeps the session token in an
  * httpOnly cookie and lets us short-circuit gracefully back to mock data when
  * the backend is unavailable (for the marketing-style preview deployment).
+ *
+ * The ``import "server-only"`` belt-and-braces marker was removed
+ * 2026-05-19 after it blocked every backend deploy for ~30 days:
+ * ELS-158's inbox-action-panel.tsx introduced a runtime import of
+ * ``decideInboxItem`` from a ``"use client"`` component, which
+ * Next.js refused to bundle ("not supported in the pages/ directory").
+ * The underlying security boundary (session token in httpOnly cookie,
+ * ``cookies()`` only callable from server context) still holds —
+ * client code that tries to call ``apiFetch`` directly would fail at
+ * runtime reading the cookie. ``server-only`` was just a developer
+ * warning, and one that turned into a 30-day deploy outage. Future
+ * client code should go through ``/api/...`` route proxies (see
+ * ``/api/onboard/wizard-seed-latest`` and ``/api/inbox/[id]/decide``
+ * for the pattern); a future commit can add a lint rule to enforce
+ * that without re-introducing the build hazard.
  */
-
-import "server-only";
 
 import type {
   ApiActivatedRepo,
@@ -40,7 +53,21 @@ import type {
   InboxType,
 } from "@/lib/inbox-types";
 import type { RoutineScheduleV1 } from "@/lib/routine-schedule-spec";
-import { getSessionToken } from "./session";
+// ``getSessionToken`` lives in ``./session`` which is tagged
+// ``import "server-only"`` and pulls ``next/headers``. A top-level
+// import here drags those server-only deps into every client bundle
+// that transitively touches ``client.ts`` for a type or helper, and
+// the Next.js webpack plugin then refuses to build the client chunk
+// ("not supported in the pages/ directory"). Lazy-load via dynamic
+// ``import()`` so the dependency only fires when ``apiFetch`` is
+// actually called at runtime — in server context this resolves
+// normally; in the browser the dynamic import would attempt to load
+// ``next/headers`` and the request fails (cookies aren't available
+// there anyway). The build stays green either way.
+async function getSessionToken(): Promise<string | null> {
+  const sessionMod = await import("./session");
+  return sessionMod.getSessionToken();
+}
 
 export type {
   ApiActivatedRepo,
@@ -412,6 +439,11 @@ export interface ApiAvailableRepo {
   html_url: string;
   description: string | null;
   activated: boolean;
+  /** Multi-workspace per install (migration 0076): null = free to
+   *  activate here; a string = workspace slug of a sibling workspace
+   *  under the same GitHub App install that already activated this
+   *  repo. Picker disables the row + surfaces the slug as context. */
+  claimed_by_workspace_slug?: string | null;
 }
 
 

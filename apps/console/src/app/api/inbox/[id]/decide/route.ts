@@ -18,6 +18,7 @@ import { resolveOrigin } from "@/lib/api/origin";
 
 type DecideBody = {
   ws?: string;
+  workspaceId?: string;
   selections?: string[];
   freeform?: string | null;
   action_item_id?: string | null;
@@ -48,7 +49,7 @@ async function handleJson(request: Request, origin: string, id: string) {
     return NextResponse.json({ error: "bad_input" }, { status: 400 });
   }
 
-  const wsId = (body.ws ?? "").toString();
+  const wsId = (body.ws ?? body.workspaceId ?? "").toString();
   if (!wsId || !id) {
     return NextResponse.json({ error: "bad_input" }, { status: 400 });
   }

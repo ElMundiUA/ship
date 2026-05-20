@@ -124,8 +124,15 @@ export const INBOX_TYPE_META: Record<
  *     Used for ``clarification`` where the agent needs an answer.
  *   - ``decision`` — primary + secondary disposition buttons. Used for
  *     everything that's a yes/no/dismiss decision.
+ *   - ``checklist`` — one row per ``payload.action_items`` entry with
+ *     prompt + primary/secondary choices (daily digest letters).
  */
-export type InboxFooterKind = "acknowledge" | "reply" | "decision" | "report_actions";
+export type InboxFooterKind =
+  | "acknowledge"
+  | "reply"
+  | "decision"
+  | "report_actions"
+  | "checklist";
 
 export type InboxReportActionItem = {
   id: string;
@@ -167,15 +174,67 @@ export function reportActionItemDecisions(
   return out;
 }
 
-export function inboxFooterKind(
-  type: InboxType,
-  payload?: Record<string, unknown>,
-): InboxFooterKind {
-  if (type === "report" && reportActionItems(payload).length > 0) {
-    return "report_actions";
+/** Daily-digest / multi-prompt letters — checklist footer contract. */
+export type InboxChecklistActionItem = {
+  id: string;
+  prompt: string;
+  primary: { label: string; choice: string };
+  secondary: { label: string; choice: string };
+};
+
+function readChoiceButton(
+  raw: unknown,
+): { label: string; choice: string } | null {
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  const label = typeof o.label === "string" ? o.label.trim() : "";
+  const choice = typeof o.choice === "string" ? o.choice.trim() : "";
+  if (!label || !choice) return null;
+  return { label, choice };
+}
+
+/** Parse checklist-shaped ``action_items``; skips invalid rows. */
+export function parseChecklistActionItems(
+  payload: Record<string, unknown> | undefined,
+): InboxChecklistActionItem[] {
+  if (!payload || typeof payload !== "object") return [];
+  const raw = payload["action_items"];
+  if (!Array.isArray(raw)) return [];
+  const out: InboxChecklistActionItem[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") continue;
+    const row = entry as Record<string, unknown>;
+    const id = typeof row.id === "string" ? row.id.trim() : "";
+    const prompt = typeof row.prompt === "string" ? row.prompt.trim() : "";
+    const primary = readChoiceButton(row.primary);
+    const secondary = readChoiceButton(row.secondary);
+    if (!id || !prompt || !primary || !secondary) continue;
+    out.push({ id, prompt, primary, secondary });
   }
-  if (type === "report") return "acknowledge";
-  if (type === "clarification") return "reply";
+  return out;
+}
+
+type FooterKindInput =
+  | InboxType
+  | Pick<InboxItemDetail, "type" | "payload" | "status">;
+
+export function inboxFooterKind(input: FooterKindInput): InboxFooterKind {
+  if (typeof input === "object") {
+    if (input.status !== "resolved" && input.status !== "dismissed") {
+      if (parseChecklistActionItems(input.payload).length > 0) {
+        return "checklist";
+      }
+      if (
+        input.type === "report" &&
+        reportActionItems(input.payload).length > 0
+      ) {
+        return "report_actions";
+      }
+    }
+    return inboxFooterKind(input.type);
+  }
+  if (input === "report") return "acknowledge";
+  if (input === "clarification") return "reply";
   return "decision";
 }
 
@@ -196,6 +255,20 @@ export function inboxListLine(item: {
   return item.title;
 }
 
+/** Type kicker: glyph + label + dot tone for mailbox list rows. */
+export const ROW_KICKER: Record<
+  InboxType,
+  { glyph: string; label: string; tone: string }
+> = {
+  clarification: { glyph: "?", label: "CLARIFY", tone: "bg-sun" },
+  approval: { glyph: "★", label: "ATTENTION", tone: "bg-aqua" },
+  improvement: { glyph: "★", label: "ATTENTION", tone: "bg-lilac" },
+  failure: { glyph: "!", label: "FAILURE", tone: "bg-coral" },
+  blocker: { glyph: "!", label: "BLOCKER", tone: "bg-coral" },
+  exception: { glyph: "★", label: "ATTENTION", tone: "bg-coral/60" },
+  stuck: { glyph: "★", label: "ATTENTION", tone: "bg-white/30" },
+  report: { glyph: "≡", label: "REPORT", tone: "bg-white/15" },
+};
 /**
  * One row as it appears in the inbox list. Compact: the detail view
  * fetches the full payload + audit trail separately.
@@ -226,6 +299,11 @@ export type InboxItem = {
   priority: number;
   lane: InboxLane;
   resolution_mode: InboxResolutionMode;
+  /** Count of ``payload.action_items`` for list-row decision chip. */
+  action_item_count?: number;
+  /** From payload — powers ``formatInboxHeadline`` on list rows. */
+  ticket_ref?: string | null;
+  fsm_stage?: string | null;
 };
 
 export type InboxItemDetail = InboxItem & {

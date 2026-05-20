@@ -1570,7 +1570,7 @@ async function fetchWorkspaceAgentProvider({ apiBase, apiToken, workspaceId }) {
 }
 
 
-function renderPrompt({ patternBody, baseBody, role, routineSpec, task, fsmStage, finishCtx }) {
+export function renderPrompt({ patternBody, baseBody, role, routineSpec, task, fsmStage, finishCtx }) {
   const issueRef = task?.ticket_ref ? task.ticket_ref : "(no ticket)";
   const title = task?.title || "";
   const description = task?.body || "";
@@ -1591,6 +1591,13 @@ function renderPrompt({ patternBody, baseBody, role, routineSpec, task, fsmStage
     .replace(/\{\{DESCRIPTION\}\}/g, description.slice(0, 8000));
 
   const out = [];
+  if (
+    typeof task?.file_coordination_warning === "string" &&
+    task.file_coordination_warning.trim()
+  ) {
+    out.push(task.file_coordination_warning.trim());
+    out.push("");
+  }
   if (routineSpec.prompt) {
     out.push("## Routine instructions");
     out.push(routineSpec.prompt.trim());

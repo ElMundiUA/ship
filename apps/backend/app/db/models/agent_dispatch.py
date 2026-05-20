@@ -23,7 +23,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, text
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, String, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -70,7 +70,10 @@ class AgentDispatchLock(Base):
     # allowed because daily-tick locks are claimed before the dispatch
     # row is written. Not a FK — audit_log has its own lifecycle and
     # we don't want a cascade dragging locks into archive deletes.
-    run_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True),
+    # Type is bigint to match ``audit_log.id``; the lock sweeper joins
+    # ``agent_dispatch_locks.run_id = audit_log.id`` to recover the
+    # owning ticket_ref.
+    run_id: Mapped[int | None] = mapped_column(
+        BigInteger,
         nullable=True,
     )

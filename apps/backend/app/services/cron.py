@@ -130,6 +130,17 @@ class CronLockId(IntEnum):
     # ``payload.action_items`` so the Decision UI renders pills.
     # Idempotent; only touches rows missing the structured payload.
     INBOX_ACTION_ITEMS_BACKFILL = 1019
+    # Pull-request cache reconciler (askslayer/visitor 2026-05-19).
+    # ``pull_requests`` is a webhook-fed cache — if the webhook misses
+    # an event or the install is paused, rows go stale at
+    # ``state=open`` long after GitHub has merged or closed them.
+    # ``_mirror_stuck_prs_to_inbox`` then regenerates "stuck PR" inbox
+    # items on every dashboard render that the operator cannot
+    # dismiss (next render brings them back). This job polls GitHub
+    # for any row at ``state=open`` whose ``updated_at_external`` is
+    # >3d old and refreshes the cache. Idempotent — already-current
+    # rows are no-ops.
+    PR_CACHE_RECONCILE = 1020
 
 
 # ---------------------------------------------------------------------------
