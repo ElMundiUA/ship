@@ -1167,6 +1167,19 @@ async def get_next_task(
                 settings=settings,
             )
             file_coordination_warning = overlap.warning_markdown
+
+    body = pick.get("body") if isinstance(pick.get("body"), str) else None
+    # dev_not_converging fix: a dev re-dispatched after a review block
+    # needs to see the reviewer's verdict, not just the original brief.
+    # Stitch the latest non-dev SDLC feedback (+ operator hints) onto
+    # the task body for dev_implementation picks. Best-effort.
+    if state == "dev_implementation" and ticket_ref:
+        feedback = await _fetch_reviewer_feedback_section(
+            resolved=resolved, ticket_ref=ticket_ref
+        )
+        if feedback:
+            body = f"{body}\n\n{feedback}" if body else feedback
+
     return TaskResponseOut(
         fsm_stage=state,
         tracker_kind=resolved.kind,
@@ -1174,7 +1187,7 @@ async def get_next_task(
             ticket_ref=ticket_ref,
             kind=resolved.kind,
             title=str(pick.get("title") or ""),
-            body=pick.get("body") if isinstance(pick.get("body"), str) else None,
+            body=body,
             url=str(pick["url"]) if pick.get("url") else None,
             labels=list(pick.get("labels") or []),
             state=str(pick.get("status") or "") or None,
@@ -1898,6 +1911,88 @@ def _extract_project_sections(
         return text
     truncated = encoded[:overall_cap_bytes].decode("utf-8", errors="ignore").rstrip()
     return truncated + "\n\n…(truncated)"
+
+
+# ---------------------------------------------------------------------------
+# Reviewer-feedback channel for re-dispatched dev runs.
+#
+# When a ticket cascades ``code_review (blocked) → dev_implementation``,
+# the dev agent used to see only the original ticket body — never the
+# reviewer's blocking comment. So it re-implemented the same brief, the
+# reviewer re-blocked with the identical finding, and the ticket looped
+# forever: the ``dev_not_converging`` failure mode. ``/tracker/next``
+# now stitches the latest non-dev SDLC verdict (reviewer / validation /
+# auto-merger) plus any operator hints posted after it onto the dev's
+# task body so the agent knows exactly what to fix this run.
+# ---------------------------------------------------------------------------
+
+_OPERATOR_HINT_MARKERS: tuple[str, ...] = ("[Operator hint", "[Operator]")
+_REVIEWER_FEEDBACK_CAP_BYTES = 6 * 1024
+
+
+async def _fetch_reviewer_feedback_section(
+    *, resolved, ticket_ref: str
+) -> str | None:
+    """Markdown ``## Reviewer feedback to address`` block for a dev
+    re-run, or ``None`` when there's nothing to surface.
+
+    Best-effort: one ``list_comments`` call, gated by the caller to
+    ``dev_implementation`` picks. Any tracker error degrades to
+    ``None`` — a missing feedback block must never block the run.
+
+    A comment counts as feedback when it carries a ``[Ship SDLC:role-…]``
+    marker for any role **other than** ``role-developer`` (the dev's own
+    finish comments). We take the most recent such verdict, then append
+    any operator hints posted after it (the operator is steering this
+    specific re-run, so those win)."""
+    list_fn = getattr(resolved.gateway, "list_comments", None)
+    if list_fn is None:
+        return None
+    try:
+        comments = await list_fn(
+            TicketRef(kind=resolved.kind, workspace_hint=None, id=ticket_ref)
+        )
+    except Exception as exc:  # noqa: BLE001 — best-effort, never block the run
+        logger.debug(
+            "reviewer_feedback: list_comments failed ticket=%s err=%s",
+            ticket_ref, exc,
+        )
+        return None
+    if not comments:
+        return None
+
+    def _is_feedback(body: str) -> bool:
+        return "[Ship SDLC:role-" in body and "role-developer" not in body
+
+    # comments arrive oldest-first; scan back for the latest verdict.
+    last_idx: int | None = None
+    for i in range(len(comments) - 1, -1, -1):
+        if _is_feedback(comments[i].body or ""):
+            last_idx = i
+            break
+    if last_idx is None:
+        return None
+
+    parts: list[str] = [(comments[last_idx].body or "").strip()]
+    for c in comments[last_idx + 1:]:
+        body = (c.body or "").strip()
+        if any(m in body for m in _OPERATOR_HINT_MARKERS):
+            parts.append(body)
+
+    joined = "\n\n---\n\n".join(p for p in parts if p)
+    encoded = joined.encode("utf-8")
+    if len(encoded) > _REVIEWER_FEEDBACK_CAP_BYTES:
+        joined = encoded[:_REVIEWER_FEEDBACK_CAP_BYTES].decode(
+            "utf-8", "ignore"
+        ) + "\n\n…(truncated)"
+    return (
+        "## Reviewer feedback to address\n\n"
+        "A previous review **blocked** this PR and sent it back to you. "
+        "Fix every point below in this run — re-implementing the "
+        "original brief without addressing these will just get blocked "
+        "again.\n\n"
+        f"{joined}"
+    )
 
 
 async def _build_project_context_for_ticket(

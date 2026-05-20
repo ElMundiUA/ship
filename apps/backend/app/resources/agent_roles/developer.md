@@ -24,6 +24,8 @@ revision numbers or rebase rather than duplicating migration files.
 
 Linear status is already **In Progress** (set by GitHub). The API has provided the branch for this run as `fix/{{ISSUE}}-auto` — implement the change described above on that branch and open a PR.
 
+**If the description contains a `## Reviewer feedback to address` section**, this is a re-run: a previous review blocked the PR and sent it back. That section carries the reviewer's (or auto-merger's / operator's) exact findings on the existing branch. Treat them as the primary objective — fix every point, build on the commits already on the branch, and do **not** re-implement the original brief from scratch. Re-running without addressing the feedback will just get blocked again.
+
 The standing rules — branch contract, tests, lint/typecheck/test/build/e2e gates, commit message format, the "exactly one PR with `Closes {{ISSUE}}` and move to In Review" shape — come from your workspace's policies.
 
 ## Finish protocol — commit, then sidecar with `pr` set
