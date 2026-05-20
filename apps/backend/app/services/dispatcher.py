@@ -48,6 +48,7 @@ from backend.app.integrations.github.workflows import (
 )
 from backend.app.services import tracker_resolver as tracker_resolver_module
 from backend.app.services.file_overlap import build_file_coordination_warning
+from backend.app.services.file_overlap_telemetry import emit_overlap_warnings
 
 
 # Stage label (Linear's ``stage:<id>``) → routine id. The dispatcher
@@ -1002,20 +1003,21 @@ async def maybe_dispatch(
         file_coordination_warning = overlap.warning_markdown
         file_overlap_warnings = overlap.file_overlap_warnings
         if file_overlap_warnings:
-            session.add(
-                AuditLog(
+            try:
+                emit_overlap_warnings(
+                    session,
                     workspace_id=workspace_id,
-                    action="dispatch.file_overlap_warning",
-                    target_kind="ticket",
-                    target_id=ticket_ref,
-                    payload={
-                        "trigger_kind": trigger_kind,
-                        "fsm_stage": fsm_stage,
-                        "file_overlap_warnings": file_overlap_warnings,
-                        "file_coordination_warning": file_coordination_warning,
-                    },
+                    ticket_ref=ticket_ref,
+                    project_id=project_id,
+                    run_id=None,
+                    structured_warnings=file_overlap_warnings,
                 )
-            )
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "file_overlap telemetry: warning emit failed ticket=%s err=%s",
+                    ticket_ref,
+                    exc,
+                )
 
     # 6. Fire ``workflow_dispatch``. GitHub returns 204 on accept;
     # ``WorkflowDispatchError`` covers 4xx (workflow file missing,

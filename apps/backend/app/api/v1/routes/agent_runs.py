@@ -80,6 +80,7 @@ from backend.app.integrations.gateway.tracker import TicketRef
 from backend.app.services.linear_provisioner import (
     OVERLAY_FREEZE_LABEL_PREFIXES,
 )
+from backend.app.services.file_overlap_telemetry import record_honour_on_dev_finish
 from backend.app.services.file_overlap import (
     build_file_coordination_warning,
     load_file_coordination_warning_from_audit,
@@ -4101,6 +4102,25 @@ async def finish_agent_run(
         )
         # ELS-142: lock release deferred to
         # ``maybe_release_project_lock_on_finish`` below.
+
+    if payload.ticket_ref and _PR_URL_RE.search(payload.comment or ""):
+        try:
+            await record_honour_on_dev_finish(
+                session,
+                workspace_id=workspace_id,
+                ticket_ref=payload.ticket_ref,
+                run_id=payload.run_id,
+                fsm_stage=payload.fsm_stage,
+                comment=payload.comment,
+                settings=settings,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "file_overlap_honour: finish hook failed ws=%s ticket=%s err=%s",
+                workspace_id,
+                payload.ticket_ref,
+                exc,
+            )
 
     session.add(
         AuditLog(

@@ -744,11 +744,12 @@ async def test_file_overlap_warning_attached_on_dev_dispatch(
         await db_session.execute(
             select(AuditLog).where(
                 AuditLog.workspace_id == ws,
-                AuditLog.action == "dispatch.file_overlap_warning",
+                AuditLog.action == "agent_dispatch.file_overlap_warning",
             )
         )
     ).scalar_one()
     assert overlap_row.target_id == "ELS-147"
+    assert overlap_row.payload["overlap_kind"] == "schema"
 
 
 # ---------------------------------------------------------------------------
