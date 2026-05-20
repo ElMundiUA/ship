@@ -5,6 +5,7 @@
   "description": "Playwright E2E — Ship console onboarding and wired-repo checks (test sandbox)",
   "scripts": {
     "test": "playwright test",
+    "test:landing": "playwright test --project=landing",
     "test:deployed": "playwright test -g @deployed",
     "test:ui": "playwright test --ui",
     "test:headed": "playwright test --headed",

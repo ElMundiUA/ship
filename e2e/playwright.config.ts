@@ -8,6 +8,11 @@ const baseURL =
   process.env.E2E_CONSOLE_BASE_URL?.replace(/\/$/, "") ||
   "http://127.0.0.1:3001";
 
+/** Marketing site (`apps/landing`, port 3000 locally). */
+const landingBaseURL =
+  process.env.LANDING_BASE_URL?.replace(/\/$/, "") ||
+  "http://127.0.0.1:3000";
+
 const storageState = process.env.E2E_STORAGE_STATE?.trim();
 
 export default defineConfig({
@@ -29,6 +34,12 @@ export default defineConfig({
     {
       name: "public",
       testMatch: /.*\.public\.spec\.ts/,
+      testIgnore: /\.landing\.public\.spec\.ts/,
+    },
+    {
+      name: "landing",
+      testMatch: /\.landing\.public\.spec\.ts/,
+      use: { baseURL: landingBaseURL },
     },
     {
       name: "authenticated",
