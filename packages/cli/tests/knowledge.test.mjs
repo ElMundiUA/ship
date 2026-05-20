@@ -137,6 +137,25 @@ test("knowledge fetch: --base-url beats SHIP_WORKSPACE_API_BASE and SHIP_API_BAS
   }
 });
 
+test("knowledge fetch: sole workspace from GET /v1/workspaces when env unset", async () => {
+  const { server, baseUrl, requests } = await startMockServer((req, res) =>
+    knowledgeRouter(req, res, {}),
+  );
+  try {
+    const r = await runShipctl(["--base-url", baseUrl, "knowledge", "fetch", BUCKET, "--json"], {
+      minimalEnv: true,
+      env: { SHIP_WORKSPACE_ID: "" },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(requests.some((q) => q.url === "/v1/workspaces"));
+    assert.ok(
+      requests.some((q) => q.url.includes(`/workspaces/${TEST_WS_ID}/buckets/${BUCKET}`)),
+    );
+  } finally {
+    await closeMockServer(server);
+  }
+});
+
 test("knowledge fetch: SHIP_WORKSPACE_ID skips GET /v1/workspaces", async () => {
   const { server, baseUrl, requests } = await startMockServer((req, res) =>
     knowledgeRouter(req, res, {}),
