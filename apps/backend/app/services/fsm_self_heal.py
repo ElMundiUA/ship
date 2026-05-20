@@ -71,6 +71,31 @@ STALE_DISPATCH_WINDOW = timedelta(minutes=60)
 # the GH Actions logs.
 RUNNER_FAIL_THRESHOLD: Final[int] = 3
 RUNNER_FAIL_WINDOW = timedelta(hours=4)
+
+# ``dev_not_converging`` thresholds (post-mortem of Ship-on-Ship/
+# ELS-117/ELS-7/ELS-111, 2026-05-19). When a reviewer-style gate
+# (``code_review`` / ``validation`` / ``auto_merge``) blocks the same
+# ticket repeatedly AND the developer agent does re-run between each
+# block but the PR head SHA never changes (reviewer rejects the same
+# logic flaw each pass), the chain is in a "dev keeps cycling but not
+# pushing the fix" loop. Refire-cap catches the symptom (3 blocks
+# in 24h) but the diagnosis it ships ("breadcrumb label not added")
+# is wrong for this class — the breadcrumb IS being added, the
+# developer just isn't moving the diff.
+#
+# Detection shape: in the same 4h window the runner-fail detector
+# uses, look for ≥3 blocked finishes at reviewer-style stages AND
+# ≥2 ready_next_step finishes at ``dev_implementation``. The dev
+# successes prove the runner is alive (not a runner-fail loop) and
+# that dev is iterating; the reviewer blocks prove the fix isn't
+# landing. File a dedicated letter with action_items that point the
+# operator at the actual PR instead of a generic refire-cap blurb.
+DEV_NOT_CONVERGING_REVIEW_BLOCKS: Final[int] = 3
+DEV_NOT_CONVERGING_DEV_CYCLES: Final[int] = 2
+DEV_NOT_CONVERGING_REVIEW_STAGES: Final[frozenset[str]] = frozenset(
+    {"code_review", "validation", "auto_merge", "pr_review",
+     "qa_manual", "qa_automation"}
+)
 # Stages the backstop scan considers. We exclude ``self_heal`` /
 # decomposition (special chains) and the legacy intake-substage
 # names — those are handled by the labels-as-breadcrumb path.
@@ -326,6 +351,86 @@ async def _scan_one_workspace(
                 ref = row.get("id") or row.get("identifier")
                 if not ref:
                     continue
+
+                # Runner-fail cooldown — short-circuit BEFORE the
+                # "recent dispatch" check. Pre-fix the scan had the
+                # order reversed: any dispatch in the last 60min
+                # caused us to skip even the detection, so a ticket
+                # whose runner crashes every cron tick would never
+                # trip the loop check (the crash counts as a "recent
+                # dispatch" itself).
+                #
+                # Operator-facing letter exists in the last 24h →
+                # operator already decided how to handle this. The
+                # cron's job is to stay out of the way, not race the
+                # operator. Also release any project_lock the
+                # crashing ticket is currently holding so siblings
+                # can dispatch into the freed slot.
+                #
+                # askslayer/Visitor 2026-05-19: PAC-32 + PAC-13
+                # crash every cron tick, held two project_locks
+                # continuously, blocked 12 sibling PAC-* tickets
+                # entirely. C2 had filed letters but operator's
+                # resolve flipped them to status=resolved; the scan
+                # had no signal to stop re-firing. This cooldown
+                # honours both open and recently-resolved letters.
+                fail_letter_cutoff = (
+                    datetime.now(timezone.utc) - timedelta(hours=24)
+                )
+                fail_letter = (
+                    await session.execute(
+                        select(AuditLog.id)
+                        .where(
+                            AuditLog.workspace_id == install.workspace_id,
+                            AuditLog.action == "agent_run.dispatch",
+                            AuditLog.target_id == ref,
+                            AuditLog.created_at >= fail_letter_cutoff,
+                        )
+                        .limit(1)
+                    )
+                ).first()
+                from backend.app.db.models.inbox import InboxItem as _Inbox
+                runner_letter = (
+                    await session.execute(
+                        select(_Inbox.id, _Inbox.payload)
+                        .where(
+                            _Inbox.workspace_id == install.workspace_id,
+                            _Inbox.intake_handle == f"runner-fail:{ref}",
+                            _Inbox.created_at >= fail_letter_cutoff,
+                        )
+                        .limit(1)
+                    )
+                ).first()
+                if runner_letter is not None:
+                    # Free this ticket's project_lock if it's
+                    # holding one — siblings should be free to use
+                    # the slot. Find project_id from the most-recent
+                    # dispatch audit row.
+                    from sqlalchemy import text as _text
+                    recent_dispatch = (
+                        await session.execute(
+                            select(AuditLog.payload).where(
+                                AuditLog.workspace_id == install.workspace_id,
+                                AuditLog.action == "agent_run.dispatch",
+                                AuditLog.target_id == ref,
+                            ).order_by(AuditLog.created_at.desc()).limit(1)
+                        )
+                    ).first()
+                    if recent_dispatch is not None:
+                        proj = (recent_dispatch[0] or {}).get("project_id")
+                        if proj:
+                            await session.execute(
+                                _text(
+                                    "DELETE FROM agent_dispatch_locks "
+                                    "WHERE workspace_id=:ws AND key=:k"
+                                ),
+                                {
+                                    "ws": install.workspace_id,
+                                    "k": f"project:{proj}",
+                                },
+                            )
+                    continue
+
                 recent = (
                     await session.execute(
                         select(AuditLog.id)
@@ -357,10 +462,60 @@ async def _scan_one_workspace(
                 # cause is always runner-side (workflow file, secret,
                 # cursor account), never something self-heal can fix
                 # by re-dispatching.
+                # needs_clarification guard — if the ticket's most
+                # recent finish was ``outcome=needs_clarification``,
+                # the agent (reviewer / auto-merger) explicitly asked
+                # the operator a question and the chain is correctly
+                # parked. That's neither a runner crash nor a dev-not-
+                # converging loop; the clarification letter is the
+                # authoritative signal. Both detectors would otherwise
+                # mis-fire on the dispatch-without-ready_next_step
+                # shape. Caught on Ship-on-Ship/ELS-118/ELS-154/ELS-111
+                # 2026-05-20: auto_merger stalled needs_clarification
+                # (migration / scope / conflict), C2 piled a
+                # runner_fail_loop + dev_not_converging letter on top
+                # of the legit clarification.
+                last_finish_outcome = (
+                    await session.execute(
+                        select(AuditLog.payload["outcome"].astext)
+                        .where(
+                            AuditLog.workspace_id == install.workspace_id,
+                            AuditLog.action == "agent_run.finish",
+                            (
+                                (AuditLog.target_id == ref)
+                                | (AuditLog.payload["ticket_ref"].astext == ref)
+                            ),
+                        )
+                        .order_by(AuditLog.created_at.desc())
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+                if last_finish_outcome == "needs_clarification":
+                    continue
+
                 if await _looks_like_runner_fail_loop(
                     session, install.workspace_id, ref
                 ):
                     await _file_runner_fail_blocker(
+                        session, install.workspace_id, ref, stage
+                    )
+                    continue
+
+                # Dev-not-converging detection. Distinct from runner-
+                # fail: the runner IS calling /finish, the chain IS
+                # cycling reviewer→dev→reviewer, but the developer
+                # agent isn't pushing a fix that lands the reviewer's
+                # blocker. Caught on Ship-on-Ship/ELS-117/ELS-7/ELS-
+                # 111 2026-05-19 — 5 reviewer passes each on the same
+                # commit SHA, refire-cap firing but with a misleading
+                # "breadcrumb label not added" generic diagnosis. The
+                # dedicated letter points the operator at the PR with
+                # explicit "apply reviewer's fix manually / close +
+                # comment recipe / override" action_items.
+                if await _looks_like_dev_not_converging(
+                    session, install.workspace_id, ref
+                ):
+                    await _file_dev_not_converging_blocker(
                         session, install.workspace_id, ref, stage
                     )
                     continue
@@ -566,6 +721,309 @@ async def _file_runner_fail_blocker(
             intake_reason="runner_fail_loop",
         )
     )
+
+
+async def _looks_like_dev_not_converging(
+    session: AsyncSession,
+    workspace_id,
+    ticket_ref: str,
+) -> bool:
+    """Detect "reviewer keeps blocking + dev keeps cycling but doesn't
+    converge" loop.
+
+    Three conditions must all hold in :data:`RUNNER_FAIL_WINDOW`:
+
+    1. ≥ :data:`DEV_NOT_CONVERGING_REVIEW_BLOCKS` ``agent_run.finish``
+       rows with ``outcome=blocked`` at a reviewer-style stage
+       (:data:`DEV_NOT_CONVERGING_REVIEW_STAGES`) — reviewer keeps
+       rejecting the work.
+    2. ≥ :data:`DEV_NOT_CONVERGING_DEV_CYCLES` ``agent_run.finish``
+       rows with ``outcome=ready_next_step`` at ``dev_implementation``
+       — developer agent is alive and producing finishes (rules out
+       runner-fail; that detector owns zero-finish cases).
+    3. The picker-null exclusion (refire-cap / overlay / priority)
+       inherited via the caller-side checks isn't tripped — that's
+       handled before we reach the dev-not-converging check.
+
+    Returns True when all three hold. The caller files
+    :func:`_file_dev_not_converging_blocker` and skips re-dispatching
+    the ticket until an operator clears it.
+    """
+    cutoff = datetime.now(timezone.utc) - RUNNER_FAIL_WINDOW
+    # Picker-null exclusion — mirror the runner-fail detector. If the
+    # picker is bailing the ticket cleanly (refire-cap / overlay-frozen
+    # / priority-skipped), the operator already has a refire-cap letter
+    # with the same intent. Don't double-file. Same window as the rest
+    # of the check.
+    picker_null = (
+        await session.execute(
+            select(AuditLog.id)
+            .where(
+                AuditLog.workspace_id == workspace_id,
+                AuditLog.action == "dispatch.project_lock_released",
+                AuditLog.target_id == ticket_ref,
+                AuditLog.created_at >= cutoff,
+                AuditLog.payload["via"].astext.like("picker_%"),
+            )
+            .limit(1)
+        )
+    ).first()
+    if picker_null is not None:
+        return False
+    # Cross-stage reviewer block count. Same JSONB-cast filter shape
+    # the refire-cap counter uses.
+    review_blocks = (
+        await session.execute(
+            select(AuditLog.id)
+            .where(
+                AuditLog.workspace_id == workspace_id,
+                AuditLog.action == "agent_run.finish",
+                AuditLog.created_at >= cutoff,
+                AuditLog.payload["outcome"].astext == "blocked",
+                AuditLog.payload["fsm_stage"].astext.in_(
+                    DEV_NOT_CONVERGING_REVIEW_STAGES
+                ),
+                (AuditLog.target_id == ticket_ref)
+                | (AuditLog.payload["ticket_ref"].astext == ticket_ref),
+            )
+        )
+    ).all()
+    if len(review_blocks) < DEV_NOT_CONVERGING_REVIEW_BLOCKS:
+        return False
+    dev_successes = (
+        await session.execute(
+            select(AuditLog.id)
+            .where(
+                AuditLog.workspace_id == workspace_id,
+                AuditLog.action == "agent_run.finish",
+                AuditLog.created_at >= cutoff,
+                AuditLog.payload["outcome"].astext == "ready_next_step",
+                AuditLog.payload["fsm_stage"].astext == "dev_implementation",
+                (AuditLog.target_id == ticket_ref)
+                | (AuditLog.payload["ticket_ref"].astext == ticket_ref),
+            )
+        )
+    ).all()
+    return len(dev_successes) >= DEV_NOT_CONVERGING_DEV_CYCLES
+
+
+async def _file_dev_not_converging_blocker(
+    session: AsyncSession,
+    workspace_id,
+    ticket_ref: str,
+    stage: str,
+) -> None:
+    """File one ``dev_not_converging`` blocker letter (dedup by
+    intake_handle).
+
+    Operator-facing diagnosis: the developer agent is alive and the
+    chain is cycling, but the reviewer's blocker isn't landing in the
+    PR diff. Letter body embeds the reviewer's last anchor comment +
+    PR url inline so the operator doesn't have to leave the inbox to
+    make a decision. Action items use server-side **executors** so
+    the operator's pick translates into Ship actually doing the
+    thing (merge / cancel / re-dispatch with hint / snooze) instead
+    of just leaving a Linear comment.
+    """
+    from backend.app.db.models.inbox import InboxItem
+    from backend.app.db.models.pipelines import PullRequest
+
+    handle = f"dev-stuck:{ticket_ref}"
+    existing = (
+        await session.execute(
+            select(InboxItem.id).where(
+                InboxItem.workspace_id == workspace_id,
+                InboxItem.intake_handle == handle,
+                InboxItem.status == "new",
+            )
+        )
+    ).first()
+    if existing is not None:
+        return
+
+    # PR state guard — if the associated PR is closed or merged the
+    # loop is over (chain has nowhere to go). The 4h-window finishes
+    # are stale signals from before the PR closed. Caught on Ship-
+    # on-Ship/ELS-111 2026-05-20: PR #275 closed at 12:50 UTC, dev_
+    # not_converging fired at 21:00 UTC reading the pre-close
+    # finishes. Skip filing in that case.
+    pr_url: str | None = None
+    pr_state: str = "unknown"
+    pr_row = (
+        await session.execute(
+            select(PullRequest).where(
+                PullRequest.workspace_id == workspace_id,
+                PullRequest.title.ilike(f"%{ticket_ref}%"),
+            ).order_by(PullRequest.updated_at_external.desc()).limit(1)
+        )
+    ).scalars().first()
+    if pr_row is not None:
+        pr_url = pr_row.html_url
+        pr_state = pr_row.state
+        if pr_state in ("closed", "merged"):
+            return  # detection was a false-positive; PR already done
+
+    # Try to embed the reviewer's last CHANGES_REQUESTED anchor
+    # comment so the operator can decide without leaving the inbox.
+    # Best-effort — a fetch failure just leaves the body without it.
+    reviewer_excerpt = await _fetch_reviewer_last_comment(
+        session, workspace_id, ticket_ref, pr_row,
+    )
+
+    body_parts = [
+        f"**Pattern:** Developer agent ran successfully "
+        f"≥{DEV_NOT_CONVERGING_DEV_CYCLES}× between "
+        f"≥{DEV_NOT_CONVERGING_REVIEW_BLOCKS} blocks at "
+        f"`{stage}` in the last "
+        f"{int(RUNNER_FAIL_WINDOW.total_seconds() // 3600)}h. The "
+        f"reviewer's blocker isn't landing in the PR — dev is "
+        f"iterating without converging."
+    ]
+    if pr_url:
+        body_parts.append(f"\n**PR:** {pr_url}  _(state: {pr_state})_")
+    if reviewer_excerpt:
+        body_parts.append(
+            "\n**Reviewer's last comment:**\n\n" + reviewer_excerpt
+        )
+
+    summary = "\n\n".join(body_parts)[:2000]
+
+    session.add(
+        InboxItem(
+            workspace_id=workspace_id,
+            repo_id=None,
+            type="blocker",
+            title=(
+                f"{ticket_ref}: dev not converging at {stage}"
+            )[:300],
+            summary=summary,
+            payload={
+                "ticket_ref": ticket_ref,
+                "fsm_stage": stage,
+                "pr_url": pr_url,
+                "body": summary,
+                "resolution_mode": "single_choice",
+                "action_items": [
+                    {
+                        "id": "redispatch_dev_with_hint",
+                        "kind": "choice",
+                        "label": "Re-dispatch dev with my hint below",
+                        "hint": (
+                            "Type a hint in the freeform field, then "
+                            "pick this. Ship posts your hint as an "
+                            "operator note on Linear and re-fires "
+                            "dev_implementation on the next cron tick."
+                        ),
+                        "executor": "redispatch_dev",
+                    },
+                    {
+                        "id": "force_merge",
+                        "kind": "choice",
+                        "label": "Force-merge — override the reviewer",
+                        "hint": (
+                            "Ship squash-merges the PR via the App "
+                            "token and moves the Linear ticket to "
+                            "Done. Optional freeform note is recorded "
+                            "as the override rationale on the PR."
+                        ),
+                        "executor": "force_merge",
+                    },
+                    {
+                        "id": "cancel_ticket",
+                        "kind": "choice",
+                        "label": "Cancel ticket — wrong direction",
+                        "hint": (
+                            "Linear ticket → Canceled, PR closed with "
+                            "your freeform note (if any). Use when "
+                            "the work shouldn't continue."
+                        ),
+                        "executor": "cancel_ticket",
+                    },
+                    {
+                        "id": "snooze_24h",
+                        "kind": "choice",
+                        "label": "Snooze 24h — investigating",
+                        "hint": (
+                            "Pause fsm_self_heal on this ticket for "
+                            "24h while you investigate. Re-surfaces "
+                            "automatically if the loop is still live."
+                        ),
+                        "executor": "snooze_24h",
+                    },
+                ],
+            },
+            status="new",
+            intake_handle=handle,
+            intake_reason="dev_not_converging",
+        )
+    )
+
+
+async def _fetch_reviewer_last_comment(
+    session: AsyncSession,
+    workspace_id,
+    ticket_ref: str,
+    pr_row,
+) -> str | None:
+    """Best-effort: pull the last ``CHANGES_REQUESTED`` review body
+    from GitHub for ``pr_row``. Returns ``None`` when there's no PR,
+    no install, no reviews, or the API call fails — the letter
+    still lands without the embedded excerpt.
+    """
+    if pr_row is None or not pr_row.repo_full_name:
+        return None
+    if "/" not in pr_row.repo_full_name:
+        return None
+    from backend.app.db.models.integrations import GitHubInstallation
+    install = (
+        await session.execute(
+            select(GitHubInstallation).where(
+                GitHubInstallation.workspace_id == workspace_id,
+                GitHubInstallation.suspended_at.is_(None),
+            ).limit(1)
+        )
+    ).scalar_one_or_none()
+    if install is None:
+        return None
+    owner, repo = pr_row.repo_full_name.split("/", 1)
+    try:
+        from backend.app.integrations.github.app_auth import (
+            get_installation_token,
+        )
+        import httpx
+        from backend.app.core.config import get_settings
+        settings = get_settings()
+        async with httpx.AsyncClient(timeout=httpx.Timeout(15.0)) as client:
+            token = await get_installation_token(
+                install.installation_id, settings=settings, client=client,
+            )
+            resp = await client.get(
+                f"https://api.github.com/repos/{owner}/{repo}/pulls/"
+                f"{pr_row.number}/reviews",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/vnd.github+json",
+                },
+            )
+            if resp.status_code >= 400:
+                return None
+            reviews = resp.json() or []
+            cr = [
+                r for r in reviews
+                if r.get("state") == "CHANGES_REQUESTED" and (r.get("body") or "").strip()
+            ]
+            if not cr:
+                return None
+            body = (cr[-1].get("body") or "").strip()
+            # Cap to keep the inbox letter readable; full review is
+            # still on GitHub for deep dives.
+            return body[:1200] + ("\n\n…(truncated)" if len(body) > 1200 else "")
+    except Exception as exc:  # noqa: BLE001 — best-effort
+        log.info(
+            "fetch_reviewer_last_comment: failed ws=%s ticket=%s: %s",
+            workspace_id, ticket_ref, exc,
+        )
+        return None
 
 
 __all__ = [
