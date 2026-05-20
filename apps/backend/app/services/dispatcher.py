@@ -47,6 +47,7 @@ from backend.app.integrations.github.workflows import (
     dispatch_workflow,
 )
 from backend.app.services import tracker_resolver as tracker_resolver_module
+from backend.app.services.file_overlap import build_file_coordination_warning
 
 
 # Stage label (Linear's ``stage:<id>``) → routine id. The dispatcher
@@ -976,6 +977,46 @@ async def maybe_dispatch(
         )
     repo, install = target
 
+    file_coordination_warning: str | None = None
+    file_overlap_warnings: list[dict[str, Any]] = []
+    if (
+        routine_id == "developer"
+        and not is_anchor
+        and settings.enable_file_overlap_warnings
+        and project_id
+        and resolved_tracker is not None
+    ):
+        snapshot_fn = getattr(
+            resolved_tracker.gateway, "get_ticket_snapshot", None
+        )
+        overlap = await build_file_coordination_warning(
+            session,
+            workspace_id=workspace_id,
+            ticket_ref=ticket_ref,
+            project_id=project_id,
+            tracker_kind=resolved_tracker.kind,
+            snapshot_fn=snapshot_fn,
+            settings=settings,
+            client=client,
+        )
+        file_coordination_warning = overlap.warning_markdown
+        file_overlap_warnings = overlap.file_overlap_warnings
+        if file_overlap_warnings:
+            session.add(
+                AuditLog(
+                    workspace_id=workspace_id,
+                    action="dispatch.file_overlap_warning",
+                    target_kind="ticket",
+                    target_id=ticket_ref,
+                    payload={
+                        "trigger_kind": trigger_kind,
+                        "fsm_stage": fsm_stage,
+                        "file_overlap_warnings": file_overlap_warnings,
+                        "file_coordination_warning": file_coordination_warning,
+                    },
+                )
+            )
+
     # 6. Fire ``workflow_dispatch``. GitHub returns 204 on accept;
     # ``WorkflowDispatchError`` covers 4xx (workflow file missing,
     # branch gone, etc).
@@ -1036,6 +1077,8 @@ async def maybe_dispatch(
             # it when synthesising a row from audit on a stale
             # tracker replica (orphan gate needs project_id).
             "project_id": project_id,
+            "file_coordination_warning": file_coordination_warning,
+            "file_overlap_warnings": file_overlap_warnings or None,
         },
     )
     session.add(dispatch_audit)
