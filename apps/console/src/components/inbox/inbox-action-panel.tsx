@@ -26,12 +26,63 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { cn } from "@/lib/cn";
-import { decideInboxItem } from "@/lib/api/client";
 import type {
   InboxActionItem,
   InboxItemDetail,
   InboxResolutionMode,
 } from "@/lib/inbox-types";
+
+// ``InboxActionPanel`` is a client component but the underlying
+// ``decideInboxItem`` helper lives in ``@/lib/api/client`` which is
+// tagged ``import "server-only"`` so the session token can't leak to
+// the browser bundle. Pre-fix the panel imported it directly and the
+// Next.js build failed with "You're importing a component that needs
+// server-only" — every backend deploy was blocked since 2026-05-18
+// because the console image refused to build. Call the server-side
+// bridge at ``/api/inbox/[id]/decide`` instead; the route handler is
+// server code and forwards the call to the backend.
+async function postDecide(
+  workspaceId: string,
+  itemId: string,
+  body: { selections: string[]; freeform: string | null },
+): Promise<InboxItemDetail> {
+  const res = await fetch(`/api/inbox/${encodeURIComponent(itemId)}/decide`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ workspaceId, ...body }),
+  });
+  if (!res.ok) {
+    let code = "unknown";
+    try {
+      const payload = (await res.json()) as { error_code?: string };
+      if (payload?.error_code) code = payload.error_code;
+    } catch {
+      // ignore
+    }
+    throw new Error(humanizeDecideError(code));
+  }
+  return (await res.json()) as InboxItemDetail;
+}
+
+function humanizeDecideError(code: string): string {
+  switch (code) {
+    case "forbidden":
+      return "You don't have permission for that action.";
+    case "not_found":
+      return "Item no longer exists.";
+    case "state_invalid":
+      return "Item already resolved — refresh.";
+    case "validation_failed":
+    case "decide_empty":
+      return "Pick at least one option or write a note.";
+    case "session_expired":
+      return "Session expired. Refresh to sign back in.";
+    case "api_unavailable":
+      return "API is unavailable.";
+    default:
+      return `Could not apply decision (${code}).`;
+  }
+}
 
 type Props = {
   workspaceId: string;
@@ -91,7 +142,7 @@ export function InboxActionPanel({ workspaceId, item, onResolved }: Props) {
     setBusy(true);
     setError(null);
     try {
-      const next = await decideInboxItem(workspaceId, item.id, {
+      const next = await postDecide(workspaceId, item.id, {
         selections,
         freeform: text || null,
       });
@@ -280,7 +331,12 @@ function SingleChoiceRow({
     );
   }
   return (
-    <div className="flex flex-wrap gap-2">
+    // Stack choices vertically — long labels (e.g. "Closed PR,
+    // commented recipe on Linear") rendered as a horizontal pill row
+    // wrap awkwardly and force the operator to scan zig-zag across
+    // the preview. One per row keeps scanning top-to-bottom and lets
+    // the optional ``hint`` fit alongside the label on hover.
+    <div className="flex flex-col gap-1.5">
       {items.map((i, idx) => (
         <button
           key={i.id}
@@ -288,14 +344,14 @@ function SingleChoiceRow({
           disabled={disabled}
           onClick={() => onPick(i.id)}
           title={i.hint || undefined}
-          className="group inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/[0.04] px-3 py-1 text-xs font-semibold text-white transition hover:border-aqua hover:bg-aqua/15 hover:text-aqua disabled:opacity-40"
+          className="group inline-flex w-full items-center gap-2 rounded-md border border-white/15 bg-white/[0.04] px-3 py-2 text-left text-xs font-semibold text-white transition hover:border-aqua hover:bg-aqua/15 hover:text-aqua disabled:opacity-40"
         >
           {idx < 9 && (
             <span className="font-mono text-[9px] font-bold text-white/40 group-hover:text-aqua/70">
               {idx + 1}
             </span>
           )}
-          {i.label}
+          <span className="flex-1">{i.label}</span>
         </button>
       ))}
     </div>

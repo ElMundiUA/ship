@@ -50,21 +50,37 @@ from backend.app.db.models.tenancy import (
 class GitHubInstallation(Base):
     """A workspace's link to a "Ship" GitHub App installation.
 
-    ``installation_id`` is the only stable identifier GitHub gives us across
-    webhook deliveries and API calls, so it's the one we look up by and
-    enforce uniqueness on. ``account_login`` / ``account_type`` are mirrored
-    here purely for UI ("Connected to org @acme") — never trust them as a
-    security boundary, treat them as cache that may go stale on rename.
+    ``installation_id`` is GitHub's numeric id for the install — stable
+    across webhook deliveries and API calls. Multiple Ship workspaces
+    under the same GitHub org (Dev / Staging / Prod) all attach to the
+    same ``installation_id``; uniqueness is enforced on the COMPOUND
+    ``(workspace_id, installation_id)`` so each workspace gets at most
+    one row per install but the same install can appear in N
+    workspaces. Webhook fan-out (one delivery → N workspaces) reads
+    all rows for the inbound ``installation_id`` and routes a copy of
+    the event into each one.
+
+    ``account_login`` / ``account_type`` are mirrored here purely for
+    UI ("Connected to org @acme") — never trust them as a security
+    boundary, treat them as cache that may go stale on rename.
     """
 
     __tablename__ = "github_installations"
     __table_args__ = (
-        # Same App installation can only be linked to one workspace at a
-        # time. If the user reinstalls into a different workspace we will
-        # update the existing row rather than insert a duplicate (see
-        # callback handler).
+        # Compound unique — same install allowed in multiple
+        # workspaces, but never duplicated within one workspace.
+        # Migration ``0076_github_installations_multi_workspace``
+        # replaced the prior single-column ``UniqueConstraint`` on
+        # ``installation_id``.
         UniqueConstraint(
-            "installation_id", name="uq_github_installations_installation_id"
+            "workspace_id", "installation_id",
+            name="uq_github_installations_workspace_installation",
+        ),
+        # Webhook fan-out reads by ``installation_id`` alone; index
+        # keeps that path O(log n) per event.
+        Index(
+            "ix_github_installations_installation_id",
+            "installation_id",
         ),
         Index(
             "ix_github_installations_workspace_id",
