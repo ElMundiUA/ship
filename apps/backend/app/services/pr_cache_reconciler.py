@@ -108,7 +108,7 @@ async def reconcile_stale_pull_requests() -> int:
                     await session.execute(
                         select(GitHubInstallation).where(
                             GitHubInstallation.workspace_id == ws_id,
-                            GitHubInstallation.status == "active",
+                            GitHubInstallation.suspended_at.is_(None),
                         ).limit(1)
                     )
                 ).scalar_one_or_none()

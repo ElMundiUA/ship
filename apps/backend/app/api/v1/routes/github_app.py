@@ -206,14 +206,23 @@ async def install_callback(
                 )
             ).first() is not None
     else:
-        row = None
-        any_existing = (
+        # No workspace hint (GitHub-UI direct install or a repo-selection
+        # edit that didn't pass through our wizard). We can't pick a
+        # workspace to *create* a new binding, but if this install is
+        # already known we do an idempotent refresh of the existing row
+        # — most-recent wins when several workspaces share the install,
+        # since the redirect carries no signal to disambiguate — and
+        # bounce the user into the picker. Only a genuinely unknown
+        # install with no state is a hard error.
+        row = (
             await session.execute(
-                select(GitHubInstallation.id)
+                select(GitHubInstallation)
                 .where(GitHubInstallation.installation_id == installation_id)
+                .order_by(GitHubInstallation.updated_at.desc())
                 .limit(1)
             )
-        ).first() is not None
+        ).scalar_one_or_none()
+        any_existing = row is not None
 
     if row is None and decoded_workspace_id is None:
         # Brand new install but the redirect didn't come through our
@@ -221,7 +230,6 @@ async def install_callback(
         # silently attach to the user's first workspace — instead nudge
         # them back through the wizard where the "Install" button mints
         # a state token bound to a specific workspace.
-        _ = any_existing  # reserved for future "already-installed" diag
         return RedirectResponse(
             url=(
                 f"{settings.console_url.rstrip('/')}/onboarding"

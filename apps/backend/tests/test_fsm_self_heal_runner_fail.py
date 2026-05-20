@@ -594,8 +594,9 @@ async def test_file_dev_not_converging_blocker_creates_one_row(
     db_session, seed_workspace
 ) -> None:
     """First call files the letter with the 4-choice action_items
-    set: applied-manually / closed-with-recipe / override / already-
-    handled. Dedup via ``intake_handle=dev-stuck:<ticket>``."""
+    set, each wired to a real server-side executor: redispatch_dev /
+    force_merge / cancel_ticket / snooze_24h. Dedup via
+    ``intake_handle=dev-stuck:<ticket>``."""
     _, _, ws = seed_workspace
     await _file_dev_not_converging_blocker(
         db_session, ws.id, "ELS-117", "code_review"
@@ -618,10 +619,10 @@ async def test_file_dev_not_converging_blocker_creates_one_row(
     assert (row.payload or {}).get("resolution_mode") == "single_choice"
     ai = (row.payload or {}).get("action_items") or []
     assert {a.get("id") for a in ai} == {
-        "applied_manually",
-        "closed_with_recipe",
-        "override_force_merge",
-        "already_handled",
+        "redispatch_dev_with_hint",
+        "force_merge",
+        "cancel_ticket",
+        "snooze_24h",
     }
 
 
