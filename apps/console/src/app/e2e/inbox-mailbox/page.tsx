@@ -20,7 +20,10 @@ export default async function E2eInboxMailboxVisualPage({
     notFound();
   }
 
-  const params = (await (searchParams ?? Promise.resolve({}))) ?? {};
+  const params: Record<string, string | string[] | undefined> =
+    (await (searchParams ??
+      Promise.resolve({} as Record<string, string | string[] | undefined>))) ??
+    {};
   const variantRaw = typeof params.variant === "string" ? params.variant : "mixed";
   const variant: Variant = variantRaw === "empty" ? "empty" : "mixed";
   const items = variant === "empty" ? [] : INBOX_VISUAL_MIXED_ITEMS;
