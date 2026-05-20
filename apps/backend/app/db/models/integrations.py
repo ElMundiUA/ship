@@ -69,7 +69,7 @@ class GitHubInstallation(Base):
     __table_args__ = (
         # Compound unique — same install allowed in multiple
         # workspaces, but never duplicated within one workspace.
-        # Migration ``0076_gh_install_multi_ws``
+        # Migration ``0076_github_installations_multi_workspace``
         # replaced the prior single-column ``UniqueConstraint`` on
         # ``installation_id``.
         UniqueConstraint(

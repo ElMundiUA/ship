@@ -68,6 +68,24 @@ class ActionItem(BaseModel):
     hint: str | None = Field(default=None, max_length=400)
     default: bool = False
     target_project_id: str | None = Field(default=None, max_length=64)
+    # Server-side executor that runs when the operator picks this
+    # action_item. ``None`` = legacy behaviour (``choice`` → comment
+    # on Linear, ``checkbox`` → spawn child ticket, ``ack`` → no
+    # side-effect). When set, the ``/decide`` endpoint routes by
+    # ``executor`` instead, calling the real GH / Linear / dispatcher
+    # operation. Reserved values today:
+    #
+    #   - ``redispatch_dev``  — re-fire ``dev_implementation`` for
+    #     the ticket; freeform note (if any) is comment-posted on
+    #     Linear as the operator's hint, tagged ``[Operator hint]``.
+    #   - ``force_merge``     — squash-merge the PR via GitHub API
+    #     using the workspace's App token, transition Linear ticket
+    #     to ``Done``.
+    #   - ``cancel_ticket``   — close the PR with a comment, move
+    #     Linear ticket to ``Canceled``.
+    #   - ``snooze_24h``      — set ``inbox_items.snoozed_until`` =
+    #     NOW() + 24h so fsm_self_heal stays out of the way.
+    executor: str | None = Field(default=None, max_length=64)
 
     @field_validator("id")
     @classmethod

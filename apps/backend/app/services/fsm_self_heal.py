@@ -462,6 +462,37 @@ async def _scan_one_workspace(
                 # cause is always runner-side (workflow file, secret,
                 # cursor account), never something self-heal can fix
                 # by re-dispatching.
+                # needs_clarification guard — if the ticket's most
+                # recent finish was ``outcome=needs_clarification``,
+                # the agent (reviewer / auto-merger) explicitly asked
+                # the operator a question and the chain is correctly
+                # parked. That's neither a runner crash nor a dev-not-
+                # converging loop; the clarification letter is the
+                # authoritative signal. Both detectors would otherwise
+                # mis-fire on the dispatch-without-ready_next_step
+                # shape. Caught on Ship-on-Ship/ELS-118/ELS-154/ELS-111
+                # 2026-05-20: auto_merger stalled needs_clarification
+                # (migration / scope / conflict), C2 piled a
+                # runner_fail_loop + dev_not_converging letter on top
+                # of the legit clarification.
+                last_finish_outcome = (
+                    await session.execute(
+                        select(AuditLog.payload["outcome"].astext)
+                        .where(
+                            AuditLog.workspace_id == install.workspace_id,
+                            AuditLog.action == "agent_run.finish",
+                            (
+                                (AuditLog.target_id == ref)
+                                | (AuditLog.payload["ticket_ref"].astext == ref)
+                            ),
+                        )
+                        .order_by(AuditLog.created_at.desc())
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+                if last_finish_outcome == "needs_clarification":
+                    continue
+
                 if await _looks_like_runner_fail_loop(
                     session, install.workspace_id, ref
                 ):
@@ -787,10 +818,15 @@ async def _file_dev_not_converging_blocker(
 
     Operator-facing diagnosis: the developer agent is alive and the
     chain is cycling, but the reviewer's blocker isn't landing in the
-    PR diff. Letter body points at the underlying PR and gives the
-    operator three concrete next steps.
+    PR diff. Letter body embeds the reviewer's last anchor comment +
+    PR url inline so the operator doesn't have to leave the inbox to
+    make a decision. Action items use server-side **executors** so
+    the operator's pick translates into Ship actually doing the
+    thing (merge / cancel / re-dispatch with hint / snooze) instead
+    of just leaving a Linear comment.
     """
     from backend.app.db.models.inbox import InboxItem
+    from backend.app.db.models.pipelines import PullRequest
 
     handle = f"dev-stuck:{ticket_ref}"
     existing = (
@@ -804,67 +840,115 @@ async def _file_dev_not_converging_blocker(
     ).first()
     if existing is not None:
         return
+
+    # PR state guard — if the associated PR is closed or merged the
+    # loop is over (chain has nowhere to go). The 4h-window finishes
+    # are stale signals from before the PR closed. Caught on Ship-
+    # on-Ship/ELS-111 2026-05-20: PR #275 closed at 12:50 UTC, dev_
+    # not_converging fired at 21:00 UTC reading the pre-close
+    # finishes. Skip filing in that case.
+    pr_url: str | None = None
+    pr_state: str = "unknown"
+    pr_row = (
+        await session.execute(
+            select(PullRequest).where(
+                PullRequest.workspace_id == workspace_id,
+                PullRequest.title.ilike(f"%{ticket_ref}%"),
+            ).order_by(PullRequest.updated_at_external.desc()).limit(1)
+        )
+    ).scalars().first()
+    if pr_row is not None:
+        pr_url = pr_row.html_url
+        pr_state = pr_row.state
+        if pr_state in ("closed", "merged"):
+            return  # detection was a false-positive; PR already done
+
+    # Try to embed the reviewer's last CHANGES_REQUESTED anchor
+    # comment so the operator can decide without leaving the inbox.
+    # Best-effort — a fetch failure just leaves the body without it.
+    reviewer_excerpt = await _fetch_reviewer_last_comment(
+        session, workspace_id, ticket_ref, pr_row,
+    )
+
+    body_parts = [
+        f"**Pattern:** Developer agent ran successfully "
+        f"≥{DEV_NOT_CONVERGING_DEV_CYCLES}× between "
+        f"≥{DEV_NOT_CONVERGING_REVIEW_BLOCKS} blocks at "
+        f"`{stage}` in the last "
+        f"{int(RUNNER_FAIL_WINDOW.total_seconds() // 3600)}h. The "
+        f"reviewer's blocker isn't landing in the PR — dev is "
+        f"iterating without converging."
+    ]
+    if pr_url:
+        body_parts.append(f"\n**PR:** {pr_url}  _(state: {pr_state})_")
+    if reviewer_excerpt:
+        body_parts.append(
+            "\n**Reviewer's last comment:**\n\n" + reviewer_excerpt
+        )
+
+    summary = "\n\n".join(body_parts)[:2000]
+
     session.add(
         InboxItem(
             workspace_id=workspace_id,
             repo_id=None,
             type="blocker",
             title=(
-                f"{ticket_ref}: developer not converging — reviewer "
-                f"keeps rejecting at {stage}"
+                f"{ticket_ref}: dev not converging at {stage}"
             )[:300],
-            summary=(
-                f"In the last {int(RUNNER_FAIL_WINDOW.total_seconds() // 3600)}h "
-                f"the reviewer-style gate ({stage}) has blocked "
-                f"{ticket_ref} ≥{DEV_NOT_CONVERGING_REVIEW_BLOCKS}× and "
-                f"the developer agent successfully ran "
-                f"≥{DEV_NOT_CONVERGING_DEV_CYCLES}× between blocks — but "
-                f"the reviewer's blocker is not landing in the PR. The "
-                f"dev agent is iterating without converging. Read the "
-                f"reviewer's last comment on the PR, apply the fix "
-                f"manually (or close + comment a recipe on Linear), "
-                f"then resolve this letter."
-            )[:2000],
+            summary=summary,
             payload={
                 "ticket_ref": ticket_ref,
                 "fsm_stage": stage,
+                "pr_url": pr_url,
+                "body": summary,
                 "resolution_mode": "single_choice",
                 "action_items": [
                     {
-                        "id": "applied_manually",
+                        "id": "redispatch_dev_with_hint",
                         "kind": "choice",
-                        "label": "Applied reviewer fix manually",
+                        "label": "Re-dispatch dev with my hint below",
                         "hint": (
-                            "Operator pushed the diff the reviewer "
-                            "asked for. fsm_self_heal will re-pick "
-                            "on the next tick."
+                            "Type a hint in the freeform field, then "
+                            "pick this. Ship posts your hint as an "
+                            "operator note on Linear and re-fires "
+                            "dev_implementation on the next cron tick."
                         ),
+                        "executor": "redispatch_dev",
                     },
                     {
-                        "id": "closed_with_recipe",
+                        "id": "force_merge",
                         "kind": "choice",
-                        "label": "Closed PR, commented recipe on Linear",
+                        "label": "Force-merge — override the reviewer",
                         "hint": (
-                            "PR was too tangled to rescue; operator "
-                            "left an explicit fix recipe in a Linear "
-                            "comment so the next dev agent can pick "
-                            "up fresh."
+                            "Ship squash-merges the PR via the App "
+                            "token and moves the Linear ticket to "
+                            "Done. Optional freeform note is recorded "
+                            "as the override rationale on the PR."
                         ),
+                        "executor": "force_merge",
                     },
                     {
-                        "id": "override_force_merge",
+                        "id": "cancel_ticket",
                         "kind": "choice",
-                        "label": "Override reviewer / force merge",
+                        "label": "Cancel ticket — wrong direction",
                         "hint": (
-                            "Reviewer was wrong; merge as-is and "
-                            "audit-trail the override."
+                            "Linear ticket → Canceled, PR closed with "
+                            "your freeform note (if any). Use when "
+                            "the work shouldn't continue."
                         ),
+                        "executor": "cancel_ticket",
                     },
                     {
-                        "id": "already_handled",
+                        "id": "snooze_24h",
                         "kind": "choice",
-                        "label": "Already handled",
-                        "hint": "Ticket cancelled / merged elsewhere / not actionable.",
+                        "label": "Snooze 24h — investigating",
+                        "hint": (
+                            "Pause fsm_self_heal on this ticket for "
+                            "24h while you investigate. Re-surfaces "
+                            "automatically if the loop is still live."
+                        ),
+                        "executor": "snooze_24h",
                     },
                 ],
             },
@@ -873,6 +957,73 @@ async def _file_dev_not_converging_blocker(
             intake_reason="dev_not_converging",
         )
     )
+
+
+async def _fetch_reviewer_last_comment(
+    session: AsyncSession,
+    workspace_id,
+    ticket_ref: str,
+    pr_row,
+) -> str | None:
+    """Best-effort: pull the last ``CHANGES_REQUESTED`` review body
+    from GitHub for ``pr_row``. Returns ``None`` when there's no PR,
+    no install, no reviews, or the API call fails — the letter
+    still lands without the embedded excerpt.
+    """
+    if pr_row is None or not pr_row.repo_full_name:
+        return None
+    if "/" not in pr_row.repo_full_name:
+        return None
+    from backend.app.db.models.integrations import GitHubInstallation
+    install = (
+        await session.execute(
+            select(GitHubInstallation).where(
+                GitHubInstallation.workspace_id == workspace_id,
+                GitHubInstallation.suspended_at.is_(None),
+            ).limit(1)
+        )
+    ).scalar_one_or_none()
+    if install is None:
+        return None
+    owner, repo = pr_row.repo_full_name.split("/", 1)
+    try:
+        from backend.app.integrations.github.app_auth import (
+            get_installation_token,
+        )
+        import httpx
+        from backend.app.core.config import get_settings
+        settings = get_settings()
+        async with httpx.AsyncClient(timeout=httpx.Timeout(15.0)) as client:
+            token = await get_installation_token(
+                install.installation_id, settings=settings, client=client,
+            )
+            resp = await client.get(
+                f"https://api.github.com/repos/{owner}/{repo}/pulls/"
+                f"{pr_row.number}/reviews",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/vnd.github+json",
+                },
+            )
+            if resp.status_code >= 400:
+                return None
+            reviews = resp.json() or []
+            cr = [
+                r for r in reviews
+                if r.get("state") == "CHANGES_REQUESTED" and (r.get("body") or "").strip()
+            ]
+            if not cr:
+                return None
+            body = (cr[-1].get("body") or "").strip()
+            # Cap to keep the inbox letter readable; full review is
+            # still on GitHub for deep dives.
+            return body[:1200] + ("\n\n…(truncated)" if len(body) > 1200 else "")
+    except Exception as exc:  # noqa: BLE001 — best-effort
+        log.info(
+            "fetch_reviewer_last_comment: failed ws=%s ticket=%s: %s",
+            workspace_id, ticket_ref, exc,
+        )
+        return None
 
 
 __all__ = [

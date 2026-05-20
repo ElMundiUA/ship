@@ -1184,6 +1184,27 @@ async def post_decide(
     for sid in selections:
         ai = by_id[sid]
         try:
+            # NEW (2026-05-20): server-side executors. Action items
+            # with an ``executor`` field bypass the legacy "comment on
+            # Linear" path and trigger real GH / Linear / dispatcher
+            # operations. Operator wanted "press button → Ship does
+            # it" instead of "press button → comment posted, now go
+            # manually finish the work elsewhere".
+            if ai.executor:
+                from backend.app.services.inbox.action_executors import (
+                    run_action_executor,
+                )
+                result = await run_action_executor(
+                    session,
+                    workspace_id=workspace_id,
+                    item=item,
+                    executor=ai.executor,
+                    freeform=freeform,
+                )
+                side_effects.append(
+                    {"id": sid, "executor": ai.executor, **result}
+                )
+                continue
             if ai.kind == "choice":
                 if resolved_tracker is None or not source_ticket_ref:
                     side_effects.append(
