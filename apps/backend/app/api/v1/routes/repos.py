@@ -69,6 +69,12 @@ class AvailableRepoOut(BaseModel):
     html_url: str
     description: str | None
     activated: bool
+    # Multi-workspace per install (migration 0076): a repo activated
+    # in a sibling workspace under the same org. ``None`` = free to
+    # activate here; a string = workspace slug that already owns it
+    # (operator sees "already in <ws>" + the picker disables the row
+    # so two workspaces don't fight for one PR cache stream).
+    claimed_by_workspace_slug: str | None = None
 
 
 class ActivatedRepoOut(BaseModel):
@@ -147,8 +153,12 @@ async def _resolve_installation(
 
 
 def _summary_to_out(
-    summary: RepoSummary, *, activated_ids: set[int]
+    summary: RepoSummary,
+    *,
+    activated_ids: set[int],
+    claimed_elsewhere: dict[int, str] | None = None,
 ) -> AvailableRepoOut:
+    claimed_by = (claimed_elsewhere or {}).get(summary.external_id)
     return AvailableRepoOut(
         external_id=summary.external_id,
         full_name=summary.full_name,
@@ -159,6 +169,7 @@ def _summary_to_out(
         html_url=summary.html_url,
         description=summary.description,
         activated=summary.external_id in activated_ids,
+        claimed_by_workspace_slug=claimed_by,
     )
 
 
@@ -204,6 +215,32 @@ async def list_available_repos(
         row[0] for row in (await session.execute(activated_stmt)).all()
     }
 
+    # Cross-workspace claim map (migration 0076 — multi-workspace per
+    # install). A repo activated in a sibling workspace under the same
+    # GitHub App install gets surfaced as ``claimed_by_workspace_slug``
+    # so the picker can disable it and the operator doesn't accidentally
+    # double-wire the same PR stream into two workspaces. Filtered by
+    # the current install's GitHub ``installation_id`` so only true
+    # sibling claims surface — not unrelated installs.
+    from backend.app.db.models.tenancy import Workspace as _Workspace
+    claim_stmt = (
+        select(WorkspaceRepo.external_id, _Workspace.slug)
+        .join(
+            GitHubInstallation,
+            WorkspaceRepo.installation_id == GitHubInstallation.id,
+        )
+        .join(_Workspace, WorkspaceRepo.workspace_id == _Workspace.id)
+        .where(
+            GitHubInstallation.installation_id == install.installation_id,
+            WorkspaceRepo.workspace_id != workspace_id,
+            WorkspaceRepo.provider == "github",
+        )
+    )
+    claimed_elsewhere: dict[int, str] = {
+        ext_id: slug
+        for ext_id, slug in (await session.execute(claim_stmt)).all()
+    }
+
     gateway = GitHubCodeHost(install.installation_id, settings=settings)
     try:
         summaries = await gateway.list_repo_summaries()
@@ -220,7 +257,12 @@ async def list_available_repos(
             ),
         ) from exc
 
-    return [_summary_to_out(s, activated_ids=activated_ids) for s in summaries]
+    return [
+        _summary_to_out(
+            s, activated_ids=activated_ids, claimed_elsewhere=claimed_elsewhere
+        )
+        for s in summaries
+    ]
 
 
 @router.get("", response_model=list[ActivatedRepoOut])
@@ -294,6 +336,50 @@ async def activate_repos(
                 f"installation: {sorted(unknown)}"
             ),
         )
+
+    # Cross-workspace claim guard (migration 0076). Reject activations
+    # for repos already activated in a sibling workspace under the
+    # same install — the picker disables them client-side but we
+    # also gate server-side so a stale picker payload or a direct
+    # API call can't double-wire the same PR stream.
+    if desired_ids:
+        from backend.app.db.models.tenancy import Workspace as _Workspace
+        claim_rows = (
+            await session.execute(
+                select(WorkspaceRepo.external_id, _Workspace.slug)
+                .join(
+                    GitHubInstallation,
+                    WorkspaceRepo.installation_id == GitHubInstallation.id,
+                )
+                .join(_Workspace, WorkspaceRepo.workspace_id == _Workspace.id)
+                .where(
+                    GitHubInstallation.installation_id == install.installation_id,
+                    WorkspaceRepo.workspace_id != workspace_id,
+                    WorkspaceRepo.provider == "github",
+                    WorkspaceRepo.external_id.in_(desired_ids),
+                )
+            )
+        ).all()
+        if claim_rows:
+            collisions = {
+                ext_id: slug for ext_id, slug in claim_rows
+            }
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "repo_claimed_elsewhere",
+                    "message": (
+                        "Some repos are already activated in a sibling "
+                        "workspace under the same GitHub App install. "
+                        "Deactivate them there first, or pick different "
+                        "repos."
+                    ),
+                    "collisions": [
+                        {"external_id": ext_id, "workspace_slug": slug}
+                        for ext_id, slug in sorted(collisions.items())
+                    ],
+                },
+            )
 
     existing_stmt = select(WorkspaceRepo).where(
         WorkspaceRepo.workspace_id == workspace_id,

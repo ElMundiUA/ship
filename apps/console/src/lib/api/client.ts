@@ -430,6 +430,11 @@ export interface ApiAvailableRepo {
   html_url: string;
   description: string | null;
   activated: boolean;
+  /** Multi-workspace per install (migration 0076): null = free to
+   *  activate here; a string = workspace slug of a sibling workspace
+   *  under the same GitHub App install that already activated this
+   *  repo. Picker disables the row + surfaces the slug as context. */
+  claimed_by_workspace_slug?: string | null;
 }
 
 export interface ApiActivatedRepo {
