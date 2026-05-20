@@ -593,8 +593,10 @@ async def test_picker_null_release_excludes_from_dev_not_converging(
 async def test_file_dev_not_converging_blocker_creates_one_row(
     db_session, seed_workspace
 ) -> None:
-    """First call files the letter with executor-backed action_items.
-    Dedup via ``intake_handle=dev-stuck:<ticket>``."""
+    """First call files the letter with the 4-choice action_items
+    set, each wired to a real server-side executor: redispatch_dev /
+    force_merge / cancel_ticket / snooze_24h. Dedup via
+    ``intake_handle=dev-stuck:<ticket>``."""
     _, _, ws = seed_workspace
     await _file_dev_not_converging_blocker(
         db_session, ws.id, "ELS-117", "code_review"

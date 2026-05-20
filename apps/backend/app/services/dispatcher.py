@@ -185,7 +185,7 @@ async def acquire_lock(
     workspace_id: uuid.UUID,
     key: str,
     ttl_seconds: int = DEFAULT_LOCK_TTL_S,
-    run_id: uuid.UUID | None = None,
+    run_id: int | None = None,
 ) -> bool:
     """Try to claim ``(workspace_id, key)`` atomically.
 
