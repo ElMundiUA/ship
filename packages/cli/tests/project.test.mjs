@@ -113,3 +113,29 @@ test("project find-or-create: missing --name exits 1", async () => {
     await closeMockServer(server);
   }
 });
+
+test("project find-or-create: missing SHIP_API_TOKEN exits 1", async () => {
+  const { server, baseUrl, requests } = await startMockServer((req, res, ctx) =>
+    projectRouter(req, res, ctx),
+  );
+  try {
+    const r = await runShipctl(
+      [
+        "--base-url",
+        baseUrl,
+        "project",
+        "find-or-create",
+        "--name",
+        "Tech Debt",
+        "--body",
+        "b",
+      ],
+      { minimalEnv: true, env: { SHIP_API_TOKEN: "", SHIP_WORKSPACE_ID: "" } },
+    );
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /SHIP_API_TOKEN is required/);
+    assert.equal(requests.length, 0);
+  } finally {
+    await closeMockServer(server);
+  }
+});

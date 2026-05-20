@@ -278,3 +278,31 @@ test("tracker list-project-tickets: --limit 0 uses fallback 100; --limit 999 cla
     await closeMockServer(server);
   }
 });
+
+test("tracker create-ticket: missing SHIP_API_TOKEN exits 1", async () => {
+  const { server, baseUrl, requests } = await startMockServer((req, res, ctx) =>
+    trackerRouter(req, res, ctx, {}),
+  );
+  try {
+    const r = await runShipctl(
+      [
+        "--base-url",
+        baseUrl,
+        "tracker",
+        "create-ticket",
+        "--project-id",
+        PROJECT_ID,
+        "--title",
+        "T",
+        "--body",
+        "b",
+      ],
+      { minimalEnv: true, env: { SHIP_API_TOKEN: "", SHIP_WORKSPACE_ID: "" } },
+    );
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /SHIP_API_TOKEN is required/);
+    assert.equal(requests.length, 0);
+  } finally {
+    await closeMockServer(server);
+  }
+});
