@@ -13,6 +13,7 @@
  * confirmation row instead of the action surface.
  */
 
+import { SnoozeForm } from "@/components/inbox/snooze-form";
 import {
   inboxFooterKind,
   type InboxItemDetail,
@@ -231,51 +232,6 @@ function SecondaryForm({
       <button
         type="submit"
         className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-semibold transition ${tone}`}
-      >
-        {label}
-      </button>
-    </form>
-  );
-}
-
-function SnoozeForm({
-  workspaceId,
-  itemId,
-  hours,
-  label,
-}: {
-  workspaceId: string;
-  itemId: string;
-  hours: number;
-  label: string;
-}) {
-  // ``/api/inbox/[id]/snooze`` expects a ``snoozed_until`` field
-  // formatted as ``new Date(value)`` can parse. Compute the offset
-  // at submit time client-side so the operator's clock stays
-  // authoritative even if the wizard tab sat open for hours.
-  return (
-    <form
-      action={`/api/inbox/${encodeURIComponent(itemId)}/snooze`}
-      method="POST"
-      className="contents"
-      onSubmit={(e) => {
-        const input = e.currentTarget.elements.namedItem(
-          "snoozed_until",
-        ) as HTMLInputElement | null;
-        if (input) {
-          const t = new Date(Date.now() + hours * 60 * 60 * 1000);
-          // ``datetime-local`` format: YYYY-MM-DDTHH:MM in local TZ.
-          // The route's ``new Date(raw)`` interprets that exactly.
-          const pad = (n: number) => String(n).padStart(2, "0");
-          input.value = `${t.getFullYear()}-${pad(t.getMonth() + 1)}-${pad(t.getDate())}T${pad(t.getHours())}:${pad(t.getMinutes())}`;
-        }
-      }}
-    >
-      <input type="hidden" name="ws" value={workspaceId} />
-      <input type="hidden" name="snoozed_until" defaultValue="" />
-      <button
-        type="submit"
-        className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/[0.04] px-3 py-1.5 text-xs font-semibold text-white/85 transition hover:bg-white/[0.08]"
       >
         {label}
       </button>

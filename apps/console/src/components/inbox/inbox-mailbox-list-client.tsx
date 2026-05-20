@@ -8,6 +8,7 @@ import {
 } from "@/components/inbox/inbox-lane-filters";
 import { StaleBadge } from "@/components/inbox/stale-badge";
 import { cn } from "@/lib/cn";
+import { relativeTime } from "@/lib/format";
 import {
   INBOX_TYPE_META,
   type InboxItem,
@@ -111,6 +112,18 @@ function MailboxRow({
       <div className="min-w-0 flex-1">
       <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.18em] text-white/40">
         <span>{meta.label.replace(/s$/, "")}</span>
+        <span className="text-white/15">·</span>
+        {/* Received-time on the list row, not just the preview header.
+            Operator scans the list left-to-right and used to have no
+            recency signal without clicking each letter. Title attr
+            carries the absolute local time for hover. */}
+        <time
+          className="normal-case tracking-normal text-white/55"
+          dateTime={item.created_at}
+          title={new Date(item.created_at).toLocaleString()}
+        >
+          {relativeTime(item.created_at)}
+        </time>
         <StaleBadge
           createdAt={item.created_at}
           status={item.status}
