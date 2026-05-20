@@ -62,6 +62,7 @@ EXPECTED_TOOLS: frozenset[str] = frozenset(
         "audit_search",
         "recall",
         "recall_context",
+        "propose_mass_plan",
     }
 )
 
