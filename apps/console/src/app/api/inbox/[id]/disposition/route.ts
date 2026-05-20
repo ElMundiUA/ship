@@ -42,6 +42,8 @@ export async function POST(
   const wsId = (form.get("ws") ?? "").toString();
   const actionRaw = (form.get("action") ?? "").toString();
   const answer = (form.get("answer") ?? "").toString().trim();
+  const actionItemId = (form.get("action_item_id") ?? "").toString().trim();
+  const choice = (form.get("choice") ?? "").toString().trim();
   const payloadJsonRaw = (form.get("payload_json") ?? "").toString().trim();
   // ``return_to`` lets callers (mailbox footer) bounce back to the
   // list view with a different selection rather than the bigger
@@ -75,6 +77,13 @@ export async function POST(
     } catch {
       return back(origin, id, "bad_input", returnTo);
     }
+  }
+
+  if (actionItemId) {
+    payload = { ...payload, action_item_id: actionItemId };
+  }
+  if (choice) {
+    payload = { ...payload, choice };
   }
 
   const body: Parameters<typeof applyInboxDisposition>[2] = {

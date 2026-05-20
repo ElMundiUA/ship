@@ -14,8 +14,11 @@
  */
 
 import { SnoozeForm } from "@/components/inbox/snooze-form";
+import { ButtonDanger, ButtonGhost } from "@/components/ui";
 import {
   inboxFooterKind,
+  parseChecklistActionItems,
+  type InboxChecklistActionItem,
   type InboxItemDetail,
   type InboxType,
 } from "@/lib/inbox-types";
@@ -81,9 +84,12 @@ const DECISIONS: Partial<Record<InboxType, Decision>> = {
 export function MailboxFooter({
   detail,
   workspaceId,
+  returnTo = "/inbox",
 }: {
   detail: InboxItemDetail;
   workspaceId: string;
+  /** Bounce target after disposition (mailbox ``?selected=`` URL). */
+  returnTo?: string;
 }) {
   if (detail.status === "resolved" || detail.status === "dismissed") {
     return (
@@ -102,7 +108,17 @@ export function MailboxFooter({
     );
   }
 
-  const kind = inboxFooterKind(detail.type as InboxType);
+  const kind = inboxFooterKind(detail);
+  if (kind === "checklist") {
+    return (
+      <ChecklistFooter
+        workspaceId={workspaceId}
+        itemId={detail.id}
+        items={parseChecklistActionItems(detail.payload)}
+        returnTo={returnTo}
+      />
+    );
+  }
   if (kind === "acknowledge") {
     // Reports (daily digest, learning capture, retro) only had a
     // single Acknowledge button — operators routinely wanted a
@@ -117,6 +133,7 @@ export function MailboxFooter({
           itemId={detail.id}
           action="resolve"
           label="Acknowledge"
+          returnTo={returnTo}
         />
         <SnoozeForm
           workspaceId={workspaceId}
@@ -130,13 +147,18 @@ export function MailboxFooter({
           action="dismiss"
           label="Dismiss"
           style="danger"
+          returnTo={returnTo}
         />
       </div>
     );
   }
   if (kind === "reply") {
     return (
-      <ReplyForm workspaceId={workspaceId} itemId={detail.id} />
+      <ReplyForm
+        workspaceId={workspaceId}
+        itemId={detail.id}
+        returnTo={returnTo}
+      />
     );
   }
 
@@ -148,6 +170,7 @@ export function MailboxFooter({
         itemId={detail.id}
         action="resolve"
         label="Resolve"
+        returnTo={returnTo}
       />
     );
   }
@@ -158,6 +181,7 @@ export function MailboxFooter({
         itemId={detail.id}
         action={decision.primary.action}
         label={decision.primary.label}
+        returnTo={returnTo}
       />
       {decision.secondary.map((spec) => (
         <SecondaryForm
@@ -167,6 +191,7 @@ export function MailboxFooter({
           action={spec.action}
           label={spec.label}
           style={spec.style}
+          returnTo={returnTo}
         />
       ))}
     </div>
@@ -178,11 +203,13 @@ function PrimaryForm({
   itemId,
   action,
   label,
+  returnTo,
 }: {
   workspaceId: string;
   itemId: string;
   action: ActionVerb;
   label: string;
+  returnTo: string;
 }) {
   return (
     <form
@@ -192,7 +219,7 @@ function PrimaryForm({
     >
       <input type="hidden" name="ws" value={workspaceId} />
       <input type="hidden" name="action" value={action} />
-      <input type="hidden" name="return_to" value="/inbox" />
+      <input type="hidden" name="return_to" value={returnTo} />
       <button
         type="submit"
         className="inline-flex items-center gap-1.5 rounded-md bg-aqua/15 px-3 py-1.5 text-sm font-semibold text-aqua transition hover:bg-aqua/25"
@@ -209,12 +236,14 @@ function SecondaryForm({
   action,
   label,
   style,
+  returnTo,
 }: {
   workspaceId: string;
   itemId: string;
   action: ActionVerb;
   label: string;
   style: ButtonStyle;
+  returnTo: string;
 }) {
   const tone =
     style === "danger"
@@ -228,7 +257,7 @@ function SecondaryForm({
     >
       <input type="hidden" name="ws" value={workspaceId} />
       <input type="hidden" name="action" value={action} />
-      <input type="hidden" name="return_to" value="/inbox" />
+      <input type="hidden" name="return_to" value={returnTo} />
       <button
         type="submit"
         className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-semibold transition ${tone}`}
@@ -242,9 +271,11 @@ function SecondaryForm({
 function ReplyForm({
   workspaceId,
   itemId,
+  returnTo,
 }: {
   workspaceId: string;
   itemId: string;
+  returnTo: string;
 }) {
   return (
     <form
@@ -254,7 +285,7 @@ function ReplyForm({
     >
       <input type="hidden" name="ws" value={workspaceId} />
       <input type="hidden" name="action" value="answer" />
-      <input type="hidden" name="return_to" value="/inbox" />
+      <input type="hidden" name="return_to" value={returnTo} />
       <textarea
         name="answer"
         rows={3}
@@ -269,8 +300,88 @@ function ReplyForm({
         >
           Send
         </button>
-        <DismissForm workspaceId={workspaceId} itemId={itemId} />
+        <DismissForm
+          workspaceId={workspaceId}
+          itemId={itemId}
+          returnTo={returnTo}
+        />
       </div>
+    </form>
+  );
+}
+
+function ChecklistFooter({
+  workspaceId,
+  itemId,
+  items,
+  returnTo,
+}: {
+  workspaceId: string;
+  itemId: string;
+  items: InboxChecklistActionItem[];
+  returnTo: string;
+}) {
+  return (
+    <ul className="space-y-3" data-testid="inbox-checklist-footer">
+      {items.map((item) => (
+        <li key={item.id} className="space-y-2">
+          <p className="text-sm text-white/85">{item.prompt}</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <ChecklistChoiceForm
+              workspaceId={workspaceId}
+              itemId={itemId}
+              actionItemId={item.id}
+              choice={item.primary.choice}
+              label={item.primary.label}
+              returnTo={returnTo}
+              variant="primary"
+            />
+            <ChecklistChoiceForm
+              workspaceId={workspaceId}
+              itemId={itemId}
+              actionItemId={item.id}
+              choice={item.secondary.choice}
+              label={item.secondary.label}
+              returnTo={returnTo}
+              variant="secondary"
+            />
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function ChecklistChoiceForm({
+  workspaceId,
+  itemId,
+  actionItemId,
+  choice,
+  label,
+  returnTo,
+  variant,
+}: {
+  workspaceId: string;
+  itemId: string;
+  actionItemId: string;
+  choice: string;
+  label: string;
+  returnTo: string;
+  variant: "primary" | "secondary";
+}) {
+  const Button = variant === "primary" ? ButtonGhost : ButtonDanger;
+  return (
+    <form
+      action={`/api/inbox/${encodeURIComponent(itemId)}/disposition`}
+      method="POST"
+      className="contents"
+    >
+      <input type="hidden" name="ws" value={workspaceId} />
+      <input type="hidden" name="action" value="resolve" />
+      <input type="hidden" name="action_item_id" value={actionItemId} />
+      <input type="hidden" name="choice" value={choice} />
+      <input type="hidden" name="return_to" value={returnTo} />
+      <Button type="submit">{label}</Button>
     </form>
   );
 }
@@ -278,9 +389,11 @@ function ReplyForm({
 function DismissForm({
   workspaceId,
   itemId,
+  returnTo,
 }: {
   workspaceId: string;
   itemId: string;
+  returnTo: string;
 }) {
   return (
     <form
@@ -290,7 +403,7 @@ function DismissForm({
     >
       <input type="hidden" name="ws" value={workspaceId} />
       <input type="hidden" name="action" value="dismiss" />
-      <input type="hidden" name="return_to" value="/inbox" />
+      <input type="hidden" name="return_to" value={returnTo} />
       <button
         type="submit"
         className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/[0.04] px-3 py-1.5 text-xs font-semibold text-white/85 transition hover:bg-white/[0.08]"
