@@ -292,39 +292,3 @@ test("trigger: transient 503 on workspaces is noop edge_unavailable", async () =
     await closeMockServer(server);
   }
 });
-
-test("trigger: transient 503 on workspaces is noop edge_unavailable", async () => {
-  const dir = mktmp();
-  seedShipDir(dir, DUE_CONFIG);
-  const { server, baseUrl } = await startMockServer((req, res) =>
-    triggerRouter(req, res, { workspacesStatus: 503 }),
-  );
-  try {
-    const r = await runCtl(
-      dir,
-      [
-        "--base-url",
-        baseUrl,
-        "trigger",
-        "--event",
-        "schedule",
-        "--cwd",
-        dir,
-        "--now",
-        ON_THE_HALF,
-        "--json",
-      ],
-      {
-        minimalEnv: true,
-        env: { SHIP_API_TOKEN: TEST_TOKEN, SHIP_WORKSPACE_ID: "" },
-      },
-    );
-    assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stderr, /edge transient|503/i);
-    const out = JSON.parse(r.stdout);
-    assert.equal(out.claim_status, "skipped:edge_unavailable");
-    assert.equal(out.next_action.kind, "noop");
-  } finally {
-    await closeMockServer(server);
-  }
-});
