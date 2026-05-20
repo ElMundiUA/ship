@@ -1144,3 +1144,63 @@ async def test_report_dismiss_blocked_with_pending_action_items(
         json={"action": "dismiss"},
     )
     assert res.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_binary_decide_duplicate_detected_from_events_not_payload(
+    v1_client, seed_workspace, db_session
+):
+    """Stale payload must not allow re-deciding an id already in events."""
+    user, raw, ws = seed_workspace
+    item = await _make_item(
+        db_session,
+        ws,
+        owner_user_id=user.id,
+        type="report",
+        payload=_report_binary_payload(
+            [
+                _binary_action_item(
+                    "ai-01",
+                    hint="One",
+                    label="Yes",
+                    secondary_label="No",
+                ),
+                _binary_action_item(
+                    "ai-02",
+                    hint="Two",
+                    label="Go",
+                    secondary_label="Skip",
+                ),
+            ],
+        )
+        | {"body": "# Digest"},
+    )
+    db_session.add(
+        InboxItemEvent(
+            item_id=item.id,
+            actor_user_id=user.id,
+            actor_kind="user",
+            action="action_item_decided",
+            payload={
+                "action_item_id": "ai-01",
+                "choice": "primary",
+                "label": "Yes",
+            },
+        )
+    )
+    await db_session.flush()
+
+    dup = await v1_client.post(
+        f"/v1/workspaces/{ws.id}/inbox/{item.id}/decide",
+        headers=_auth(raw),
+        json={"action_item_id": "ai-01", "choice": "primary"},
+    )
+    assert dup.status_code == 422
+
+    second = await v1_client.post(
+        f"/v1/workspaces/{ws.id}/inbox/{item.id}/decide",
+        headers=_auth(raw),
+        json={"action_item_id": "ai-02", "choice": "primary"},
+    )
+    assert second.status_code == 200, second.text
+    assert second.json()["status"] == "resolved"

@@ -361,7 +361,11 @@ def _to_item_out(
         type=item.type,
         status=item.status,
         title=item.title,
-        headline=item.headline,
+        headline=derive_headline(
+            headline=item.headline,
+            summary=item.summary,
+            title=item.title,
+        ),
         summary=item.summary,
         intake_handle=item.intake_handle,
         intake_reason=item.intake_reason,
@@ -419,6 +423,8 @@ async def _load_item(
     session: AsyncSession,
     workspace_id: uuid.UUID,
     item_id: uuid.UUID,
+    *,
+    for_update: bool = False,
 ) -> InboxItem:
     """Fetch one item, scoped by ``workspace_id`` for tenant isolation.
 
@@ -432,6 +438,8 @@ async def _load_item(
         InboxItem.id == item_id,
         InboxItem.workspace_id == workspace_id,
     )
+    if for_update:
+        stmt = stmt.with_for_update()
     item = (await session.execute(stmt)).scalar_one_or_none()
     if item is None:
         raise HTTPException(status_code=404, detail="inbox item not found")
@@ -993,17 +1001,44 @@ def _action_item_decisions(payload: dict) -> dict[str, str]:
     }
 
 
-def _pending_binary_action_item_ids(item: InboxItem) -> set[str]:
+async def _decided_binary_ids_from_events(
+    session: AsyncSession,
+    item_id: uuid.UUID,
+) -> dict[str, str]:
+    """Source of truth for per-item binary decisions (ELS-145 race safety)."""
+    stmt = select(InboxItemEvent).where(
+        InboxItemEvent.item_id == item_id,
+        InboxItemEvent.action == "action_item_decided",
+    )
+    rows = (await session.execute(stmt)).scalars().all()
+    decided: dict[str, str] = {}
+    for event in rows:
+        payload = event.payload or {}
+        action_item_id = payload.get("action_item_id")
+        choice = payload.get("choice")
+        if isinstance(action_item_id, str) and isinstance(choice, str):
+            decided[action_item_id] = choice
+    return decided
+
+
+async def _pending_binary_action_item_ids(
+    session: AsyncSession,
+    item: InboxItem,
+) -> set[str]:
     items = _binary_action_items(item)
     if not items:
         return set()
-    decided = _action_item_decisions(item.payload or {})
+    decided = await _decided_binary_ids_from_events(session, item.id)
     return {ai.id for ai in items if ai.id not in decided}
 
 
-def _validate_report_bulk_disposition(action: str, item: InboxItem) -> None:
+async def _validate_report_bulk_disposition(
+    session: AsyncSession,
+    action: str,
+    item: InboxItem,
+) -> None:
     """Block acknowledge/dismiss while report binary action items are pending."""
-    pending = _pending_binary_action_item_ids(item)
+    pending = await _pending_binary_action_item_ids(session, item)
     if not pending:
         return
     if action in ("resolve", "acknowledge"):
@@ -1035,6 +1070,11 @@ async def _apply_binary_decide(
 ) -> InboxItemDetail:
     """Record one report ``kind=binary`` decision; auto-resolve when done."""
     from backend.app.services.inbox.classification import derive_resolution_mode
+
+    item = await _load_item(
+        session, workspace_id, item.id, for_update=True
+    )
+    prior_status = item.status
 
     if derive_resolution_mode(item.payload, item.type) != "per_item_binary":
         raise HTTPException(
@@ -1071,7 +1111,7 @@ async def _apply_binary_decide(
         )
 
     merged_payload = dict(item.payload or {})
-    decisions = _action_item_decisions(merged_payload)
+    decisions = await _decided_binary_ids_from_events(session, item.id)
     if action_item_id in decisions:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -1137,6 +1177,7 @@ async def _apply_binary_decide(
                     "type": item.type,
                     "resolution": "acknowledged",
                     "auto": True,
+                    "from_status": prior_status,
                 },
             )
         )
@@ -1208,7 +1249,8 @@ async def post_disposition(
     if body.resolution is not None:
         payload = {**payload, "resolution": body.resolution}
 
-    _validate_report_bulk_disposition(body.action, item)
+    prior_status = item.status
+    await _validate_report_bulk_disposition(session, body.action, item)
     resolution = _validate_disposition(body.action, item, payload)
     now = datetime.now(timezone.utc)
 
@@ -1247,7 +1289,7 @@ async def post_disposition(
             payload={
                 "type": item.type,
                 "resolution": resolution,
-                "from_status": "new",
+                "from_status": prior_status,
             },
         )
     )
