@@ -56,7 +56,7 @@ _internal/
 # Internal planning docs, closed-beta epics, prod-config checklists.
 # Stay on disk for reference but never published. Was tracked historically;
 # untracked via `git rm -r --cached` — files remain locally.
-documentation/internal/
+documentation/internal/*
 # Ops runbooks (e.g. file-overlap detection ELS-154) are shared with implementers.
 !documentation/internal/operations/
 !documentation/internal/operations/**
