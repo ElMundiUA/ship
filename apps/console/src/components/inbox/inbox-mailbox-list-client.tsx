@@ -54,10 +54,16 @@ export function InboxMailboxListClient({
 
       {visible.length === 0 ? (
         <div className="flex flex-1 items-center justify-center p-4">
-          <EmptyState
-            title="Inbox empty"
-            body="Nothing waiting on you — agents working."
-          />
+          {items.length === 0 ? (
+            <EmptyState
+              title="Inbox empty"
+              body="Nothing waiting on you — agents working."
+            />
+          ) : (
+            <p className="text-center text-sm text-white/55">
+              No items in this lane — try another filter.
+            </p>
+          )}
         </div>
       ) : (
         <ul

@@ -885,6 +885,90 @@ async def test_event_append_returns_event_and_appears_in_detail_list(
 # ---------------------------------------------------------------------------
 
 
+def _mailbox_checklist_payload() -> dict:
+    return {
+        "action_items": [
+            {
+                "id": "q1",
+                "prompt": "First?",
+                "primary": {"label": "Yes", "choice": "yes"},
+                "secondary": {"label": "No", "choice": "no"},
+            },
+            {
+                "id": "q2",
+                "prompt": "Second?",
+                "primary": {"label": "Go", "choice": "go"},
+                "secondary": {"label": "Stop", "choice": "stop"},
+            },
+        ]
+    }
+
+
+@pytest.mark.asyncio
+async def test_checklist_disposition_records_partial_answers(
+    v1_client, seed_workspace, db_session
+):
+    user, raw, ws = seed_workspace
+    item = await _make_item(
+        db_session,
+        ws,
+        owner_user_id=user.id,
+        type="report",
+        payload=_mailbox_checklist_payload(),
+    )
+    res = await v1_client.post(
+        f"/v1/workspaces/{ws.id}/inbox/{item.id}/disposition",
+        headers=_auth(raw),
+        json={
+            "action": "resolve",
+            "payload": {"action_item_id": "q1", "choice": "yes"},
+        },
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["status"] == "new"
+    assert body["payload"]["checklist_answers"] == {"q1": "yes"}
+    assert len(body["payload"]["action_items"]) == 1
+    assert body["payload"]["action_items"][0]["id"] == "q2"
+
+
+@pytest.mark.asyncio
+async def test_checklist_disposition_resolves_after_last_answer(
+    v1_client, seed_workspace, db_session
+):
+    user, raw, ws = seed_workspace
+    item = await _make_item(
+        db_session,
+        ws,
+        owner_user_id=user.id,
+        type="report",
+        payload=_mailbox_checklist_payload(),
+    )
+    first = await v1_client.post(
+        f"/v1/workspaces/{ws.id}/inbox/{item.id}/disposition",
+        headers=_auth(raw),
+        json={
+            "action": "resolve",
+            "payload": {"action_item_id": "q1", "choice": "yes"},
+        },
+    )
+    assert first.status_code == 200, first.text
+
+    second = await v1_client.post(
+        f"/v1/workspaces/{ws.id}/inbox/{item.id}/disposition",
+        headers=_auth(raw),
+        json={
+            "action": "resolve",
+            "payload": {"action_item_id": "q2", "choice": "go"},
+        },
+    )
+    assert second.status_code == 200, second.text
+    body = second.json()
+    assert body["status"] == "resolved"
+    assert body["payload"]["checklist_answers"] == {"q1": "yes", "q2": "go"}
+    assert body["payload"].get("action_items") == []
+
+
 @pytest.mark.asyncio
 async def test_disposition_payload_merges_not_replaces(
     v1_client, seed_workspace, db_session

@@ -1,8 +1,16 @@
+import * as fs from "fs";
+import * as path from "path";
+
 import { expect, test } from "@playwright/test";
 
 import { mintInboxItem } from "../lib/inbox-helpers";
 import { hasShipApiCredentials, shipResolveWorkspaceId } from "../lib/ship-api";
 import { hasPlaywrightStorageState } from "../lib/storage";
+
+const SNAPSHOT_DIR = path.join(
+  __dirname,
+  "inbox-mailbox.visual.wired.spec.ts-snapshots",
+);
 
 const INBOX_TYPES = [
   "clarification",
@@ -36,14 +44,21 @@ test.describe("inbox mailbox visuals (wired)", () => {
     ).toBeVisible({ timeout: 30_000 });
 
     const emptyTitle = page.getByText("Inbox empty", { exact: true });
-    if (await emptyTitle.isVisible().catch(() => false)) {
-      await expect(
-        page.getByText("Nothing waiting on you — agents working."),
-      ).toBeVisible();
-      await expect(page).toHaveScreenshot("inbox-empty.png", {
-        maxDiffPixelRatio: 0.02,
-      });
-    }
+    test.skip(
+      !(await emptyTitle.isVisible().catch(() => false)),
+      "Workspace has open inbox rows — seed an empty mine inbox or use a dedicated E2E workspace",
+    );
+    await expect(
+      page.getByText("Nothing waiting on you — agents working."),
+    ).toBeVisible();
+    const baseline = path.join(SNAPSHOT_DIR, "inbox-empty.png");
+    test.skip(
+      !fs.existsSync(baseline) && !process.env.E2E_UPDATE_SNAPSHOTS,
+      `Missing baseline ${baseline} — run with E2E_UPDATE_SNAPSHOTS=1 once`,
+    );
+    await expect(page).toHaveScreenshot("inbox-empty.png", {
+      maxDiffPixelRatio: 0.02,
+    });
   });
 
   test("inbox list renders glyph kickers for all types", async ({ page, request }) => {
@@ -72,6 +87,17 @@ test.describe("inbox mailbox visuals (wired)", () => {
       await expect(selected.first()).toHaveAttribute("aria-current", "page");
     }
 
+    const list = page.getByTestId("inbox-mailbox-rows");
+    await expect(list.getByText("? CLARIFY").first()).toBeVisible();
+    await expect(list.getByText("! BLOCKER").first()).toBeVisible();
+    await expect(list.getByText("≡ REPORT").first()).toBeVisible();
+    await expect(list.getByText("★ ATTENTION").first()).toBeVisible();
+
+    const baseline = path.join(SNAPSHOT_DIR, "inbox-mixed-list.png");
+    test.skip(
+      !fs.existsSync(baseline) && !process.env.E2E_UPDATE_SNAPSHOTS,
+      `Missing baseline ${baseline} — run with E2E_UPDATE_SNAPSHOTS=1 once`,
+    );
     await expect(page).toHaveScreenshot("inbox-mixed-list.png", {
       maxDiffPixelRatio: 0.02,
     });
