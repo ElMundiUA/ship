@@ -21,6 +21,7 @@
     "bundle-version:check": "node tools/scripts/bundle-version-check.mjs",
     "hooks:install": "git config core.hooksPath .githooks && echo \"git hooks path set to .githooks\"",
     "e2e": "npm run test --prefix e2e",
+    "e2e:landing": "npm run test:landing --prefix e2e",
     "e2e:deployed": "npm run test:deployed --prefix e2e",
     "e2e:ui": "npm run test:ui --prefix e2e"
   },

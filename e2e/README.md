@@ -13,7 +13,30 @@ End-to-end checks for the **operator console** and a **sandbox GitHub repo** aft
 cd e2e && npm run test:deployed
 ```
 
-**CI в монорепо:** воркфлоу Playwright в `.github/workflows/` нет — прогон только локально/вручную по шагам выше (переменные те же: `E2E_CONSOLE_BASE_URL`, `E2E_SHIP_*`, storage, sandbox, Mailosaur и т.д.).
+**CI в монорепо:** console Playwright по-прежнему в основном локально/вручную; **landing smoke** — job `landing-e2e` в `.github/workflows/ci.yml` (без console-секретов).
+
+## Landing smoke (`--project=landing`)
+
+Secret-free headless checks for **`apps/landing`** (marketing site on port **3000**). Console suites on `:3001` are unchanged.
+
+| Env | Default | Purpose |
+| --- | --- | --- |
+| `LANDING_BASE_URL` | `http://127.0.0.1:3000` | Base URL for the landing project (trailing slash stripped) |
+
+**Local run** (build + start landing first):
+
+```bash
+npm run landing:build
+npm run landing:start   # separate terminal — listens on :3000
+cd e2e && npm ci --workspaces=false && npx playwright install chromium
+npx playwright test --project=landing
+# or from repo root:
+npm run e2e:landing
+```
+
+If the server is not running, Playwright fails fast with a connection error — start landing before the test command.
+
+Specs: `tests/*.landing.public.spec.ts` (home `/`, blog `/`, header nav home → blog). No `E2E_STORAGE_STATE`, `E2E_SANDBOX_REPO`, `E2E_SHIP_API_TOKEN`, or Mailosaur.
 
 ## Implementation plan (phases)
 
@@ -375,4 +398,4 @@ UI-спека (`navigator-memory-ui`) на локалке не работают 
 
 ## CI
 
-В репозитории нет GitHub Actions workflow для e2e. Запускай локально: `cd e2e && npm test` / `npm run test:deployed` с `.env` по примерам выше. Секреты те же (`E2E_CONSOLE_BASE_URL`, `E2E_PLAYWRIGHT_STORAGE_JSON` или `E2E_STORAGE_STATE`, `E2E_SHIP_API_*`, sandbox, интеграции — см. фазы выше).
+**Landing smoke** runs on every PR via the `landing-e2e` job in `.github/workflows/ci.yml` (no console secrets). Console wired/deployed suites remain manual or scheduled — see phases above for `E2E_CONSOLE_BASE_URL`, `E2E_STORAGE_STATE`, `E2E_SHIP_API_*`, sandbox, and integration secrets.
