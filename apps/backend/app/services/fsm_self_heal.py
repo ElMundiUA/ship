@@ -72,6 +72,24 @@ STALE_DISPATCH_WINDOW = timedelta(minutes=60)
 RUNNER_FAIL_THRESHOLD: Final[int] = 3
 RUNNER_FAIL_WINDOW = timedelta(hours=4)
 
+# Workspace-wide runner-fail rollup (2026-05-21). A single root cause —
+# GitHub Actions billing/spending-limit block, org Actions disabled, a
+# revoked workspace-wide secret — kills *every* run at preflight, so the
+# per-ticket detector fires a separate ``runner_fail_loop`` letter for
+# each stuck ticket. Caught on askslayer/Visitor: one billing block →
+# PAC-33/34/35/36 each got their own letter (inbox spam for one
+# problem). When the workspace shows ``≥ROLLUP_THRESHOLD`` distinct
+# ticket dispatches in the window AND **zero** finishes (nothing got
+# past preflight), we file ONE workspace-level letter and skip the
+# per-ticket scan entirely — re-dispatching into a dead workspace just
+# burns more failed runs. Scheduled-routine dispatches (self-heal /
+# daily-digest / weekly-audit) are excluded from the distinct-ticket
+# count so a quiet-but-healthy workspace never trips this.
+WORKSPACE_RUNNER_FAIL_ROLLUP_THRESHOLD: Final[int] = 3
+_SCHEDULED_ROUTINE_TARGETS: Final[frozenset[str]] = frozenset(
+    {"self-heal", "daily-digest", "weekly-audit"}
+)
+
 # ``dev_not_converging`` thresholds (post-mortem of Ship-on-Ship/
 # ELS-117/ELS-7/ELS-111, 2026-05-19). When a reviewer-style gate
 # (``code_review`` / ``validation`` / ``auto_merge``) blocks the same
@@ -337,6 +355,39 @@ async def _scan_one_workspace(
     from backend.app.services.dispatcher import maybe_dispatch
     fired = 0
     cutoff = datetime.now(timezone.utc) - STALE_DISPATCH_WINDOW
+
+    # Workspace-wide runner-fail rollup. Check ONCE before scanning
+    # tickets: if the whole workspace is dead at preflight (billing /
+    # org Actions / revoked secret), file one workspace letter and bail
+    # — re-dispatching into a dead workspace burns failed runs, and the
+    # per-ticket scan would otherwise file a runner_fail_loop letter for
+    # every stuck ticket (the inbox spam we're collapsing).
+    if await _looks_like_workspace_runner_fail(session, install.workspace_id):
+        ws_cutoff = datetime.now(timezone.utc) - RUNNER_FAIL_WINDOW
+        dispatched = (
+            await session.execute(
+                select(AuditLog.target_id).where(
+                    AuditLog.workspace_id == install.workspace_id,
+                    AuditLog.action == "agent_run.dispatch",
+                    AuditLog.created_at >= ws_cutoff,
+                    AuditLog.target_id.isnot(None),
+                ).distinct()
+            )
+        ).scalars().all()
+        count = len({
+            t for t in dispatched
+            if t and t not in _SCHEDULED_ROUTINE_TARGETS
+        })
+        await _file_workspace_runner_fail_blocker(
+            session, install.workspace_id, count
+        )
+        log.info(
+            "fsm_self_heal: workspace-wide runner-fail ws=%s tickets=%d "
+            "— filed rollup letter, skipping per-ticket scan",
+            install.workspace_id, count,
+        )
+        return 0
+
     async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
         for stage in SCAN_STAGES:
             try:
@@ -531,6 +582,132 @@ async def _scan_one_workspace(
                 )
                 fired += 1
     return fired
+
+
+async def _looks_like_workspace_runner_fail(
+    session: AsyncSession,
+    workspace_id,
+) -> bool:
+    """Detect a workspace-wide runner death (billing block, org Actions
+    disabled, revoked secret) vs a single stuck ticket.
+
+    Signal: in ``RUNNER_FAIL_WINDOW``, at least
+    ``WORKSPACE_RUNNER_FAIL_ROLLUP_THRESHOLD`` *distinct* ticket
+    dispatches landed (scheduled routines excluded) and **zero**
+    ``agent_run.finish`` rows of any kind — every run died before it
+    could report. A healthy-but-idle workspace still finishes its
+    self-heal / digest ticks, so finishes>0 there; only a preflight-
+    level kill drives finishes to zero while dispatches keep firing."""
+    cutoff = datetime.now(timezone.utc) - RUNNER_FAIL_WINDOW
+    finishes = (
+        await session.execute(
+            select(AuditLog.id).where(
+                AuditLog.workspace_id == workspace_id,
+                AuditLog.action == "agent_run.finish",
+                AuditLog.created_at >= cutoff,
+            ).limit(1)
+        )
+    ).first()
+    if finishes is not None:
+        return False  # something finished → not a workspace-wide kill
+    dispatched_targets = (
+        await session.execute(
+            select(AuditLog.target_id).where(
+                AuditLog.workspace_id == workspace_id,
+                AuditLog.action == "agent_run.dispatch",
+                AuditLog.created_at >= cutoff,
+                AuditLog.target_id.isnot(None),
+            ).distinct()
+        )
+    ).scalars().all()
+    distinct_tickets = {
+        t for t in dispatched_targets
+        if t and t not in _SCHEDULED_ROUTINE_TARGETS
+    }
+    return len(distinct_tickets) >= WORKSPACE_RUNNER_FAIL_ROLLUP_THRESHOLD
+
+
+async def _file_workspace_runner_fail_blocker(
+    session: AsyncSession,
+    workspace_id,
+    ticket_count: int,
+) -> None:
+    """File ONE workspace-level runner-fail letter (dedup by handle).
+
+    Replaces the per-ticket ``runner_fail_loop`` spam when the whole
+    workspace is down. The operator fixes one thing (usually billing /
+    spending limit) and resumes; we don't re-file while it's open."""
+    from backend.app.db.models.inbox import InboxItem
+
+    handle = "runner-fail-workspace"
+    existing = (
+        await session.execute(
+            select(InboxItem.id).where(
+                InboxItem.workspace_id == workspace_id,
+                InboxItem.intake_handle == handle,
+                InboxItem.status == "new",
+            )
+        )
+    ).first()
+    if existing is not None:
+        return
+    session.add(
+        InboxItem(
+            workspace_id=workspace_id,
+            repo_id=None,
+            type="blocker",
+            title=(
+                f"Workspace runners down — {ticket_count} tickets stalled "
+                f"at preflight"
+            )[:300],
+            summary=(
+                f"Every agent run in this workspace died before reporting "
+                f"in the last {int(RUNNER_FAIL_WINDOW.total_seconds() // 3600)}h "
+                f"({ticket_count} distinct tickets dispatched, 0 finishes). "
+                f"That's a workspace-wide cause, not a per-ticket bug — "
+                f"almost always a GitHub Actions billing / spending-limit "
+                f"block, org Actions disabled, or a revoked workspace "
+                f"secret. Check the org's Billing & plans and Actions "
+                f"settings, then resume. fsm_self_heal has paused "
+                f"re-dispatch for this workspace so it stops burning "
+                f"failed runs."
+            )[:2000],
+            payload={
+                "ticket_count": ticket_count,
+                "window_hours": int(
+                    RUNNER_FAIL_WINDOW.total_seconds() // 3600
+                ),
+                "resolution_mode": "single_choice",
+                "action_items": [
+                    {
+                        "id": "fixed_resume",
+                        "kind": "choice",
+                        "label": "Fixed billing/secret — resume",
+                        "hint": (
+                            "Mark resolved; self-heal resumes dispatching "
+                            "on the next tick."
+                        ),
+                    },
+                    {
+                        "id": "pause_workspace",
+                        "kind": "choice",
+                        "label": "Pause this workspace",
+                        "hint": "Stop trying until I sort it out.",
+                    },
+                    {
+                        "id": "already_handled",
+                        "kind": "choice",
+                        "label": "Already handled",
+                    },
+                ],
+            },
+            status="new",
+            category="failure",
+            priority=10,
+            intake_handle=handle,
+            intake_reason="runner_fail_workspace",
+        )
+    )
 
 
 async def _looks_like_runner_fail_loop(
