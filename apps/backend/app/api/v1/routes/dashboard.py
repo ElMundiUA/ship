@@ -23,7 +23,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.api.v1.deps import AuthContext, get_current_auth
@@ -228,6 +228,30 @@ class DashboardSuggestedActionOut(BaseModel):
     href: str | None = None
 
 
+class DashboardFlowStageOut(BaseModel):
+    """One FSM stage's throughput in the window — how many agent runs
+    finished AT this stage. In an agentic SDLC tickets flow through
+    planning → dev → validation → code_review fast (transient), so the
+    dashboard reads this as flow, not backlog."""
+
+    stage: str
+    count: int
+
+
+class DashboardFlowOut(BaseModel):
+    """FSM-shaped flow + the two human gates where tickets dwell.
+
+    ``stages`` is per-stage finish throughput (flow). ``awaiting_merge``
+    is the count of tickets currently parked at the ``auto_merge`` gate
+    waiting on the operator (consent / overlap / needs_clarification) —
+    the one place delivery tickets actually pile up. ``stuck_loop`` is
+    tickets bouncing dev ↔ code_review without converging."""
+
+    stages: list[DashboardFlowStageOut]
+    awaiting_merge: int
+    stuck_loop: int
+
+
 class DashboardOpsOut(BaseModel):
     system_status: DashboardSystemStatusOut
     blockers: list[DashboardBlockerOut]
@@ -236,6 +260,7 @@ class DashboardOpsOut(BaseModel):
     bottlenecks: list[DashboardBottleneckOut]
     automation_health: DashboardAutomationHealthOut
     suggested_actions: list[DashboardSuggestedActionOut]
+    flow: DashboardFlowOut
 
 
 def _pr_to_out(row: PullRequest) -> PullRequestOut:
@@ -738,6 +763,56 @@ async def get_ops_dashboard(
     else:
         overall_status = "ok"
 
+    # ---- FSM flow + human gates (dashboard A) -------------------------
+    # Per-stage finish throughput in the window: how many agent runs
+    # finished AT each stage. Tickets flow through the early stages fast,
+    # so these are flow numbers, not backlog.
+    _FLOW_STAGES = (
+        "planning",
+        "dev_implementation",
+        "validation",
+        "code_review",
+        "auto_merge",
+    )
+    flow_conds = [
+        AuditLog.workspace_id == workspace_id,
+        AuditLog.action == "agent_run.finish",
+    ]
+    if ops_cutoff is not None:
+        flow_conds.append(AuditLog.created_at >= ops_cutoff)
+    # NB: group by the SELECT position (``GROUP BY 1``), not by repeating
+    # the ``payload ->> 'fsm_stage'`` expression. Postgres binds the JSON
+    # key as a parameter on each occurrence and won't prove two parameter
+    # placeholders are equal at parse time, so a textual repeat raises
+    # "column payload must appear in the GROUP BY clause".
+    flow_rows = (
+        await session.execute(
+            select(
+                AuditLog.payload["fsm_stage"].astext.label("stage"),
+                func.count(AuditLog.id).label("n"),
+            )
+            .where(*flow_conds)
+            .group_by(text("1"))
+        )
+    ).all()
+    flow_counts = {str(r.stage): int(r.n) for r in flow_rows if r.stage}
+    flow_stages = [
+        DashboardFlowStageOut(stage=s, count=flow_counts.get(s, 0))
+        for s in _FLOW_STAGES
+    ]
+    # Gates that dwell, read off the open inbox (already fetched).
+    # ``blocked_cascade_exhausted`` is the merge-gate letter — the
+    # cascade carried a ticket to the end and gave up, so the operator
+    # must make the call. ``dev_not_converging`` is the dev↔review loop.
+    awaiting_merge = sum(
+        1 for it in open_inbox_items
+        if it.intake_reason == "blocked_cascade_exhausted"
+    )
+    stuck_loop = sum(
+        1 for it in open_inbox_items
+        if it.intake_reason == "dev_not_converging"
+    )
+
     return DashboardOpsOut(
         system_status=DashboardSystemStatusOut(
             overall_status=overall_status,
@@ -762,6 +837,11 @@ async def get_ops_dashboard(
             failures_count=failed_runs_count + failed_workflows_count,
         ),
         suggested_actions=[],
+        flow=DashboardFlowOut(
+            stages=flow_stages,
+            awaiting_merge=awaiting_merge,
+            stuck_loop=stuck_loop,
+        ),
     )
 
 

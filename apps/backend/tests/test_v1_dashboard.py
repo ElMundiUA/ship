@@ -189,6 +189,93 @@ async def test_ops_dashboard_returns_empty_ok_snapshot(
         "items": [],
     }
     assert body["suggested_actions"] == []
+    assert body["flow"] == {
+        "stages": [
+            {"stage": "planning", "count": 0},
+            {"stage": "dev_implementation", "count": 0},
+            {"stage": "validation", "count": 0},
+            {"stage": "code_review", "count": 0},
+            {"stage": "auto_merge", "count": 0},
+        ],
+        "awaiting_merge": 0,
+        "stuck_loop": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_ops_dashboard_flow_throughput_and_gates(
+    v1_client, db_session, seed_workspace
+) -> None:
+    """``flow`` aggregates finish throughput per FSM stage and counts
+    the two human gates (merge-gate exhaustion + dev↔review loop)."""
+    from backend.app.db.models.inbox import InboxItem
+    from backend.app.db.models.tenancy import AuditLog
+
+    user, raw, workspace = seed_workspace
+    now = datetime.now(timezone.utc)
+
+    def _finish(stage: str, *, run_id: str) -> AuditLog:
+        return AuditLog(
+            workspace_id=workspace.id,
+            actor_user_id=user.id,
+            action="agent_run.finish",
+            target_kind="agent_run",
+            target_id=run_id,
+            payload={"fsm_stage": stage, "outcome": "ready_next_step"},
+            created_at=now - timedelta(hours=1),
+        )
+
+    # planning ×2, dev ×1, code_review ×1; validation/auto_merge none.
+    db_session.add(_finish("planning", run_id="r1"))
+    db_session.add(_finish("planning", run_id="r2"))
+    db_session.add(_finish("dev_implementation", run_id="r3"))
+    db_session.add(_finish("code_review", run_id="r4"))
+    # An old finish outside the 24h window must not count.
+    old = _finish("planning", run_id="r5")
+    old.created_at = now - timedelta(days=10)
+    db_session.add(old)
+    # Two human-gate letters.
+    db_session.add(
+        InboxItem(
+            workspace_id=workspace.id,
+            type="blocker",
+            title="ELS-9 cascade exhausted at merge gate",
+            payload={},
+            status="new",
+            intake_reason="blocked_cascade_exhausted",
+            created_at=now - timedelta(hours=2),
+        )
+    )
+    db_session.add(
+        InboxItem(
+            workspace_id=workspace.id,
+            type="blocker",
+            title="ELS-12 dev keeps bouncing off review",
+            payload={},
+            status="new",
+            intake_reason="dev_not_converging",
+            created_at=now - timedelta(hours=2),
+        )
+    )
+    await db_session.flush()
+
+    response = await v1_client.get(
+        f"/v1/workspaces/{workspace.id}/dashboard/ops?window=24h",
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    assert response.status_code == 200, response.text
+    flow = response.json()["flow"]
+
+    counts = {row["stage"]: row["count"] for row in flow["stages"]}
+    assert counts == {
+        "planning": 2,
+        "dev_implementation": 1,
+        "validation": 0,
+        "code_review": 1,
+        "auto_merge": 0,
+    }
+    assert flow["awaiting_merge"] == 1
+    assert flow["stuck_loop"] == 1
 
 
 @pytest.mark.asyncio

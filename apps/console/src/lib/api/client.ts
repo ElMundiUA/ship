@@ -1608,6 +1608,17 @@ export interface ApiOpsSuggestedAction {
   href: string | null;
 }
 
+export interface ApiOpsFlowStage {
+  stage: string;
+  count: number;
+}
+
+export interface ApiOpsFlow {
+  stages: ApiOpsFlowStage[];
+  awaiting_merge: number;
+  stuck_loop: number;
+}
+
 export interface ApiOpsDashboard {
   system_status: ApiOpsSystemStatus;
   blockers: ApiOpsBlocker[];
@@ -1616,6 +1627,7 @@ export interface ApiOpsDashboard {
   bottlenecks: ApiOpsBottleneck[];
   automation_health: ApiOpsAutomationHealth;
   suggested_actions: ApiOpsSuggestedAction[];
+  flow: ApiOpsFlow;
 }
 
 // --- Process orchestration ---------------------------------------------------

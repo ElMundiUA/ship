@@ -7,6 +7,8 @@ import type {
   ApiLiveSystem,
   ApiOpsBlocker,
   ApiOpsDashboard,
+  ApiOpsFlow,
+  ApiOpsShippedItem,
   ApiPrioritiesResponse,
   ApiPriorityLastAction,
 } from "@/lib/api/client";
@@ -24,23 +26,24 @@ import {
 } from "@/lib/ops-window";
 
 /**
- * Workspace home — editorial layout (post-PR-D1 simplification).
+ * Workspace home — FSM pipeline + three gate columns (Variant A).
  *
- * The page is a single editorial column. The earlier 7/3/2 grid was
- * trying to be a Datadog-style mission-control panel and an editorial
- * brief at the same time; the two genres fought each other and
- * neither won. Telemetry (Live System, Recent activity, DORA) lives
- * on ``/analytics`` now — the home is just "what should I do next".
+ * Agentic-SDLC tickets don't dwell in "in progress" — an agent moves
+ * a ticket through planning → dev → validation → review in minutes.
+ * The only places work *waits on a human* are the two FSM gates:
+ * ``auto_merge`` (a green PR awaiting merge consent) and ``parked``
+ * (a project awaiting promote). So the home maps onto the FSM:
  *
- *   1. Status alerts (bundle stale + blockers) — only when something
- *      is non-ok, so a clean workspace renders without chrome.
- *   2. ``Needs you`` lede — h1-grade heading + decisions/PRs/shipped
- *      stat ribbon + first 4 decisions inline.
- *   3. Project prioritizer (Active / Drafts / Parked / Unprioritised).
- *   4. Active-tickets summary strip (one line).
- *
- * A single-line ``LiveSystemStrip`` sits under the alerts so the
- * operator can spot a system blip without leaving the page.
+ *   1. Status alerts — only when something is non-ok.
+ *   2. ``FlowStrip`` (full width) — per-stage throughput in the window
+ *      as a left-to-right pipeline, with the ``auto_merge`` gate
+ *      highlighted when PRs await consent and a ``stuck loop`` badge
+ *      for the dev↔review cycle.
+ *   3. Three columns:
+ *        AWAITING YOU  — decisions + PRs ready to merge + parked count.
+ *        PROJECT QUEUE — the prioritizer (the agent's pick order).
+ *        SHIPPED       — what merged in the window.
+ *   4. Footer strips — ops window toggle, live-system, last action.
  *
  * Color discipline: ``aqua`` is the editorial-positive accent,
  * ``lilac`` human handoff, ``coral`` errors, ``sun`` paused/blocked,
@@ -73,80 +76,204 @@ export function WorkspaceHome({
   skipWizard,
 }: WorkspaceHomeProps) {
   const reposNeedingUpdate = repos.filter(needsShipTemplateUpdate);
-  const decisions = (inboxItems?.items ?? []).slice(0, 4);
+  const decisions = (inboxItems?.items ?? []).slice(0, 5);
   // Decisions counter mirrors the /inbox page: only items in
   // ACTIONABLE_CATEGORIES (`decision_needed` + `failure`). Reports
   // and `dismiss_silently` rows live in /reports and must not pad
-  // the "needs you" line. Pre-ELS-147 this used `all_open` which
+  // the "awaiting you" line. Pre-ELS-147 this used `all_open` which
   // swept in daily-digest and learning-capture rows as if they
   // were decisions — the operator saw "16 waiting" and clicked
   // through to a list of reports.
   const decisionsTotal =
     inboxCounts?.actionable_new ?? inboxItems?.total ?? 0;
   const prsReadyToMerge = derivePrsReadyToMerge(summary);
-  const totalShipped =
-    summary.shipped.features_shipped_count +
-    summary.shipped.fixes_count +
-    summary.shipped.rollbacks_count;
-  const blockerCount =
-    summary.blockers.length + reposNeedingUpdate.length;
-  const inFlight = summary.work_in_progress.length;
-  const inProgress = summary.work_in_progress.filter(
-    (it) => it.status === "in_progress",
+  const parkedCount = (priorities?.projects ?? []).filter(
+    (p) => p.priority_state === "parked",
   ).length;
   const periodKicker = opsReportWindowShortLabel(opsWindow);
 
   return (
-    <div className="mx-auto max-w-6xl">
-      <div className="grid grid-cols-1 gap-x-10 gap-y-8 lg:grid-cols-12">
-        {/* Left — what the operator acts on: blockers, the decisions
-            waiting, and the project queue the agent picks from. */}
-        <div className="space-y-8 lg:col-span-7">
-          {(reposNeedingUpdate.length > 0 || summary.blockers.length > 0) && (
-            <StatusAlerts
-              blockers={summary.blockers}
-              reposNeedingUpdate={reposNeedingUpdate}
-              workspaceId={workspaceId}
-              multiWs={multiWs}
-            />
-          )}
+    <div className="mx-auto w-full max-w-[1600px] space-y-8">
+      {(reposNeedingUpdate.length > 0 || summary.blockers.length > 0) && (
+        <StatusAlerts
+          blockers={summary.blockers}
+          reposNeedingUpdate={reposNeedingUpdate}
+          workspaceId={workspaceId}
+          multiWs={multiWs}
+        />
+      )}
 
-          <NeedsYouSection
+      <FlowStrip flow={summary.flow} periodKicker={periodKicker} />
+
+      <div className="grid grid-cols-1 gap-x-10 gap-y-10 lg:grid-cols-12">
+        {/* AWAITING YOU — the two FSM human gates + inbox decisions. */}
+        <section className="lg:col-span-4">
+          <AwaitingYouColumn
             decisions={decisions}
             decisionsTotal={decisionsTotal}
             prsReadyToMerge={prsReadyToMerge}
-            shippedTotal={totalShipped}
-            blockerCount={blockerCount}
+            parkedCount={parkedCount}
             workspaceId={workspaceId}
-            periodKicker={periodKicker}
           />
+        </section>
 
+        {/* PROJECT QUEUE — the order the agent picks work in. */}
+        <section className="lg:col-span-5">
+          <div className="mb-4 flex items-center gap-3">
+            <h3 className="text-[10px] font-bold uppercase tracking-[0.22em] text-white/40">
+              Project queue
+            </h3>
+            <div className="h-px flex-1 bg-white/[0.06]" />
+          </div>
           {priorities ? (
             <DashboardPrioritizer
               workspaceId={workspaceId}
               initial={priorities}
             />
-          ) : null}
-        </div>
+          ) : (
+            <p className="text-sm text-white/45">No projects yet.</p>
+          )}
+        </section>
 
-        {/* Right — ambient context, recedes. Sticky so it stays put
-            while the queue scrolls. */}
-        <aside className="space-y-6 lg:col-span-5 lg:sticky lg:top-6 lg:self-start">
-          <OpsWindowSegment
-            workspaceId={workspaceId}
-            multiWs={multiWs}
-            current={opsWindow}
-            skipWizard={skipWizard}
-          />
-          <LiveSystemStrip data={liveSystem} workspaceId={workspaceId} />
-          <LastActionStrip lastAction={priorities?.last_action ?? null} />
-          <ActiveTicketsStrip
-            inFlight={inFlight}
-            inProgress={inProgress}
+        {/* SHIPPED — what merged in the window. Ambient, sticky. */}
+        <aside className="lg:col-span-3 lg:sticky lg:top-6 lg:self-start">
+          <ShippedColumn
+            items={summary.shipped.items}
+            featuresCount={summary.shipped.features_shipped_count}
+            fixesCount={summary.shipped.fixes_count}
+            rollbacksCount={summary.shipped.rollbacks_count}
+            periodKicker={periodKicker}
             workspaceId={workspaceId}
           />
         </aside>
       </div>
+
+      {/* Footer — ambient context strips. */}
+      <div className="space-y-3 border-t border-white/[0.06] pt-5">
+        <OpsWindowSegment
+          workspaceId={workspaceId}
+          multiWs={multiWs}
+          current={opsWindow}
+          skipWizard={skipWizard}
+        />
+        <LiveSystemStrip data={liveSystem} workspaceId={workspaceId} />
+        <LastActionStrip lastAction={priorities?.last_action ?? null} />
+      </div>
+    </div>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// FlowStrip — FSM pipeline throughput (full width)
+// ---------------------------------------------------------------------------
+
+
+const FLOW_STAGE_LABEL: Record<string, string> = {
+  planning: "Planning",
+  dev_implementation: "Dev",
+  validation: "Validation",
+  code_review: "Review",
+  auto_merge: "Merge gate",
+};
+
+
+function FlowStrip({
+  flow,
+  periodKicker,
+}: {
+  flow: ApiOpsFlow;
+  periodKicker: string;
+}) {
+  return (
+    <section className="space-y-3">
+      <div className="flex flex-wrap items-center gap-3">
+        <h3 className="text-[10px] font-bold uppercase tracking-[0.22em] text-white/40">
+          Pipeline · throughput{" "}
+          <span className="font-mono normal-case tracking-normal text-white/30">
+            ({periodKicker})
+          </span>
+        </h3>
+        <div className="h-px min-w-6 flex-1 bg-white/[0.06]" />
+        {flow.stuck_loop > 0 && (
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-coral/40 bg-coral/10 px-2.5 py-1 text-[11px] font-semibold text-coral">
+            <span aria-hidden>↺</span> {flow.stuck_loop} stuck in dev↔review
+          </span>
+        )}
+      </div>
+      <ol className="flex items-stretch gap-1 overflow-x-auto pb-1">
+        {flow.stages.map((stage, idx) => {
+          const isGate = stage.stage === "auto_merge";
+          return (
+            <li key={stage.stage} className="flex items-stretch">
+              <FlowNode
+                label={FLOW_STAGE_LABEL[stage.stage] ?? stage.stage}
+                count={stage.count}
+                isGate={isGate}
+                gateCount={isGate ? flow.awaiting_merge : 0}
+              />
+              {idx < flow.stages.length - 1 && (
+                <span
+                  aria-hidden
+                  className="flex items-center px-1 text-white/20"
+                >
+                  →
+                </span>
+              )}
+            </li>
+          );
+        })}
+      </ol>
+    </section>
+  );
+}
+
+
+function FlowNode({
+  label,
+  count,
+  isGate,
+  gateCount,
+}: {
+  label: string;
+  count: number;
+  isGate: boolean;
+  gateCount: number;
+}) {
+  const gateHot = isGate && gateCount > 0;
+  return (
+    <div
+      className={cn(
+        "flex min-w-[112px] flex-col justify-between rounded-lg border px-3 py-2.5 transition",
+        gateHot
+          ? "border-sun/50 bg-sun/[0.08]"
+          : "border-white/[0.08] bg-white/[0.02]",
+      )}
+    >
+      <p
+        className={cn(
+          "text-[10px] font-bold uppercase tracking-[0.16em]",
+          gateHot ? "text-sun" : "text-white/45",
+        )}
+      >
+        {label}
+      </p>
+      <p className="mt-1.5 flex items-baseline gap-1.5">
+        <span
+          className={cn(
+            "font-display text-2xl font-bold leading-none",
+            count > 0 ? "text-white" : "text-white/30",
+          )}
+        >
+          {count}
+        </span>
+        <span className="text-[10px] text-white/35">done</span>
+      </p>
+      {gateHot && (
+        <p className="mt-1.5 text-[11px] font-semibold text-sun">
+          {gateCount} awaiting you
+        </p>
+      )}
     </div>
   );
 }
@@ -383,104 +510,71 @@ function StatusAlerts({
 
 
 // ---------------------------------------------------------------------------
-// "Needs you" — lede + decisions + ready-to-merge
+// AWAITING YOU — the two FSM human gates + inbox decisions
 // ---------------------------------------------------------------------------
 
 
-function NeedsYouSection({
+function AwaitingYouColumn({
   decisions,
   decisionsTotal,
   prsReadyToMerge,
-  shippedTotal,
-  blockerCount,
+  parkedCount,
   workspaceId,
-  periodKicker,
 }: {
   decisions: InboxItem[];
   decisionsTotal: number;
   prsReadyToMerge: ReadyToMergePr[];
-  shippedTotal: number;
-  blockerCount: number;
+  parkedCount: number;
   workspaceId: string;
-  periodKicker: string;
 }) {
-  // Lede subtitle — built from real fields only. Each clause renders
-  // only when its number is meaningful, otherwise it's omitted.
-  const subtitleParts: React.ReactNode[] = [];
-  if (decisionsTotal > 0) {
-    subtitleParts.push(
-      <span key="decisions" className="text-sun">
-        <span className="font-display font-bold">{decisionsTotal}</span>{" "}
-        decision{decisionsTotal === 1 ? "" : "s"} waiting
-      </span>,
-    );
-  }
-  if (prsReadyToMerge.length > 0) {
-    subtitleParts.push(
-      <span key="prs">
-        <span className="font-display font-bold text-white">
-          {prsReadyToMerge.length}
-        </span>{" "}
-        PR{prsReadyToMerge.length === 1 ? "" : "s"} ready to merge
-      </span>,
-    );
-  }
-  if (shippedTotal > 0) {
-    subtitleParts.push(
-      <span key="shipped">
-        <span className="font-display font-bold text-aqua">{shippedTotal}</span>{" "}
-        shipped{" "}
-        <span className="font-mono text-[11px] font-semibold text-white/50">
-          ({periodKicker})
-        </span>
-      </span>,
-    );
-  }
-  if (subtitleParts.length === 0) {
-    subtitleParts.push(
-      <span key="quiet" className="italic">
-        Workspace is quiet — no decisions waiting, no PRs queued.
-      </span>,
-    );
-  }
-
   const inboxHref = `/inbox?ws=${encodeURIComponent(workspaceId)}`;
+  const total = decisionsTotal + prsReadyToMerge.length + parkedCount;
+  const nothing = total === 0;
 
   return (
-    <section className="space-y-8">
-      <header className="space-y-2">
-        <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-white/40">
-          Needs you
+    <div className="space-y-6">
+      <header className="space-y-1.5">
+        <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-sun/80">
+          Awaiting you
         </p>
-        <h2 className="font-display text-2xl font-bold leading-tight text-white">
-          {decisionsTotal > 0
-            ? `${decisionsTotal} ${decisionsTotal === 1 ? "decision needs" : "decisions need"} you.`
-            : prsReadyToMerge.length + blockerCount > 0
-              ? "A few things to look at."
-              : "Nothing on your plate."}
+        <h2 className="font-display text-xl font-bold leading-tight text-white">
+          {nothing
+            ? "Nothing on your plate."
+            : `${total} thing${total === 1 ? "" : "s"} need${total === 1 ? "s" : ""} you.`}
         </h2>
-        <p className="text-sm text-white/65">
-          {subtitleParts.flatMap((node, idx) =>
-            idx === 0
-              ? [node]
-              : [
-                  <span key={`sep-${idx}`} className="mx-2 text-white/20">
-                    ·
-                  </span>,
-                  node,
-                ],
-          )}
-        </p>
       </header>
 
+      {nothing && (
+        <p className="text-sm italic text-white/45">
+          No decisions, no PRs at the merge gate, no parked projects.
+          The pipeline is running itself.
+        </p>
+      )}
+
+      {prsReadyToMerge.length > 0 && (
+        <div className="space-y-2.5">
+          <GateHeading
+            label="Merge gate"
+            count={prsReadyToMerge.length}
+            tone="aqua"
+          />
+          <ul className="divide-y divide-white/[0.06]">
+            {prsReadyToMerge.slice(0, 6).map((pr) => (
+              <li key={`${pr.repo}-${pr.number}`}>
+                <ReadyToMergeRow pr={pr} />
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {decisions.length > 0 && (
-        <div className="space-y-3">
-          <div className="flex items-center gap-3">
-            <h3 className="text-[10px] font-bold uppercase tracking-[0.22em] text-sun/80">
-              Decisions · {decisionsTotal} waiting
-            </h3>
-            <div className="h-px flex-1 bg-white/[0.06]" />
-          </div>
+        <div className="space-y-2.5">
+          <GateHeading
+            label="Decisions"
+            count={decisionsTotal}
+            tone="sun"
+          />
           <ul className="divide-y divide-white/[0.06]">
             {decisions.map((item) => (
               <li key={item.id}>
@@ -501,25 +595,162 @@ function NeedsYouSection({
         </div>
       )}
 
-      {prsReadyToMerge.length > 0 && (
-        <div className="space-y-3">
-          <div className="flex items-center gap-3">
-            <h3 className="text-[10px] font-bold uppercase tracking-[0.22em] text-aqua/75">
-              Ready to merge · {prsReadyToMerge.length}
-            </h3>
-            <div className="h-px flex-1 bg-white/[0.06]" />
-          </div>
+      {parkedCount > 0 && (
+        <div className="space-y-2.5">
+          <GateHeading label="Parked" count={parkedCount} tone="white" />
+          <p className="text-[13px] text-white/60">
+            {parkedCount} project{parkedCount === 1 ? "" : "s"} on hold —
+            promote {parkedCount === 1 ? "it" : "them"} in the queue to let
+            the agent pick {parkedCount === 1 ? "it" : "them"} up.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+function GateHeading({
+  label,
+  count,
+  tone,
+}: {
+  label: string;
+  count: number;
+  tone: "sun" | "aqua" | "white";
+}) {
+  const toneClass =
+    tone === "sun"
+      ? "text-sun/80"
+      : tone === "aqua"
+        ? "text-aqua/75"
+        : "text-white/45";
+  return (
+    <div className="flex items-center gap-3">
+      <h3
+        className={cn(
+          "text-[10px] font-bold uppercase tracking-[0.22em]",
+          toneClass,
+        )}
+      >
+        {label} · {count}
+      </h3>
+      <div className="h-px flex-1 bg-white/[0.06]" />
+    </div>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// SHIPPED — what merged in the window
+// ---------------------------------------------------------------------------
+
+
+const SHIPPED_TONE: Record<ApiOpsShippedItem["type"], string> = {
+  feature: "text-aqua/85",
+  fix: "text-lilac/85",
+  rollback: "text-coral/85",
+};
+
+
+function ShippedColumn({
+  items,
+  featuresCount,
+  fixesCount,
+  rollbacksCount,
+  periodKicker,
+  workspaceId,
+}: {
+  items: ApiOpsShippedItem[];
+  featuresCount: number;
+  fixesCount: number;
+  rollbacksCount: number;
+  periodKicker: string;
+  workspaceId: string;
+}) {
+  const total = featuresCount + fixesCount + rollbacksCount;
+  const analyticsHref = `/analytics?ws=${encodeURIComponent(workspaceId)}`;
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-3">
+        <h3 className="text-[10px] font-bold uppercase tracking-[0.22em] text-aqua/75">
+          Shipped{" "}
+          <span className="font-mono normal-case tracking-normal text-white/30">
+            ({periodKicker})
+          </span>
+        </h3>
+        <div className="h-px flex-1 bg-white/[0.06]" />
+      </div>
+
+      {total === 0 ? (
+        <p className="text-sm italic text-white/45">
+          Nothing merged in this window.
+        </p>
+      ) : (
+        <>
+          <p className="text-[13px] text-white/60">
+            <span className="font-display text-lg font-bold text-aqua">
+              {total}
+            </span>{" "}
+            merged
+            {featuresCount > 0 && ` · ${featuresCount} feat`}
+            {fixesCount > 0 && ` · ${fixesCount} fix`}
+            {rollbacksCount > 0 && ` · ${rollbacksCount} rollback`}
+          </p>
           <ul className="divide-y divide-white/[0.06]">
-            {prsReadyToMerge.slice(0, 4).map((pr) => (
-              <li key={`${pr.repo}-${pr.number}`}>
-                <ReadyToMergeRow pr={pr} />
+            {items.slice(0, 8).map((item, idx) => (
+              <li key={`${item.repo}-${idx}-${item.name}`}>
+                <ShippedRow item={item} />
               </li>
             ))}
           </ul>
-        </div>
+          {total > items.slice(0, 8).length && (
+            <p className="text-[11px]">
+              <Link
+                href={analyticsHref}
+                className="font-semibold text-white/55 hover:text-white"
+              >
+                Full history in Analytics →
+              </Link>
+            </p>
+          )}
+        </>
       )}
-    </section>
+    </div>
   );
+}
+
+
+function ShippedRow({ item }: { item: ApiOpsShippedItem }) {
+  const inner = (
+    <div className="py-2.5">
+      <p className="flex items-center gap-2 text-[10px] uppercase tracking-[0.16em] text-white/45">
+        <span className={SHIPPED_TONE[item.type]}>{item.type}</span>
+        {item.repo && (
+          <>
+            <span className="text-white/15">·</span>
+            <span className="truncate normal-case tracking-normal text-white/45">
+              {item.repo}
+            </span>
+          </>
+        )}
+      </p>
+      <p className="mt-0.5 truncate text-[13px] text-white/85">{item.name}</p>
+    </div>
+  );
+  if (item.href) {
+    return (
+      <a
+        href={item.href}
+        target="_blank"
+        rel="noreferrer"
+        className="block transition hover:bg-white/[0.025]"
+      >
+        {inner}
+      </a>
+    );
+  }
+  return inner;
 }
 
 
@@ -530,7 +761,7 @@ function DecisionRow({
   item: InboxItem;
   workspaceId: string;
 }) {
-  const href = `/inbox/${encodeURIComponent(item.id)}?ws=${encodeURIComponent(workspaceId)}`;
+  const href = `/inbox?selected=${encodeURIComponent(item.id)}&ws=${encodeURIComponent(workspaceId)}`;
   return (
     <Link
       href={href}
@@ -630,41 +861,7 @@ function derivePrsReadyToMerge(summary: ApiOpsDashboard): ReadyToMergePr[] {
 
 
 // ---------------------------------------------------------------------------
-// Active-tickets summary strip (replaces the 3-col Work-in-flight grid)
-// ---------------------------------------------------------------------------
-
-
-function ActiveTicketsStrip({
-  inFlight,
-  inProgress,
-  workspaceId,
-}: {
-  inFlight: number;
-  inProgress: number;
-  workspaceId: string;
-}) {
-  if (inFlight === 0) return null;
-  return (
-    <p className="flex items-baseline justify-between gap-4 border-t border-white/[0.06] pt-4 text-[12px] text-white/55">
-      <span>
-        <span className="font-display font-bold text-white">{inFlight}</span>{" "}
-        active ticket{inFlight === 1 ? "" : "s"}
-        <span className="mx-2 text-white/20">·</span>
-        <span>{inProgress} in flight</span>
-      </span>
-      <Link
-        href={`/process?ws=${encodeURIComponent(workspaceId)}`}
-        className="shrink-0 text-[11px] font-semibold uppercase tracking-widest text-white/45 hover:text-white"
-      >
-        Open process →
-      </Link>
-    </p>
-  );
-}
-
-
-// ---------------------------------------------------------------------------
-// Right rail — Last-action · Recent activity · Repos
+// Footer strips — Last-action · Live system
 // ---------------------------------------------------------------------------
 
 
