@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import logging
 import re
+import secrets
 import uuid
 from dataclasses import dataclass
 from typing import Any, Final
@@ -48,6 +49,7 @@ from backend.app.integrations.github.workflows import (
 )
 from backend.app.services import tracker_resolver as tracker_resolver_module
 from backend.app.services.file_overlap import build_file_coordination_warning
+from backend.app.services.file_overlap_telemetry import emit_file_overlap_warnings
 
 
 # Stage label (Linear's ``stage:<id>``) → routine id. The dispatcher
@@ -993,6 +995,7 @@ async def maybe_dispatch(
         )
     repo, install = target
 
+    dispatch_run_id = f"run_{secrets.token_hex(8)}"
     file_coordination_warning: str | None = None
     file_overlap_warnings: list[dict[str, Any]] = []
     if (
@@ -1032,6 +1035,15 @@ async def maybe_dispatch(
                     },
                 )
             )
+            if project_id:
+                emit_file_overlap_warnings(
+                    session,
+                    workspace_id=workspace_id,
+                    ticket_ref=ticket_ref,
+                    project_id=project_id,
+                    run_id=dispatch_run_id,
+                    warnings=file_overlap_warnings,
+                )
 
     # 6. Fire ``workflow_dispatch``. GitHub returns 204 on accept;
     # ``WorkflowDispatchError`` covers 4xx (workflow file missing,
@@ -1044,6 +1056,7 @@ async def maybe_dispatch(
             inputs={
                 "routine_id": routine_id,
                 "ticket_ref": ticket_ref,
+                "ship_run_id": dispatch_run_id,
             },
             settings=settings,
             client=client,
@@ -1095,6 +1108,7 @@ async def maybe_dispatch(
             "project_id": project_id,
             "file_coordination_warning": file_coordination_warning,
             "file_overlap_warnings": file_overlap_warnings or None,
+            "run_id": dispatch_run_id,
         },
     )
     session.add(dispatch_audit)

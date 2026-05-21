@@ -30,6 +30,11 @@ on:
         required: false
         default: ""
         type: string
+      ship_run_id:
+        description: "Dispatch-correlated run handle for audit telemetry (ELS-156)."
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: write
@@ -98,6 +103,7 @@ jobs:
           SHIP_SHA: ${{ github.sha }}
           ROUTINE_ID: ${{ inputs.routine_id }}
           TICKET_REF: ${{ inputs.ticket_ref }}
+          SHIP_RUN_ID: ${{ inputs.ship_run_id }}
         run: |
           set -euo pipefail
           echo "Ship: running routine '${ROUTINE_ID}' pinned to '${TICKET_REF}'"

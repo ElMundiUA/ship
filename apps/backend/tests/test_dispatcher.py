@@ -714,7 +714,10 @@ async def test_file_overlap_warning_attached_on_dev_dispatch(
         dispatcher, "build_file_coordination_warning", _overlap
     )
 
-    async def _dispatch_workflow(*_args, **_kwargs):
+    captured_inputs: dict[str, str] = {}
+
+    async def _dispatch_workflow(*_args, **kwargs):
+        captured_inputs.update(kwargs.get("inputs") or {})
         return None
 
     monkeypatch.setattr(
@@ -740,6 +743,9 @@ async def test_file_overlap_warning_attached_on_dev_dispatch(
         )
     ).scalar_one()
     assert "file_coordination_warning" in dispatch_row.payload
+    dispatch_run_id = dispatch_row.payload.get("run_id")
+    assert dispatch_run_id and str(dispatch_run_id).startswith("run_")
+    assert captured_inputs.get("ship_run_id") == dispatch_run_id
     overlap_row = (
         await db_session.execute(
             select(AuditLog).where(
@@ -749,6 +755,20 @@ async def test_file_overlap_warning_attached_on_dev_dispatch(
         )
     ).scalar_one()
     assert overlap_row.target_id == "ELS-147"
+    telemetry_rows = (
+        await db_session.execute(
+            select(AuditLog).where(
+                AuditLog.workspace_id == ws,
+                AuditLog.action == "agent_dispatch.file_overlap_warning",
+                AuditLog.target_id == "ELS-147",
+            )
+        )
+    ).scalars().all()
+    assert len(telemetry_rows) >= 1
+    telemetry_payload = telemetry_rows[0].payload or {}
+    assert telemetry_payload.get("run_id") == dispatch_run_id
+    assert telemetry_payload.get("overlap_kind") == "schema"
+    assert telemetry_payload.get("conflicted_paths")
 
 
 # ---------------------------------------------------------------------------
