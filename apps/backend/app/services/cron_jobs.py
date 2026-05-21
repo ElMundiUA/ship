@@ -673,6 +673,17 @@ def register_all() -> None:
     # PR mirror regenerates inbox letters the operator can't dismiss.
     # Every 30 min walk rows >3d stale and refresh from GitHub. See
     # :mod:`pr_cache_reconciler` for the algorithm.
+    # Project auto-completion backstop (2026-05-21). Completes projects
+    # whose every child ticket is Done (drop into dashboard History +
+    # Linear → Completed) and reopens done projects that gained a
+    # ticket. Backstop for the merge-webhook fast path, which can miss
+    # on Linear replica lag. Every 15 min. See :mod:`project_completion`.
+    register_cron(
+        fn=_project_completion_sweep_tick,
+        cron_expr="*/15 * * * *",
+        job_id="project_completion_sweep",
+    )
+
     register_cron(
         fn=_pr_cache_reconcile_tick,
         cron_expr="*/30 * * * *",
@@ -752,6 +763,20 @@ async def _pr_cache_reconcile_tick() -> None:
         logging.getLogger("ship.pr_cache_reconciler").info(
             "pr_cache_reconciler: refreshed %d stale rows", updated,
         )
+
+
+@cron_with_lock(
+    lock=CronLockId.PROJECT_COMPLETION_SWEEP,
+    name="project_completion_sweep",
+)
+async def _project_completion_sweep_tick() -> None:
+    """Complete projects whose every ticket is Done; reopen done
+    projects that gained a ticket. See :mod:`project_completion`."""
+    from backend.app.services.project_completion import (
+        sweep_project_completion,
+    )
+
+    await sweep_project_completion()
 
 
 __all__ = ["register_all"]

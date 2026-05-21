@@ -141,6 +141,13 @@ class CronLockId(IntEnum):
     # >3d old and refreshes the cache. Idempotent — already-current
     # rows are no-ops.
     PR_CACHE_RECONCILE = 1020
+    # Project auto-completion backstop (2026-05-21). Evaluates every
+    # active / parked / done project per workspace: completes one whose
+    # every child ticket is Done (Linear → Completed, priority →
+    # ``done``), reopens a done project that gained a ticket. Backstop
+    # for the merge-webhook fast path, which can miss on Linear replica
+    # lag. See :mod:`project_completion`.
+    PROJECT_COMPLETION_SWEEP = 1021
 
 
 # ---------------------------------------------------------------------------

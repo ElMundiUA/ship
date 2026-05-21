@@ -1327,6 +1327,25 @@ class LinearTracker:
         """
         await self._gql(mutation, {"id": project_id, "content": new_content})
 
+    async def complete_project(self, project_id: str) -> bool:
+        """Mark the Linear project Completed.
+
+        Used when every child ticket has finished, so the epic drops out
+        of the operator's tracker view. Best-effort: returns the
+        mutation's ``success`` flag; the caller treats any failure as
+        non-fatal (the dashboard's ``done`` state is the load-bearing
+        signal, the Linear flip is cosmetic). Uses the legacy ``state``
+        string — workspaces on Linear's newer ``statusId`` model may
+        reject it, which the caller swallows.
+        """
+        mutation = """
+        mutation ShipCompleteProject($id: String!) {
+          projectUpdate(id: $id, input: { state: "completed" }) { success }
+        }
+        """
+        data = await self._gql(mutation, {"id": project_id})
+        return bool(((data or {}).get("projectUpdate") or {}).get("success"))
+
     async def upsert_project_section(
         self, project_id: str, *, section: str, body: str
     ) -> None:

@@ -676,6 +676,14 @@ async def _apply_pull_request_event(
             workspace_id=repo_row.workspace_id,
             pr_title=title,
         )
+        # Auto-complete the project if this merge finished its last open
+        # ticket. Fast path; the cron backstop catches any miss from
+        # Linear replica lag on the just-written Done state.
+        await _maybe_complete_project_on_merge(
+            session,
+            workspace_id=repo_row.workspace_id,
+            pr_title=title,
+        )
 
     # Same pattern for "closed without merge" — operator abandoned the
     # work, so the linked ticket lands in ``Canceled`` rather than
@@ -1082,6 +1090,57 @@ async def _release_project_lock_for_merged_pr(
                     "project_id": project_id,
                 },
             )
+        )
+
+
+async def _maybe_complete_project_on_merge(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    pr_title: str,
+) -> None:
+    """If this merge finished the last open ticket of its project, mark
+    the project Completed (Linear) + ``done`` (priority row). Best-effort
+    — resolves the project via the merged ticket's snapshot, same as the
+    lock-release path; any miss is reconciled by the cron backstop."""
+    refs = TICKET_REF_PR_TITLE_RE.findall(pr_title)
+    if not refs:
+        return
+    ticket_ref = refs[0]
+    try:
+        from backend.app.core.config import get_settings as _gs
+        from backend.app.integrations.gateway.tracker import TicketRef as _TR
+        from backend.app.services.project_completion import (
+            evaluate_project_completion,
+        )
+        from backend.app.services.tracker_resolver import (
+            resolve_for_workspace as _resolve,
+        )
+
+        resolved = await _resolve(
+            session=session, settings=_gs(), workspace_id=workspace_id
+        )
+        if resolved is None:
+            return
+        snap_fn = getattr(resolved.gateway, "get_ticket_snapshot", None)
+        if snap_fn is None:
+            return
+        snap = await snap_fn(
+            _TR(kind=resolved.kind, workspace_hint=None, id=ticket_ref)
+        )
+        project_id = (snap or {}).get("project_id")
+        if not project_id:
+            return
+        await evaluate_project_completion(
+            session,
+            workspace_id=workspace_id,
+            gateway=resolved.gateway,
+            project_id=str(project_id),
+        )
+    except Exception as exc:  # noqa: BLE001 — best-effort, never fail the webhook
+        logger.debug(
+            "project auto-complete on merge failed ws=%s pr_title=%s err=%s",
+            workspace_id, pr_title, exc,
         )
 
 
