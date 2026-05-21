@@ -77,10 +77,36 @@ Produce a single inbox letter via `shipctl inbox create`. Shape:
 shipctl inbox create \
   --type report \
   --title "Daily digest — YYYY-MM-DD" \
-  --summary "<one-line headline: green/yellow/red + why>" \
+  --headline "<≤80 chars: green/yellow/red + why>" \
+  --summary "<first line doubles as list headline if --headline omitted>" \
   --body-file /tmp/digest.md \
   --payload-file /tmp/digest-payload.json
 ```
+
+**Report payload contract** — merge into the inbox item JSON (via API
+`payload` or agent tool) alongside `body`:
+
+```json
+{
+  "body": "<markdown digest>",
+  "resolution_mode": "per_item_binary",
+  "action_items": [
+    {
+      "id": "finding-01",
+      "kind": "binary",
+      "hint": "Repeating clarification on intake scope",
+      "label": "Document once",
+      "secondary_label": "Ignore"
+    }
+  ]
+}
+```
+
+Emit **≥1 `kind: "binary"` action item per lesson learned** (Phase 2).
+Each needs `id`, `hint`, `label`, and `secondary_label`. Set
+`resolution_mode` to `per_item_binary`. Keep
+`summary`'s **first line ≤80 characters** so the inbox list stays
+scannable when `--headline` is omitted.
 
 Body sections (Markdown):
 

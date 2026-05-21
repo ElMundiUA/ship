@@ -38,11 +38,12 @@ ACTIONABLE_CATEGORIES: frozenset[str] = frozenset(
 # these fields fall back to ``freeform_only`` (legacy textarea path).
 # ---------------------------------------------------------------------------
 
-ActionItemKind = Literal["choice", "checkbox", "ack"]
+ActionItemKind = Literal["choice", "checkbox", "ack", "binary"]
 ResolutionMode = Literal[
     "single_choice",   # clarification — pick 1 of N or freeform
     "multi_select",    # retro / improvements — check 0..N + Apply
     "ack_only",        # digest / read-only — Acknowledge button
+    "per_item_binary",  # report digest — one primary/secondary pair per item
     "freeform_only",   # legacy fallback — textarea only
 ]
 
@@ -66,6 +67,7 @@ class ActionItem(BaseModel):
     kind: ActionItemKind
     label: str = Field(..., min_length=1, max_length=160)
     hint: str | None = Field(default=None, max_length=400)
+    secondary_label: str | None = Field(default=None, max_length=160)
     default: bool = False
     target_project_id: str | None = Field(default=None, max_length=64)
     # Server-side executor that runs when the operator picks this
@@ -140,6 +142,7 @@ def derive_resolution_mode(
             "single_choice",
             "multi_select",
             "ack_only",
+            "per_item_binary",
             "freeform_only",
         ):
             return explicit  # type: ignore[return-value]
@@ -147,6 +150,8 @@ def derive_resolution_mode(
     items = parse_action_items(payload)
     if items:
         kinds = {it.kind for it in items}
+        if "binary" in kinds:
+            return "per_item_binary"
         if "checkbox" in kinds:
             return "multi_select"
         if kinds == {"choice"}:

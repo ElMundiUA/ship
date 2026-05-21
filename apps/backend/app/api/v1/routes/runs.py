@@ -564,6 +564,8 @@ async def _emit_self_heal_blocker_inbox(
     )
     if int(exists or 0) > 0:
         return
+    from backend.app.services.inbox.headline import derive_headline
+
     summary = (run.summary or routine.lane_id or "Self-heal")[:500]
     title = f"Self-heal could not fix: {summary}"[:255]
     session.add(
@@ -572,6 +574,7 @@ async def _emit_self_heal_blocker_inbox(
             repo_id=routine.repo_id,
             type="blocker",
             title=title,
+            headline=derive_headline(summary=summary, title=title),
             summary=summary,
             payload={
                 "kind": "self_heal_failed",

@@ -23,6 +23,7 @@ export default defineConfig({
       // Mirror the Next.js path alias so production imports
       // (``@/components/...``) resolve in tests.
       "@": path.resolve(__dirname, "src"),
+      "server-only": path.resolve(__dirname, "src/test/server-only-mock.ts"),
     },
   },
   test: {

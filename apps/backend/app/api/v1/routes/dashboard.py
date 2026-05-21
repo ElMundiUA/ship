@@ -43,6 +43,7 @@ from backend.app.db.models.pipelines import (
 )
 from backend.app.db.models.tenancy import AuditLog
 from backend.app.db.session import get_session
+from backend.app.services.inbox.headline import derive_headline
 from backend.app.services.dashboard_tracker_wip import (
     collect_tracker_wip_candidates,
     effective_tracker_for_repo,
@@ -449,13 +450,16 @@ async def _mirror_stuck_prs_to_inbox(
         )
         if int(exists or 0) > 0:
             continue
+        stuck_title = f"Stuck work: PR #{pr.number} — no activity 24h+"
+        stuck_summary = pr.title[:500] if pr.title else None
         session.add(
             InboxItem(
                 workspace_id=workspace_id,
                 repo_id=pr.repo_id,
                 type="stuck",
-                title=f"Stuck work: PR #{pr.number} — no activity 24h+",
-                summary=pr.title[:500] if pr.title else None,
+                title=stuck_title,
+                headline=derive_headline(summary=stuck_summary, title=stuck_title),
+                summary=stuck_summary,
                 payload={
                     "kind": "stuck_pr",
                     "pr_number": pr.number,

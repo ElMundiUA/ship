@@ -1,7 +1,11 @@
 import Link from "next/link";
 
 import { cn } from "@/lib/cn";
-import { INBOX_TYPE_META, type InboxItem } from "@/lib/inbox-types";
+import {
+  INBOX_TYPE_META,
+  inboxListLine,
+  type InboxItem,
+} from "@/lib/inbox-types";
 
 import { InboxRowActions } from "./inbox-row-actions";
 import { StaleBadge } from "./stale-badge";
@@ -74,9 +78,11 @@ export function InboxItemRow({
   const meta = INBOX_TYPE_META[item.type];
   const isTerminal =
     item.status === "resolved" || item.status === "dismissed";
+  const listLine = inboxListLine(item);
   const showSummary =
     item.summary &&
-    item.summary.trim().toLowerCase() !== item.title.trim().toLowerCase();
+    item.summary.trim().toLowerCase() !== listLine.trim().toLowerCase() &&
+    item.title.trim().toLowerCase() !== listLine.trim().toLowerCase();
 
   const body = (
     <div
@@ -124,7 +130,7 @@ export function InboxItemRow({
             isTerminal ? "text-white/55" : "text-white",
           )}
         >
-          {item.title}
+          {listLine}
         </p>
         {showSummary && (
           <p className="mt-0.5 truncate text-xs text-white/55">{item.summary}</p>

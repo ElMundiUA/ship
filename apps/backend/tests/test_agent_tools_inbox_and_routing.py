@@ -322,3 +322,32 @@ async def test_inbox_create_explicit_summary_wins_over_body_prefix(
     ).scalar_one()
     assert item.summary == "3 wins, 1 blocker"
     assert item.payload["body"].startswith("Long markdown body")
+    assert item.headline == "3 wins, 1 blocker"
+
+
+@pytest.mark.asyncio
+async def test_inbox_create_sets_headline_from_summary_first_line(
+    db_session, seed_workspace
+) -> None:
+    from backend.app.db.models.inbox import InboxItem
+
+    user, _, workspace = seed_workspace
+    toolbox = _toolbox(db_session, workspace, user)
+
+    await toolbox._tool_inbox_create(
+        {
+            "type": "report",
+            "title": "Daily digest",
+            "summary": "Yellow: 3 blockers\nLong body…",
+            "body": "Full markdown digest",
+        }
+    )
+
+    item = (
+        await db_session.execute(
+            select(InboxItem).where(
+                InboxItem.workspace_id == workspace.id
+            )
+        )
+    ).scalar_one()
+    assert item.headline == "Yellow: 3 blockers"

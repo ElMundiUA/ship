@@ -69,6 +69,7 @@ from backend.app.core.sentry import record_inbox_exception_breadcrumb
 from backend.app.db.models.inbox import InboxItem
 from backend.app.db.models.pipelines import PullRequest
 from backend.app.db.models.tenancy import AuditLog, Workspace
+from backend.app.services.inbox.headline import derive_headline
 from backend.app.services.inbox.sweep import sweep_auto_resolvable
 from backend.app.services.dispatcher import (
     ENV_SEPARATION_ACK_KEY,
@@ -4141,24 +4142,29 @@ async def finish_agent_run(
                             "ticket=%s: %s",
                             workspace_id, payload.ticket_ref, exc,
                         )
+                cascade_title = (
+                    f"{payload.ticket_ref}: {payload.fsm_stage} "
+                    f"keeps blocking despite auto-retries"
+                )[:300]
+                cascade_summary = (
+                    f"Server auto-cascaded {payload.ticket_ref} "
+                    f"from {payload.fsm_stage} to "
+                    f"dev_implementation twice in the last 4h; "
+                    f"the reviewer is still blocking. Either "
+                    f"the dev agent isn't converging on the fix "
+                    f"or the reviewer's block needs operator "
+                    f"input."
+                )[:2000]
                 session.add(
                     InboxItem(
                         workspace_id=workspace_id,
                         repo_id=None,
                         type="blocker",
-                        title=(
-                            f"{payload.ticket_ref}: {payload.fsm_stage} "
-                            f"keeps blocking despite auto-retries"
-                        )[:300],
-                        summary=(
-                            f"Server auto-cascaded {payload.ticket_ref} "
-                            f"from {payload.fsm_stage} to "
-                            f"dev_implementation twice in the last 4h; "
-                            f"the reviewer is still blocking. Either "
-                            f"the dev agent isn't converging on the fix "
-                            f"or the reviewer's block needs operator "
-                            f"input."
-                        )[:2000],
+                        title=cascade_title,
+                        headline=derive_headline(
+                            summary=cascade_summary, title=cascade_title
+                        ),
+                        summary=cascade_summary,
                         payload={
                             "ticket_ref": payload.ticket_ref,
                             "fsm_stage": payload.fsm_stage,

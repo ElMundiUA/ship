@@ -2471,6 +2471,7 @@ class ToolBox:
         if not body_clean:
             raise ToolInvocationError("body must not be blank")
 
+        from backend.app.services.inbox.headline import derive_headline
         from backend.app.services.inbox.intake import (
             _SUMMARY_MAX_LEN,
             _TITLE_MAX_LEN,
@@ -2481,6 +2482,11 @@ class ToolBox:
             summary_text = body_clean[:200]
         else:
             summary_text = summary
+
+        title_stored = _truncate(title_clean, _TITLE_MAX_LEN)
+        summary_stored = _truncate(summary_text, _SUMMARY_MAX_LEN) or None
+        headline_raw = args.get("headline")
+        headline_arg = headline_raw if isinstance(headline_raw, str) else None
 
         if type_ == "exception":
             from backend.app.core.sentry import record_inbox_exception_breadcrumb
@@ -2502,8 +2508,13 @@ class ToolBox:
             workspace_id=self._workspace_id,
             repo_id=self._active_repo_id,
             type=type_,
-            title=_truncate(title_clean, _TITLE_MAX_LEN),
-            summary=_truncate(summary_text, _SUMMARY_MAX_LEN) or None,
+            title=title_stored,
+            headline=derive_headline(
+                headline=headline_arg,
+                summary=summary_stored,
+                title=title_stored,
+            ),
+            summary=summary_stored,
             payload={"body": body_clean, "source": "agent_tool"},
             status="new",
         )

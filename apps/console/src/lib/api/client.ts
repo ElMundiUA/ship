@@ -23,6 +23,7 @@
  */
 
 import type {
+  ApiActivatedRepo,
   ApiArtifactRepo,
   ApiAuditPage,
   ApiIntegration,
@@ -36,6 +37,8 @@ import type {
   ApiTokenInfo,
   ApiTokenMint,
   ApiUser,
+  ApiWizardSeedOut,
+  ApiWizardSeedResult,
   ApiWorkspace,
 } from "./types";
 import type {
@@ -65,6 +68,12 @@ async function getSessionToken(): Promise<string | null> {
   const sessionMod = await import("./session");
   return sessionMod.getSessionToken();
 }
+
+export type {
+  ApiActivatedRepo,
+  ApiWizardSeedOut,
+  ApiWizardSeedResult,
+} from "./types";
 
 export class ApiUnavailableError extends Error {
   constructor(message: string) {
@@ -437,33 +446,6 @@ export interface ApiAvailableRepo {
   claimed_by_workspace_slug?: string | null;
 }
 
-export interface ApiActivatedRepo {
-  id: string;
-  external_id: number;
-  full_name: string;
-  default_branch: string;
-  private: boolean;
-  html_url: string;
-  description: string | null;
-  activated_at: string | null;
-  provider: string;
-  /**
-   * Catalog preset id (``web-app`` / ``api-backend`` / …) attached to
-   * this repo during activation. ``null`` for legacy rows activated
-   * before Phase 2 — the backend treats ``null`` as
-   * ``adoption-minimum``-shaped defaults.
-   */
-  preset: string | null;
-  /**
-   * Snapshot of ``seed_bundle.BUNDLE_VERSION`` written the last time
-   * this repo was successfully seeded (install_bundle / wizard_seed).
-   * ``null`` means never seeded (fresh activation) or seeded before
-   * the column existed — UI surfaces that as "run the wizard".
-   */
-  installed_bundle_version: string | null;
-  /** Current ``BUNDLE_VERSION`` the backend would emit on a re-seed. */
-  current_bundle_version: string;
-}
 
 export function listAvailableRepos(
   workspaceId: string,
@@ -703,19 +685,6 @@ export function getTrackerFsm(
 // presets/knowledge_slugs fields retired 2026-05-19. Wizard backend no
 // longer populates any of them.
 
-export interface ApiWizardSeedResult {
-  pr_url: string;
-  pr_number: number;
-  branch: string;
-  files: string[];
-  tracker_kind: string | null;
-  run_token_prefix: string | null;
-  run_token_rotated: boolean;
-  /** ELS-182 (W6) — true once the seed PR is merged on GitHub. The
-   *  POST .../wizard_seed dispatch always returns false (fresh PR);
-   *  GET .../wizard_seed/latest flips this when the PR merges. */
-  merged: boolean;
-}
 
 export function wizardSeed(
   workspaceId: string,
@@ -732,15 +701,6 @@ export function wizardSeed(
     { method: "POST", body, token },
   );
 }
-
-/**
- * Alias for :type:`ApiWizardSeedResult` — the v2 ``WizardSeedOut``
- * shape returned by both ``POST .../wizard_seed`` and (P5-09)
- * ``GET .../wizard_seed/latest``. Kept under both names so call
- * sites that prefer "Result" (active dispatch) and ones that prefer
- * "Out" (read-back / sessionStorage cache) read naturally.
- */
-export type ApiWizardSeedOut = ApiWizardSeedResult;
 
 /**
  * Fetch the most recent ``WizardSeedOut`` for a repo (P5-09).
@@ -3260,6 +3220,8 @@ export function applyInboxDisposition(
     action: InboxDispositionAction;
     resolution?: string | null;
     answer?: string | null;
+    action_item_id?: string | null;
+    choice?: "primary" | "secondary" | null;
     payload?: Record<string, unknown>;
   },
   token?: string,
@@ -3282,8 +3244,10 @@ export function decideInboxItem(
   workspaceId: string,
   itemId: string,
   body: {
-    selections: string[];
+    selections?: string[];
     freeform?: string | null;
+    action_item_id?: string | null;
+    choice?: "primary" | "secondary" | null;
   },
   token?: string,
 ): Promise<InboxItemDetail> {

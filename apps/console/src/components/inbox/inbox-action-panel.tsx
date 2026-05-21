@@ -26,11 +26,13 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { cn } from "@/lib/cn";
+import { decideInboxItemClient } from "@/lib/inbox-decide-client";
 import type {
   InboxActionItem,
   InboxItemDetail,
   InboxResolutionMode,
 } from "@/lib/inbox-types";
+import { reportActionItemDecisions } from "@/lib/inbox-types";
 
 // ``InboxActionPanel`` is a client component but the underlying
 // ``decideInboxItem`` helper lives in ``@/lib/api/client`` which is
@@ -41,48 +43,6 @@ import type {
 // because the console image refused to build. Call the server-side
 // bridge at ``/api/inbox/[id]/decide`` instead; the route handler is
 // server code and forwards the call to the backend.
-async function postDecide(
-  workspaceId: string,
-  itemId: string,
-  body: { selections: string[]; freeform: string | null },
-): Promise<InboxItemDetail> {
-  const res = await fetch(`/api/inbox/${encodeURIComponent(itemId)}/decide`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ workspaceId, ...body }),
-  });
-  if (!res.ok) {
-    let code = "unknown";
-    try {
-      const payload = (await res.json()) as { error_code?: string };
-      if (payload?.error_code) code = payload.error_code;
-    } catch {
-      // ignore
-    }
-    throw new Error(humanizeDecideError(code));
-  }
-  return (await res.json()) as InboxItemDetail;
-}
-
-function humanizeDecideError(code: string): string {
-  switch (code) {
-    case "forbidden":
-      return "You don't have permission for that action.";
-    case "not_found":
-      return "Item no longer exists.";
-    case "state_invalid":
-      return "Item already resolved — refresh.";
-    case "validation_failed":
-    case "decide_empty":
-      return "Pick at least one option or write a note.";
-    case "session_expired":
-      return "Session expired. Refresh to sign back in.";
-    case "api_unavailable":
-      return "API is unavailable.";
-    default:
-      return `Could not apply decision (${code}).`;
-  }
-}
 
 type Props = {
   workspaceId: string;
@@ -114,6 +74,7 @@ function readActionItems(
       kind: raw.kind,
       label: String(raw.label),
       hint: raw.hint ?? null,
+      secondary_label: raw.secondary_label ?? null,
       default: !!raw.default,
       target_project_id: raw.target_project_id ?? null,
     }));
@@ -123,6 +84,10 @@ export function InboxActionPanel({ workspaceId, item, onResolved }: Props) {
   const router = useRouter();
   const mode = (item.resolution_mode || "freeform_only") as InboxResolutionMode;
   const items = useMemo(() => readActionItems(item.payload), [item.payload]);
+  const decisions = useMemo(
+    () => reportActionItemDecisions(item.payload),
+    [item.payload],
+  );
   const [picked, setPicked] = useState<Set<string>>(
     () => new Set(items.filter((i) => i.default).map((i) => i.id)),
   );
@@ -142,9 +107,33 @@ export function InboxActionPanel({ workspaceId, item, onResolved }: Props) {
     setBusy(true);
     setError(null);
     try {
-      const next = await postDecide(workspaceId, item.id, {
+      const next = await decideInboxItemClient(workspaceId, item.id, {
         selections,
         freeform: text || null,
+      });
+      if (onResolved) {
+        onResolved(next);
+      } else {
+        router.refresh();
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not apply decision.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submitBinary = async (
+    actionItemId: string,
+    choice: "primary" | "secondary",
+  ) => {
+    if (busy || isTerminal) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await decideInboxItemClient(workspaceId, item.id, {
+        action_item_id: actionItemId,
+        choice,
       });
       if (onResolved) {
         onResolved(next);
@@ -275,6 +264,16 @@ export function InboxActionPanel({ workspaceId, item, onResolved }: Props) {
         </button>
       )}
 
+      {mode === "per_item_binary" && (
+        <BinaryActionList
+          items={items.filter((i) => i.kind === "binary")}
+          decisions={decisions}
+          disabled={busy || isTerminal}
+          onPick={submitBinary}
+        />
+      )}
+
+      {mode !== "per_item_binary" && (
       <FreeformRow
         open={freeformOpen}
         setOpen={setFreeformOpen}
@@ -285,6 +284,7 @@ export function InboxActionPanel({ workspaceId, item, onResolved }: Props) {
         forced={mode === "freeform_only"}
         inputRef={freeformRef}
       />
+      )}
 
       {!isTerminal && (mode === "single_choice" || mode === "multi_select" || mode === "ack_only") && (
         <KeyboardHint mode={mode} />
@@ -313,6 +313,70 @@ function KeyboardHint({ mode }: { mode: InboxResolutionMode }) {
 // ---------------------------------------------------------------------------
 // Sub-renderers
 // ---------------------------------------------------------------------------
+
+function BinaryActionList({
+  items,
+  decisions,
+  disabled,
+  onPick,
+}: {
+  items: InboxActionItem[];
+  decisions: Record<string, "primary" | "secondary">;
+  disabled: boolean;
+  onPick: (id: string, choice: "primary" | "secondary") => void;
+}) {
+  if (items.length === 0) {
+    return (
+      <p className="text-xs italic text-white/40">
+        No recommendations on this digest.
+      </p>
+    );
+  }
+  return (
+    <div className="space-y-3">
+      {items.map((item) => {
+        const decided = decisions[item.id];
+        return (
+          <div
+            key={item.id}
+            className="rounded border border-white/10 bg-white/[0.03] p-3"
+          >
+            {item.hint ? (
+              <p className="text-sm text-white/85">{item.hint}</p>
+            ) : null}
+            {decided ? (
+              <p className="mt-2 text-xs text-white/50">
+                Decided:{" "}
+                {decided === "primary"
+                  ? item.label
+                  : item.secondary_label || item.label}
+              </p>
+            ) : (
+              <div className="mt-2 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => onPick(item.id, "primary")}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/[0.04] px-3 py-1.5 text-xs font-semibold text-white/85 transition hover:bg-white/[0.08] disabled:opacity-40"
+                >
+                  {item.label}
+                </button>
+                <button
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => onPick(item.id, "secondary")}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-coral/40 bg-coral/10 px-3 py-1.5 text-xs font-semibold text-coral transition hover:bg-coral/20 disabled:opacity-40"
+                >
+                  {item.secondary_label || "Decline"}
+                </button>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 function SingleChoiceRow({
   items,

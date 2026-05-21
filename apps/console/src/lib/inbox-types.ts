@@ -127,24 +127,51 @@ export const INBOX_TYPE_META: Record<
  *   - ``checklist`` — one row per ``payload.action_items`` entry with
  *     prompt + primary/secondary choices (daily digest letters).
  */
-export type InboxFooterKind = "acknowledge" | "reply" | "decision" | "checklist";
+export type InboxFooterKind =
+  | "acknowledge"
+  | "reply"
+  | "decision"
+  | "report_actions"
+  | "checklist";
 
-type FooterKindInput =
-  | InboxType
-  | Pick<InboxItemDetail, "type" | "payload" | "status">;
+export type InboxReportActionItem = {
+  id: string;
+  hint: string;
+  label: string;
+  secondary_label: string;
+};
 
-export function inboxFooterKind(input: FooterKindInput): InboxFooterKind {
-  if (typeof input === "object") {
-    if (input.status !== "resolved" && input.status !== "dismissed") {
-      if (parseChecklistActionItems(input.payload).length > 0) {
-        return "checklist";
-      }
-    }
-    return inboxFooterKind(input.type);
+export function reportActionItems(
+  payload: Record<string, unknown> | undefined,
+): InboxReportActionItem[] {
+  const raw = payload?.action_items;
+  if (!Array.isArray(raw) || raw.length === 0) return [];
+  const out: InboxReportActionItem[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") continue;
+    const row = entry as Record<string, unknown>;
+    if (row.kind !== "binary") continue;
+    const id = typeof row.id === "string" ? row.id : "";
+    const hint = typeof row.hint === "string" ? row.hint : "";
+    const label = typeof row.label === "string" ? row.label : "";
+    const secondary_label =
+      typeof row.secondary_label === "string" ? row.secondary_label : "";
+    if (!id || !hint || !label || !secondary_label) continue;
+    out.push({ id, hint, label, secondary_label });
   }
-  if (input === "report") return "acknowledge";
-  if (input === "clarification") return "reply";
-  return "decision";
+  return out;
+}
+
+export function reportActionItemDecisions(
+  payload: Record<string, unknown> | undefined,
+): Record<string, "primary" | "secondary"> {
+  const raw = payload?.action_item_decisions;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const out: Record<string, "primary" | "secondary"> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (value === "primary" || value === "secondary") out[key] = value;
+  }
+  return out;
 }
 
 /** Daily-digest / multi-prompt letters — checklist footer contract. */
@@ -187,6 +214,47 @@ export function parseChecklistActionItems(
   return out;
 }
 
+type FooterKindInput =
+  | InboxType
+  | Pick<InboxItemDetail, "type" | "payload" | "status">;
+
+export function inboxFooterKind(input: FooterKindInput): InboxFooterKind {
+  if (typeof input === "object") {
+    if (input.status !== "resolved" && input.status !== "dismissed") {
+      if (parseChecklistActionItems(input.payload).length > 0) {
+        return "checklist";
+      }
+      if (
+        input.type === "report" &&
+        reportActionItems(input.payload).length > 0
+      ) {
+        return "report_actions";
+      }
+    }
+    return inboxFooterKind(input.type);
+  }
+  if (input === "report") return "acknowledge";
+  if (input === "clarification") return "reply";
+  return "decision";
+}
+
+/** Primary list-row text: headline, else truncated summary, else title. */
+export function inboxListLine(item: {
+  headline?: string | null;
+  summary?: string | null;
+  title: string;
+}): string {
+  const headline = item.headline?.trim();
+  if (headline) return headline;
+  const summary = item.summary?.trim();
+  if (summary) {
+    const first = summary.split(/\r?\n/).find((line) => line.trim());
+    const line = (first ?? summary).trim();
+    return line.length <= 80 ? line : line.slice(0, 80);
+  }
+  return item.title;
+}
+
 /** Type kicker: glyph + label + dot tone for mailbox list rows. */
 export const ROW_KICKER: Record<
   InboxType,
@@ -201,7 +269,6 @@ export const ROW_KICKER: Record<
   stuck: { glyph: "★", label: "ATTENTION", tone: "bg-white/30" },
   report: { glyph: "≡", label: "REPORT", tone: "bg-white/15" },
 };
-
 /**
  * One row as it appears in the inbox list. Compact: the detail view
  * fetches the full payload + audit trail separately.
@@ -213,6 +280,7 @@ export type InboxItem = {
   type: InboxType;
   status: InboxStatus;
   title: string;
+  headline: string;
   summary: string | null;
   /** Symbolic handle that resolved (e.g. "secops"). */
   intake_handle: string | null;
@@ -280,13 +348,14 @@ export const INBOX_ACTIONABLE_CATEGORIES: InboxCategory[] = [
 ];
 
 /** Inbox Decision UI (ELS-158) — structured action_items contract. */
-export type InboxActionItemKind = "choice" | "checkbox" | "ack";
+export type InboxActionItemKind = "choice" | "checkbox" | "ack" | "binary";
 
 export type InboxActionItem = {
   id: string;
   kind: InboxActionItemKind;
   label: string;
   hint?: string | null;
+  secondary_label?: string | null;
   default?: boolean;
   target_project_id?: string | null;
 };
@@ -295,6 +364,7 @@ export type InboxResolutionMode =
   | "single_choice"
   | "multi_select"
   | "ack_only"
+  | "per_item_binary"
   | "freeform_only";
 
 export type InboxItemEvent = {
@@ -309,7 +379,8 @@ export type InboxItemEvent = {
     | "unsnoozed"
     | "resolved"
     | "dismissed"
-    | "commented";
+    | "commented"
+    | "action_item_decided";
   payload: Record<string, unknown>;
   created_at: string;
 };

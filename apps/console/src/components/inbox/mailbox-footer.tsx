@@ -18,6 +18,8 @@ import { ButtonDanger, ButtonGhost } from "@/components/ui";
 import {
   inboxFooterKind,
   parseChecklistActionItems,
+  reportActionItemDecisions,
+  reportActionItems,
   type InboxChecklistActionItem,
   type InboxItemDetail,
   type InboxType,
@@ -116,6 +118,15 @@ export function MailboxFooter({
         itemId={detail.id}
         items={parseChecklistActionItems(detail.payload)}
         returnTo={returnTo}
+      />
+    );
+  }
+  if (kind === "report_actions") {
+    return (
+      <ReportActionItemsFooter
+        workspaceId={workspaceId}
+        itemId={detail.id}
+        payload={detail.payload}
       />
     );
   }
@@ -310,6 +321,75 @@ function ReplyForm({
   );
 }
 
+function ReportActionItemsFooter({
+  workspaceId,
+  itemId,
+  payload,
+}: {
+  workspaceId: string;
+  itemId: string;
+  payload: Record<string, unknown>;
+}) {
+  const items = reportActionItems(payload);
+  const decided = reportActionItemDecisions(payload);
+  const pending = items.filter((item) => !decided[item.id]);
+
+  if (pending.length === 0) {
+    return (
+      <p className="text-xs text-white/55">
+        All recommendations decided — refresh to see the closed state.
+      </p>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {pending.map((item) => (
+        <ReportActionItemRow
+          key={item.id}
+          workspaceId={workspaceId}
+          itemId={itemId}
+          item={item}
+        />
+      ))}
+    </div>
+  );
+}
+
+function ReportActionItemRow({
+  workspaceId,
+  itemId,
+  item,
+}: {
+  workspaceId: string;
+  itemId: string;
+  item: { id: string; hint: string; label: string; secondary_label: string };
+}) {
+  return (
+    <div className="rounded border border-white/10 bg-white/[0.03] p-3">
+      <p className="text-sm text-white/85">{item.hint}</p>
+      <div className="mt-2 flex flex-wrap gap-2">
+        <ActionItemChoiceForm
+          workspaceId={workspaceId}
+          itemId={itemId}
+          actionItemId={item.id}
+          choice="primary"
+          label={item.label}
+          tone="ghost"
+        />
+        <ActionItemChoiceForm
+          workspaceId={workspaceId}
+          itemId={itemId}
+          actionItemId={item.id}
+          choice="secondary"
+          label={item.secondary_label}
+          tone="danger"
+        />
+      </div>
+    </div>
+  );
+}
+
 function ChecklistFooter({
   workspaceId,
   itemId,
@@ -382,6 +462,42 @@ function ChecklistChoiceForm({
       <input type="hidden" name="choice" value={choice} />
       <input type="hidden" name="return_to" value={returnTo} />
       <Button type="submit">{label}</Button>
+    </form>
+  );
+}
+
+function ActionItemChoiceForm({
+  workspaceId,
+  itemId,
+  actionItemId,
+  choice,
+  label,
+  tone,
+}: {
+  workspaceId: string;
+  itemId: string;
+  actionItemId: string;
+  choice: "primary" | "secondary";
+  label: string;
+  tone: "ghost" | "danger";
+}) {
+  const className =
+    tone === "danger"
+      ? "inline-flex items-center gap-1.5 rounded-full border border-coral/40 bg-coral/10 px-3 py-1.5 text-xs font-semibold text-coral transition hover:bg-coral/20"
+      : "inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/[0.04] px-3 py-1.5 text-xs font-semibold text-white/85 transition hover:bg-white/[0.08]";
+  return (
+    <form
+      action={`/api/inbox/${encodeURIComponent(itemId)}/decide`}
+      method="POST"
+      className="contents"
+    >
+      <input type="hidden" name="ws" value={workspaceId} />
+      <input type="hidden" name="action_item_id" value={actionItemId} />
+      <input type="hidden" name="choice" value={choice} />
+      <input type="hidden" name="return_to" value="/inbox" />
+      <button type="submit" className={className}>
+        {label}
+      </button>
     </form>
   );
 }

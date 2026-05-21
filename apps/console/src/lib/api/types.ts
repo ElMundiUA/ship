@@ -331,3 +331,33 @@ export type ApiBucketArticle = {
   updated_at: string;
   archived_at: string | null;
 };
+
+// --- Repos / wizard seed (client-safe; see api/client.ts for fetchers) -------
+
+export type ApiActivatedRepo = {
+  id: string;
+  external_id: number;
+  full_name: string;
+  default_branch: string;
+  private: boolean;
+  html_url: string;
+  description: string | null;
+  activated_at: string | null;
+  provider: string;
+  preset: string | null;
+  installed_bundle_version: string | null;
+  current_bundle_version: string;
+};
+
+export type ApiWizardSeedResult = {
+  pr_url: string;
+  pr_number: number;
+  branch: string;
+  files: string[];
+  tracker_kind: string | null;
+  run_token_prefix: string | null;
+  run_token_rotated: boolean;
+  merged: boolean;
+};
+
+export type ApiWizardSeedOut = ApiWizardSeedResult;

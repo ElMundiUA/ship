@@ -13,6 +13,7 @@ from backend.app.services.inbox.classification import (
     ACTIONABLE_CATEGORIES,
     category_from_type,
     derive_lane,
+    derive_resolution_mode,
     priority_for_item,
 )
 
@@ -80,3 +81,34 @@ def test_actionable_categories_constant() -> None:
     assert ACTIONABLE_CATEGORIES == frozenset(
         {"decision_needed", "failure", "attention"}
     )
+
+
+def test_derive_resolution_mode_per_item_binary() -> None:
+    payload = {
+        "resolution_mode": "per_item_binary",
+        "action_items": [
+            {
+                "id": "fu-001",
+                "kind": "binary",
+                "hint": "Track it?",
+                "label": "Track",
+                "secondary_label": "Ignore",
+            },
+        ],
+    }
+    assert derive_resolution_mode(payload, "report") == "per_item_binary"
+
+
+def test_derive_resolution_mode_infers_binary_from_kind() -> None:
+    payload = {
+        "action_items": [
+            {
+                "id": "fu-001",
+                "kind": "binary",
+                "hint": "Track it?",
+                "label": "Track",
+                "secondary_label": "Ignore",
+            },
+        ],
+    }
+    assert derive_resolution_mode(payload, "report") == "per_item_binary"

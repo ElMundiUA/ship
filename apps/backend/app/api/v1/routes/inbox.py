@@ -49,7 +49,7 @@ import json
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
@@ -74,6 +74,7 @@ from backend.app.services.inbox.classification import (
     ACTIONABLE_CATEGORIES,
     derive_lane,
 )
+from backend.app.services.inbox.headline import derive_headline
 from backend.app.services.inbox.profiles import INBOX_TYPES
 from backend.app.services.inbox.routing import RoutingContext, resolve_handle
 from backend.app.services.inbox.side_effects import apply_side_effects
@@ -153,6 +154,7 @@ class InboxItemOut(BaseModel):
     type: str
     status: str
     title: str
+    headline: str
     summary: str | None
     intake_handle: str | None
     intake_reason: str | None
@@ -172,9 +174,6 @@ class InboxItemOut(BaseModel):
     # re-implementing the parser. Falls back to ``freeform_only`` on
     # legacy rows.
     resolution_mode: str
-    action_item_count: int = 0
-    ticket_ref: str | None = None
-    fsm_stage: str | None = None
 
 
 class InboxItemEventOut(BaseModel):
@@ -270,14 +269,20 @@ class InboxEventAppendIn(BaseModel):
 class InboxDecideIn(BaseModel):
     """ELS-159 — operator's pick(s) on an action_items-bearing row.
 
-    Either ``selections`` (subset of ``payload.action_items[].id``)
-    OR ``freeform`` (free-text override) must be non-empty. Both
-    together is fine — selected actions fire side-effects AND the
-    freeform note is appended as a comment on the source ticket.
+    For ``per_item_binary`` reports, pass ``action_item_id`` + ``choice``
+    (one decision per call; parent stays open until all binary ids are
+    decided).
+
+    Otherwise either ``selections`` (subset of ``payload.action_items[].id``)
+    OR ``freeform`` (free-text override) must be non-empty. Both together
+    is fine — selected actions fire side-effects AND the freeform note is
+    appended as a comment on the source ticket.
     """
 
     selections: list[str] = Field(default_factory=list, max_length=32)
     freeform: str | None = Field(default=None, max_length=10_000)
+    action_item_id: str | None = None
+    choice: Literal["primary", "secondary"] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -327,23 +332,6 @@ def _to_owner_out(user: User | None) -> InboxOwnerOut | None:
     return InboxOwnerOut(
         user_id=user.id, email=user.email, display_name=user.display_name
     )
-
-
-def _action_item_count(payload: dict | None) -> int:
-    raw = (payload or {}).get("action_items")
-    if not isinstance(raw, list):
-        return 0
-    return len(raw)
-
-
-def _headline_fields(payload: dict | None) -> tuple[str | None, str | None]:
-    """Expose copy-transform fields on list rows without full JSONB payload."""
-    p = payload or {}
-    ref = p.get("ticket_ref")
-    stage = p.get("fsm_stage")
-    ticket_ref = ref.strip() if isinstance(ref, str) and ref.strip() else None
-    fsm_stage = stage.strip() if isinstance(stage, str) and stage.strip() else None
-    return ticket_ref, fsm_stage
 
 
 def _is_mailbox_checklist_entry(entry: object) -> bool:
@@ -416,7 +404,6 @@ def _to_item_out(
         derive_resolution_mode as _drm,
     )
 
-    ticket_ref, fsm_stage = _headline_fields(item.payload)
     return InboxItemOut(
         id=item.id,
         workspace_id=item.workspace_id,
@@ -424,6 +411,11 @@ def _to_item_out(
         type=item.type,
         status=item.status,
         title=item.title,
+        headline=derive_headline(
+            headline=item.headline,
+            summary=item.summary,
+            title=item.title,
+        ),
         summary=item.summary,
         intake_handle=item.intake_handle,
         intake_reason=item.intake_reason,
@@ -439,9 +431,6 @@ def _to_item_out(
         priority=item.priority,
         lane=lane,
         resolution_mode=_drm(item.payload, item_type=item.type),
-        action_item_count=_action_item_count(item.payload),
-        ticket_ref=ticket_ref,
-        fsm_stage=fsm_stage,
     )
 
 
@@ -484,6 +473,8 @@ async def _load_item(
     session: AsyncSession,
     workspace_id: uuid.UUID,
     item_id: uuid.UUID,
+    *,
+    for_update: bool = False,
 ) -> InboxItem:
     """Fetch one item, scoped by ``workspace_id`` for tenant isolation.
 
@@ -497,6 +488,8 @@ async def _load_item(
         InboxItem.id == item_id,
         InboxItem.workspace_id == workspace_id,
     )
+    if for_update:
+        stmt = stmt.with_for_update()
     item = (await session.execute(stmt)).scalar_one_or_none()
     if item is None:
         raise HTTPException(status_code=404, detail="inbox item not found")
@@ -1038,6 +1031,243 @@ def _validate_disposition(action: str, item: InboxItem, payload: dict) -> str:
     return _ACTION_RESOLUTION[action]
 
 
+def _binary_action_items(item: InboxItem) -> list[Any]:
+    """Parsed ``kind=binary`` action items on a report row."""
+    from backend.app.services.inbox.classification import ActionItem, parse_action_items
+
+    if item.type != "report":
+        return []
+    return [ai for ai in parse_action_items(item.payload) if ai.kind == "binary"]
+
+
+def _action_item_decisions(payload: dict) -> dict[str, str]:
+    raw = payload.get("action_item_decisions")
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        str(k): str(v)
+        for k, v in raw.items()
+        if isinstance(k, str) and isinstance(v, str)
+    }
+
+
+async def _decided_binary_ids_from_events(
+    session: AsyncSession,
+    item_id: uuid.UUID,
+) -> dict[str, str]:
+    """Source of truth for per-item binary decisions (ELS-145 race safety)."""
+    stmt = select(InboxItemEvent).where(
+        InboxItemEvent.item_id == item_id,
+        InboxItemEvent.action == "action_item_decided",
+    )
+    rows = (await session.execute(stmt)).scalars().all()
+    decided: dict[str, str] = {}
+    for event in rows:
+        payload = event.payload or {}
+        action_item_id = payload.get("action_item_id")
+        choice = payload.get("choice")
+        if isinstance(action_item_id, str) and isinstance(choice, str):
+            decided[action_item_id] = choice
+    return decided
+
+
+async def _pending_binary_action_item_ids(
+    session: AsyncSession,
+    item: InboxItem,
+) -> set[str]:
+    items = _binary_action_items(item)
+    if not items:
+        return set()
+    decided = await _decided_binary_ids_from_events(session, item.id)
+    return {ai.id for ai in items if ai.id not in decided}
+
+
+async def _validate_report_bulk_disposition(
+    session: AsyncSession,
+    action: str,
+    item: InboxItem,
+) -> None:
+    """Block acknowledge/dismiss while report binary action items are pending."""
+    pending = await _pending_binary_action_item_ids(session, item)
+    if not pending:
+        return
+    if action in ("resolve", "acknowledge"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "report has pending action items; decide each recommendation "
+                "before acknowledging"
+            ),
+        )
+    if action == "dismiss":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "report has pending action items; decide each recommendation "
+                "before dismissing"
+            ),
+        )
+
+
+async def _apply_binary_decide(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    item: InboxItem,
+    auth: AuthContext,
+    action_item_id: str,
+    choice: Literal["primary", "secondary"],
+) -> InboxItemDetail:
+    """Record one report ``kind=binary`` decision; auto-resolve when done."""
+    from backend.app.services.inbox.classification import derive_resolution_mode
+
+    item = await _load_item(
+        session, workspace_id, item.id, for_update=True
+    )
+    prior_status = item.status
+
+    if derive_resolution_mode(item.payload, item.type) != "per_item_binary":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "decide_wrong_mode",
+                "message": (
+                    "action_item_id + choice is only valid for per_item_binary rows"
+                ),
+            },
+        )
+    if item.status not in OPEN_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"action item decide requires status in {list(OPEN_STATUSES)};"
+                f" item is currently {item.status!r}"
+            ),
+        )
+
+    action_items = _binary_action_items(item)
+    if not action_items:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="item has no binary action_items",
+        )
+
+    by_id = {ai.id: ai for ai in action_items}
+    ai = by_id.get(action_item_id)
+    if ai is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"unknown action_item_id {action_item_id!r}",
+        )
+
+    merged_payload = dict(item.payload or {})
+    decisions = await _decided_binary_ids_from_events(session, item.id)
+    if action_item_id in decisions:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"action_item_id {action_item_id!r} already decided",
+        )
+
+    label = ai.label if choice == "primary" else (ai.secondary_label or "")
+    if not label.strip():
+        key = "label" if choice == "primary" else "secondary_label"
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"action item missing {key!r}",
+        )
+
+    decisions[action_item_id] = choice
+    merged_payload["action_item_decisions"] = decisions
+    item.payload = merged_payload
+
+    session.add(
+        InboxItemEvent(
+            item_id=item.id,
+            actor_user_id=auth.user.id,
+            actor_kind="user",
+            action="action_item_decided",
+            payload={
+                "action_item_id": action_item_id,
+                "choice": choice,
+                "label": label,
+            },
+        )
+    )
+
+    pending = {aid for aid in by_id if aid not in decisions}
+    now = datetime.now(timezone.utc)
+    if not pending:
+        item.status = "resolved"
+        item.resolution = "acknowledged"
+        item.resolved_at = now
+        item.resolved_by_user_id = auth.user.id
+        session.add(
+            InboxItemEvent(
+                item_id=item.id,
+                actor_user_id=auth.user.id,
+                actor_kind="user",
+                action="resolved",
+                payload={
+                    "via": "decide",
+                    "resolution": "acknowledged",
+                    "auto": True,
+                    "reason": "all_action_items_decided",
+                },
+            )
+        )
+        session.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                actor_user_id=auth.user.id,
+                actor_token_id=auth.token.id if auth.token else None,
+                action="inbox.decide",
+                target_kind="inbox_item",
+                target_id=str(item.id),
+                payload={
+                    "type": item.type,
+                    "resolution": "acknowledged",
+                    "auto": True,
+                    "from_status": prior_status,
+                },
+            )
+        )
+        report = await apply_side_effects(
+            session,
+            item=item,
+            action="resolve",
+            payload={"resolution": "acknowledged"},
+            actor_user_id=auth.user.id,
+        )
+        logger.info(
+            "inbox binary decide auto-resolve side-effects: writebacks=%d, "
+            "escalations_closed=%d, retry=%d, failures=%d",
+            len(report.legacy_writebacks),
+            len(report.escalations_closed),
+            len(report.retry_requests_recorded),
+            len(report.failures),
+        )
+    else:
+        session.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                actor_user_id=auth.user.id,
+                actor_token_id=auth.token.id if auth.token else None,
+                action="inbox.decide.action_item",
+                target_kind="inbox_item",
+                target_id=str(item.id),
+                payload={
+                    "action_item_id": action_item_id,
+                    "choice": choice,
+                    "pending": len(pending),
+                },
+            )
+        )
+
+    await session.flush()
+    await session.refresh(item)
+    return await _build_detail(session, item)
+
+
 async def _apply_mailbox_checklist_pick_if_partial(
     session: AsyncSession,
     item: InboxItem,
@@ -1153,6 +1383,8 @@ async def post_disposition(
     if partial is not None:
         return partial
 
+    prior_status = item.status
+    await _validate_report_bulk_disposition(session, body.action, item)
     resolution = _validate_disposition(body.action, item, payload)
     now = datetime.now(timezone.utc)
 
@@ -1191,7 +1423,7 @@ async def post_disposition(
             payload={
                 "type": item.type,
                 "resolution": resolution,
-                "from_status": "new",
+                "from_status": prior_status,
             },
         )
     )
@@ -1267,12 +1499,41 @@ async def post_decide(
     (``action='resolved'``, ``payload.is_replay=True``). Operator
     double-clicks do not create duplicate tickets.
     """
-    from backend.app.services.inbox.classification import parse_action_items
+    from backend.app.services.inbox.classification import (
+        derive_resolution_mode,
+        parse_action_items,
+    )
 
     item = await _load_item(session, workspace_id, item_id)
     await _require_owner_or_admin(
         session, workspace_id, auth.user.id, item
     )
+
+    if body.action_item_id is not None:
+        if body.choice is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="action_item_id requires choice ('primary' or 'secondary')",
+            )
+        if body.selections or body.freeform:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="action_item_id decide cannot include selections or freeform",
+            )
+        return await _apply_binary_decide(
+            session,
+            workspace_id=workspace_id,
+            item=item,
+            auth=auth,
+            action_item_id=body.action_item_id,
+            choice=body.choice,
+        )
+
+    if body.choice is not None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="choice requires action_item_id",
+        )
 
     selections = list(body.selections or [])
     freeform = (body.freeform or "").strip() or None
@@ -1342,27 +1603,6 @@ async def post_decide(
     for sid in selections:
         ai = by_id[sid]
         try:
-            # NEW (2026-05-20): server-side executors. Action items
-            # with an ``executor`` field bypass the legacy "comment on
-            # Linear" path and trigger real GH / Linear / dispatcher
-            # operations. Operator wanted "press button → Ship does
-            # it" instead of "press button → comment posted, now go
-            # manually finish the work elsewhere".
-            if ai.executor:
-                from backend.app.services.inbox.action_executors import (
-                    run_action_executor,
-                )
-                result = await run_action_executor(
-                    session,
-                    workspace_id=workspace_id,
-                    item=item,
-                    executor=ai.executor,
-                    freeform=freeform,
-                )
-                side_effects.append(
-                    {"id": sid, "executor": ai.executor, **result}
-                )
-                continue
             if ai.kind == "choice":
                 if resolved_tracker is None or not source_ticket_ref:
                     side_effects.append(
