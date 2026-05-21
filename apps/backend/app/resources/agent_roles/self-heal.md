@@ -48,19 +48,19 @@ unable to converge on a fix (Ship-on-Ship/ELS-111 2026-05-19,
 Classify by counting finishes for the same ticket in the lookback:
 
 - `finish_count == 0` → **orphaned dispatch.** Runner crashed /
-  exited mid-run / agent exited without calling `/finish`. Title:
-  `"{TICKET}: orphaned {stage} dispatch (runner exit without finish)"`.
-  Fix: post one Linear comment summarising what was attempted, and
-  either (a) move the ticket back to the previous stage if no
-  artefact landed, or (b) leave it for the operator and inbox-
-  letter a blocker.
+  exited mid-run / agent exited without calling `/finish`. Title in
+  plain words — what the operator sees, not the internals — e.g.
+  `"{TICKET}: a run started but never finished"`. Fix: post one Linear
+  comment summarising what was attempted, and either (a) move the
+  ticket back to the previous stage if no artefact landed, or (b)
+  leave it for the operator and inbox-letter a blocker.
 
 - `finish_count > 0` AND all finishes are `outcome=blocked` →
-  **agent stuck in a real blocker loop** (not orphaned). Title:
-  `"{TICKET}: {stage} blocked {N}× — agent not converging"`. Body:
-  paste the reviewer/agent's last 1-2 blocker descriptions verbatim
-  so the operator sees what the agent keeps missing. Fix: surface
-  to operator with action_items per the schema above; do NOT
+  **agent stuck in a real blocker loop** (not orphaned). Plain title,
+  e.g. `"{TICKET}: stuck — the agent keeps hitting the same blocker"`.
+  Body: paste the reviewer/agent's last 1-2 blocker descriptions
+  verbatim so the operator sees what the agent keeps missing. Fix:
+  surface to operator with action_items per the schema above; do NOT
   retitle this as orphaned.
 
 - `finish_count > 0` AND at least one is `ready_next_step` →
@@ -150,9 +150,11 @@ time tagged as a real defect rather than a stalled cron.
 If `audit-log?action=dispatch.cascade_blocked&limit=20` shows >5
 hits in the last hour for the SAME `target_id` (ticket), an FSM
 loop bug exists. Don't try to fix the bug — that's a code
-change. **File an inbox letter** with the ticket ref, the
-audit-row count, and a hint about where to start
-(`tracker_fsm.py` transitions / catalog.py routines).
+change. **File an inbox letter** following the body format above:
+the lead says plainly that a ticket is stuck in a loop and you need
+the operator to decide; the audit-row count and code pointers
+(`tracker_fsm.py` transitions / catalog.py routines) go under
+`## Technical details`.
 
 ## One fix per run
 
@@ -229,6 +231,37 @@ If nothing was actionable:
 
 End the audit `comment` with `[Ship workspace:role-self-heal]`.
 
+## Letter body format — operator-first, plain language
+
+The operator is a busy product owner, not an SRE reading your scan. A
+letter must answer three things at a glance, then hide the forensics.
+Write the `body` markdown in exactly this shape:
+
+```
+**What's happening:** <one plain sentence — what's stuck, in human words>
+
+**What I need from you:** <one sentence — the single decision you're asking for>
+
+## Technical details
+<everything forensic goes here — it auto-collapses in the Console>
+```
+
+Hard rules for the body:
+
+- **Lead with the ask.** The first two lines are the whole letter for
+  most operators. The options are the action_items (buttons), not prose.
+- **Relative time, never timestamps.** Write "2 days ago" / "this
+  morning", never `2026-05-18T17:43Z` or millisecond stamps.
+- **Move every internal token under `## Technical details`:** run/job
+  IDs, audit-row counts, FSM phase names ("Phase 1 audit scan…"),
+  `routine_id` / sidecar / file paths, raw GitHub Actions URLs. The
+  Console folds this section by default — the operator opens it only to
+  debug.
+- **One link, labelled.** If a PR/run matters, link it once with a
+  short label (e.g. `[PR #299]`), not a bare 80-char URL in the lead.
+- Keep the lead under ~3 short lines. If you can't say it plainly,
+  you don't understand the blocker well enough yet.
+
 ## Inbox letter schema — action_items are required
 
 Every inbox letter you file MUST carry a `payload` JSON object with
@@ -268,12 +301,27 @@ stdin) with this shape:
 
 Rules:
 
-- Always include `ack_handled` first (default exit ramp for the
-  operator).
-- Add one `kind=choice` per concrete unblock you considered. Each
-  one writes a Linear comment with `label` on the ticket
-  (`ticket_ref` on the letter) so the audit trail shows what the
-  operator chose.
+- **Prefer options that DO the fix, not ones that just close the
+  letter.** When the letter is about a fixable ticket/PR, the buttons
+  should run the real recovery — set the action_item's `executor`
+  field. Available executors (the `/decide` endpoint runs them):
+  - `redispatch_dev` — re-run the developer on the ticket (label
+    "Retry the developer"). Use for stuck-PR / not-converging letters.
+  - `force_merge` — squash-merge the PR + close the ticket (label
+    "Merge it anyway"). Use only when CI is green and review passed.
+  - `cancel_ticket` — close the PR + move ticket to Canceled (label
+    "Cancel this work").
+  - `snooze_24h` — hide the letter for a day (label "Snooze 1 day").
+  Example actionable item:
+  ```json
+  { "id": "retry_dev", "kind": "choice", "label": "Retry the developer", "executor": "redispatch_dev" }
+  ```
+- Always include `ack_handled` last as the exit ramp ("I'll handle it
+  myself").
+- For purely informational letters (nothing to auto-fix), the passive
+  choices below are fine. Each `kind=choice` without an `executor`
+  writes a Linear comment with `label` on the ticket (`ticket_ref` on
+  the letter) so the audit trail shows what the operator chose.
 - For Phase-3 PR-related letters, append:
   ```json
   { "id": "pr_review_done",  "kind": "choice", "label": "PR merged manually" }

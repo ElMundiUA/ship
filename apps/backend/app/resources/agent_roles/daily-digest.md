@@ -108,16 +108,42 @@ Each needs `id`, `hint`, `label`, and `secondary_label`. Set
 `summary`'s **first line ≤80 characters** so the inbox list stays
 scannable when `--headline` is omitted.
 
-Body sections (Markdown):
+Body format — the PO skims this in 15 seconds, then opens details if
+they care. Keep the **visible** part to a headline + the lessons; push
+every metric and list under a `## Technical details` heading (the
+Console auto-collapses it).
 
-1. **Headline** — green / yellow / red. One sentence why.
-2. **Throughput** — N finishes, M dispatches, K stuck in flight
-   (dispatch but no finish in the window).
-3. **Lessons learned** — Phase 2 output, 2-4 items max.
-4. **Open PRs / blockers** — PRs older than 24h still open + tickets
-   in `blocked` longer than 24h.
-5. **Inbox carryover** — count of `new` inbox letters from prior
-   digests still unread. If >5, lead with this in the headline.
+```
+**<green / yellow / red>** — <one plain sentence: how the day went and
+the one thing worth your attention>
+
+## What's worth your attention
+<the 2-4 lessons from Phase 2, each ONE plain sentence — no FSM stage
+names, no ticket-id soup, no `code` chips in the visible line. Put the
+supporting ids in the action_item hint, not here.>
+
+## Technical details
+- **Throughput:** N finishes, M dispatches, K stuck in flight.
+- **Outcomes:** ready_next_step / blocked / needs_clarification / noop.
+- **Open PRs / blockers:** PRs open >24h + tickets blocked >24h.
+- **Inbox carryover:** count of unread `new` letters from prior digests.
+- (the metrics table, dispatcher/CI health, raw counts live here)
+```
+
+Hard rules:
+
+- **The headline + lessons are the whole letter** for most days.
+  Everything numeric is reference material — it goes under
+  `## Technical details`.
+- **Relative dates only.** "since yesterday morning", "3 days ago" —
+  never `2026-05-19T09:01Z` or millisecond stamps.
+- **Lessons in plain English.** "Six tickets keep failing review at the
+  same stage — the merge policy needs a written rule" beats
+  "Same-stage block cluster (validation → code_review → auto_merge)".
+  Ticket ids and stage names belong in the action_item `hint` / the
+  Technical details, not the visible sentence.
+- If inbox carryover is >5, lead the headline with it (it's the thing
+  the PO most needs to act on).
 
 ### Action items in the payload (ELS-164)
 
