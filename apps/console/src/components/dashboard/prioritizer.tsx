@@ -547,7 +547,7 @@ export function DashboardPrioritizer({ workspaceId, initial }: Props) {
       onStartDrafting={startProjectDrafting}
       draftingPending={draftingPending}
     >
-      {SECTION_ORDER.map((state) => {
+      {(["active", "planning"] as ApiPriorityState[]).map((state) => {
         const rows = rowsByState[state];
         const showEmptyHint =
           rows.length === 0 && state === "active" && unprioritised.length > 0;
@@ -567,7 +567,7 @@ export function DashboardPrioritizer({ workspaceId, initial }: Props) {
                 className="py-2 pl-3 text-[11px] italic text-white/30"
                 {...sectionDropHandlers(state)}
               >
-                drop a project here to {state === "active" ? "queue it" : state === "planning" ? "draft it" : "park it"}
+                drop a project here to {state === "active" ? "queue it" : "draft it"}
               </li>
             )}
             {showEmptyHint && (
@@ -578,71 +578,75 @@ export function DashboardPrioritizer({ workspaceId, initial }: Props) {
           </SectionGroup>
         );
       })}
+      {/* Reference buckets — collapsed so Active + Drafts own the fold. */}
+      {rowsByState.parked.length > 0 && (
+        <CollapsedSection
+          label="Parked"
+          count={rowsByState.parked.length}
+          note="not now — the agent skips these"
+          dropHandlers={sectionDropHandlers("parked")}
+        >
+          {rowsByState.parked
+            .map((row) => projectById.get(row.id))
+            .filter((p): p is ApiPriorityProject => p !== undefined)
+            .map((project) => renderRow(project, "parked"))}
+        </CollapsedSection>
+      )}
       {unprioritised.length > 0 && (
-        <SectionGroup
-          state={null}
+        <CollapsedSection
+          label="Unprioritised"
           count={unprioritised.length}
-          dropHandlers={undefined}
+          note="in the tracker — drag into a bucket"
         >
           {unprioritised.map((project) => renderRow(project, "active"))}
-        </SectionGroup>
+        </CollapsedSection>
       )}
       {doneProjects.length > 0 && (
-        <li className="-mx-3 mt-1">
-          <details className="group/history">
-            <summary className="flex cursor-pointer items-baseline gap-2 px-3 py-2 text-[10px] font-bold uppercase tracking-[0.18em] text-white/35 hover:text-white/60">
-              <span className="transition-transform group-open/history:rotate-90">
-                ▸
-              </span>
-              History
-              <span className="text-white/25">{doneProjects.length}</span>
-              <span className="font-normal normal-case tracking-normal text-white/25">
-                — completed, hidden from the agent
-              </span>
-            </summary>
-            <ul className="mt-1">
-              {doneProjects.map((project) => (
-                <li
-                  key={project.project_native_id}
-                  className="flex items-baseline justify-between gap-3 py-1.5 pl-7 pr-3 text-[12px] text-white/40"
-                >
-                  <span className="flex items-baseline gap-2 truncate">
-                    {project.url ? (
-                      <a
-                        href={project.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="truncate line-through decoration-white/20 hover:text-white/70"
-                      >
-                        {project.name}
-                      </a>
-                    ) : (
-                      <span className="truncate line-through decoration-white/20">
-                        {project.name}
-                      </span>
-                    )}
-                    {project.completed_at && (
-                      <time
-                        dateTime={project.completed_at}
-                        className="shrink-0 text-[10px] text-white/25"
-                      >
-                        {new Date(project.completed_at).toLocaleDateString()}
-                      </time>
-                    )}
-                  </span>
-                  <button
-                    type="button"
-                    disabled={pending}
-                    onClick={() => returnToActive(project.project_native_id)}
-                    className="shrink-0 text-[10px] font-bold uppercase tracking-widest text-white/30 hover:text-white/70 disabled:opacity-40"
+        <CollapsedSection
+          label="History"
+          count={doneProjects.length}
+          note="completed, hidden from the agent"
+        >
+          {doneProjects.map((project) => (
+            <li
+              key={project.project_native_id}
+              className="flex items-baseline justify-between gap-3 py-1.5 pl-7 pr-3 text-[12px] text-white/40"
+            >
+              <span className="flex items-baseline gap-2 truncate">
+                {project.url ? (
+                  <a
+                    href={project.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="truncate line-through decoration-white/20 hover:text-white/70"
                   >
-                    Return to Active
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </details>
-        </li>
+                    {project.name}
+                  </a>
+                ) : (
+                  <span className="truncate line-through decoration-white/20">
+                    {project.name}
+                  </span>
+                )}
+                {project.completed_at && (
+                  <time
+                    dateTime={project.completed_at}
+                    className="shrink-0 text-[10px] text-white/25"
+                  >
+                    {new Date(project.completed_at).toLocaleDateString()}
+                  </time>
+                )}
+              </span>
+              <button
+                type="button"
+                disabled={pending}
+                onClick={() => returnToActive(project.project_native_id)}
+                className="shrink-0 text-[10px] font-bold uppercase tracking-widest text-white/30 hover:text-white/70 disabled:opacity-40"
+              >
+                Return to Active
+              </button>
+            </li>
+          ))}
+        </CollapsedSection>
       )}
       {dirty && (
         <li className="-mx-3 mt-1 flex items-baseline justify-between bg-white/[0.04] px-3 py-2">
@@ -1033,7 +1037,7 @@ function PrioritizerRow({
         aria-hidden
         className={cn(
           "shrink-0 select-none text-[12px] transition",
-          moveMode ? "text-aqua" : "text-white/20 group-hover:text-white/55",
+          moveMode ? "text-aqua" : "text-white/35 group-hover:text-white/70",
         )}
       >
         {moveMode ? "↕" : "⋮"}
@@ -1069,14 +1073,30 @@ function PrioritizerRow({
           </p>
         )}
       </div>
-      <span
-        className={cn(
-          "shrink-0 font-mono text-[11px] tabular-nums",
-          isPlanning ? "text-lilac/70" : "text-white/55",
-        )}
-      >
-        {fractionLabel}
-      </span>
+      {isPlanning ? (
+        <span className="shrink-0 font-mono text-[11px] text-lilac/70">
+          {fractionLabel}
+        </span>
+      ) : (
+        <span className="flex shrink-0 items-center gap-2">
+          {project.total !== null && project.total > 0 && (
+            <span
+              aria-hidden
+              className="hidden h-1 w-14 overflow-hidden rounded-full bg-white/10 sm:block"
+            >
+              <span
+                className="block h-full rounded-full bg-aqua/70"
+                style={{
+                  width: `${Math.min(100, Math.round((100 * (project.completed ?? 0)) / project.total))}%`,
+                }}
+              />
+            </span>
+          )}
+          <span className="font-mono text-[11px] tabular-nums text-white/45">
+            {fractionLabel}
+          </span>
+        </span>
+      )}
       {decomposing ? (
         // Post-handoff: decomposition pipeline is running on the anchor.
         // Quiet hint so the operator knows the chain started without
@@ -1114,6 +1134,45 @@ function PrioritizerRow({
         // sections so the progress column doesn't reflow per-state.
         <span aria-hidden className="block h-1 w-20 shrink-0" />
       )}
+    </li>
+  );
+}
+
+
+// Collapsed reference section (Parked / Unprioritised / History) — a
+// <details> so the daily-driver buckets (Active / Drafts) own the fold
+// and the long reference lists expand on demand. Restores the "first
+// screen" the operator lost when Parked rendered fully expanded.
+function CollapsedSection({
+  label,
+  count,
+  note,
+  dropHandlers,
+  children,
+}: {
+  label: string;
+  count: number;
+  note?: string;
+  dropHandlers?: Record<string, unknown>;
+  children: React.ReactNode;
+}) {
+  return (
+    <li className="-mx-3" {...(dropHandlers ?? {})}>
+      <details className="group/collapse">
+        <summary className="flex cursor-pointer items-baseline gap-2 px-3 py-2 text-[10px] font-bold uppercase tracking-[0.18em] text-white/35 hover:text-white/60">
+          <span className="transition-transform group-open/collapse:rotate-90">
+            ▸
+          </span>
+          {label}
+          <span className="text-white/25">{count}</span>
+          {note && (
+            <span className="font-normal normal-case tracking-normal text-white/25">
+              — {note}
+            </span>
+          )}
+        </summary>
+        <ul className="mt-0.5 divide-y divide-white/[0.04]">{children}</ul>
+      </details>
     </li>
   );
 }
