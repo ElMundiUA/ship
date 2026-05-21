@@ -431,7 +431,9 @@ function MailboxPreview({
 
       <div className="max-h-[70vh] overflow-y-auto px-6 py-5">
         {body ? (
-          <MarkdownBlock>{body}</MarkdownBlock>
+          <MarkdownBlock collapseFromHeadings={["Technical details", "Details"]}>
+            {body}
+          </MarkdownBlock>
         ) : (
           <p className="text-sm italic text-white/40">No body.</p>
         )}

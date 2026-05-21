@@ -794,7 +794,9 @@ function SourceTicketCard({ detail }: { detail: InboxItemDetail }) {
           </h2>
         )}
         {description ? (
-          <MarkdownBlock>{description}</MarkdownBlock>
+          <MarkdownBlock collapseFromHeadings={["Technical details", "Details"]}>
+            {description}
+          </MarkdownBlock>
         ) : title || snap ? null : (
           <p className="text-xs text-white/55">
             No ticket snapshot — older inbox row, or the tracker
