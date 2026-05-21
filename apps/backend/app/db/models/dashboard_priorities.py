@@ -25,6 +25,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     CheckConstraint,
+    DateTime,
     ForeignKey,
     Index,
     Integer,
@@ -57,7 +58,7 @@ class WorkspaceProjectPriority(Base):
             "ordinal",
         ),
         CheckConstraint(
-            "state IN ('active', 'planning', 'parked')",
+            "state IN ('active', 'planning', 'parked', 'done')",
             name="ck_workspace_project_priorities_state",
         ),
     )
@@ -75,19 +76,29 @@ class WorkspaceProjectPriority(Base):
     ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
     # Bucket on the prioritizer:
     # ``active`` (agent may pick) | ``planning`` (operator is shaping —
-    # UI label "Drafts") | ``parked`` (explicitly hold). Only
-    # ``active`` is visible to the agent's project picker.
+    # UI label "Drafts") | ``parked`` (explicitly hold) | ``done``
+    # (every child ticket completed — collapsed into the dashboard's
+    # History section, hidden from the agent picker). Only ``active`` is
+    # visible to the agent's project picker.
     #
     # Default is ``planning`` (ELS-82): newly created projects need to
     # go through the dashboard's drafting + decomposition flow before
     # the agent picks them up. Decomposition completion flips the row
     # to ``parked`` (ELS-81), and the PO promotes ``parked`` → ``active``
     # manually when ready to ship. The previous default of ``active``
-    # let any new project bypass the gate.
+    # let any new project bypass the gate. ``done`` is set automatically
+    # when the last open child ticket completes (and reverts to
+    # ``active`` if a new ticket lands or a Done child reopens).
     state: Mapped[str] = mapped_column(
         String(16),
         nullable=False,
         server_default=text("'planning'"),
+    )
+    # When the project auto-completed (last child ticket Done). Drives
+    # the History section's recency sort. NULL for non-done rows.
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
     )
     # Backref to the Navigator thread this project was drafted in.
     # Powers the "Continue shaping" link on Drafts-bucket rows: clicking
