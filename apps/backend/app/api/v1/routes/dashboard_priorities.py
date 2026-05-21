@@ -93,7 +93,7 @@ class TrackerSyncOut(BaseModel):
 # the ones the agent's picker may consume; ``planning`` and ``parked``
 # are operator-private. Default ``active`` for any saved row that
 # pre-dates the column (server_default backfill).
-PriorityState = Literal["active", "planning", "parked"]
+PriorityState = Literal["active", "planning", "parked", "done"]
 
 
 class PriorityProjectOut(BaseModel):
@@ -127,6 +127,9 @@ class PriorityProjectOut(BaseModel):
     # tell us — the UI renders ``—`` and skips the bar.
     completed: int | None
     total: int | None
+    # When the project auto-completed (priority_state == ``done``).
+    # Drives the History section's recency sort; null for live rows.
+    completed_at: datetime | None = None
 
 
 class UpNextOut(BaseModel):
@@ -370,22 +373,26 @@ async def get_priorities(
         native_id = str(raw.get("id") or "")
         if not native_id or native_id in seen_ids:
             continue
-        # Don't surface terminal projects in the prioritizer — Linear
-        # exposes ``completed`` / ``canceled`` as project states, and
-        # showing them under "Priorities" with no marker reads as a
-        # bug ("why is the bot still working on this?"). The "Done
-        # · last 14d" group the designer parked for v2 will absorb
-        # the completed list later; for now they're hidden.
+        # Terminal-project handling. Linear exposes ``completed`` /
+        # ``canceled`` as project states. A project Ship auto-completed
+        # carries a saved priority row with ``state='done'`` — surface
+        # those in the dashboard's collapsed History section. A project
+        # completed/canceled directly in Linear that Ship never managed
+        # (no saved ``done`` row) stays hidden — it was never in our
+        # prioritizer, so showing it would read as noise.
         state_raw = str(raw.get("state") or "").lower()
-        if state_raw in {"completed", "canceled", "cancelled"}:
+        saved = saved_by_id.get(native_id)
+        tracker_terminal = state_raw in {"completed", "canceled", "cancelled"}
+        saved_done = saved is not None and saved.state == "done"
+        if tracker_terminal and not saved_done:
             continue
         seen_ids.add(native_id)
         completed, total = _completion_counts(
             raw.get("progress"), raw.get("scope")
         )
-        saved = saved_by_id.get(native_id)
         priority_state: PriorityState | None = (
-            saved.state if saved else None  # type: ignore[assignment]
+            "done" if saved_done
+            else (saved.state if saved else None)  # type: ignore[assignment]
         )
         projects.append(
             PriorityProjectOut(
@@ -400,6 +407,7 @@ async def get_priorities(
                 originating_thread_id=saved.originating_thread_id if saved else None,
                 completed=completed,
                 total=total,
+                completed_at=saved.completed_at if saved_done else None,
             )
         )
 
@@ -819,6 +827,10 @@ async def set_priority_state(
             )
         )
     elif existing.state != payload.state:
+        # Operator pulling a project out of History ("Return to Active")
+        # clears the completion timestamp so it's a live row again.
+        if existing.state == "done":
+            existing.completed_at = None
         existing.state = payload.state
 
     session.add(

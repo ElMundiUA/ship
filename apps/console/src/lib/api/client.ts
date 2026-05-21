@@ -2253,7 +2253,7 @@ export interface ApiPriorityTracker {
  * - ``planning`` — operator is shaping it (brief/scope). Agent-invisible.
  * - ``parked``   — explicitly hold. Agent-invisible.
  */
-export type ApiPriorityState = "active" | "planning" | "parked";
+export type ApiPriorityState = "active" | "planning" | "parked" | "done";
 
 export interface ApiPriorityProject {
   project_native_id: string;
@@ -2280,6 +2280,10 @@ export interface ApiPriorityProject {
    * tell us; the UI then renders ``—`` and skips the bar. */
   completed: number | null;
   total: number | null;
+  /** When the project auto-completed (priority_state === "done"). ISO
+   *  timestamp; drives the History section's recency sort. Null for
+   *  live rows. */
+  completed_at?: string | null;
 }
 
 export interface ApiPriorityUpNext {

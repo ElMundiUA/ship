@@ -25,6 +25,7 @@ import { cn } from "@/lib/cn";
 import {
   reorderPrioritiesAction,
   setAutonomyPausedAction,
+  setProjectStateAction,
   startDecompositionAction,
 } from "./actions";
 
@@ -59,8 +60,14 @@ const STATE_RANK: Record<ApiPriorityState, number> = {
   active: 0,
   planning: 1,
   parked: 2,
+  // ``done`` never enters the draggable buckets (it's filtered out and
+  // rendered in the collapsed History section), but the Record type
+  // must stay exhaustive.
+  done: 3,
 };
 
+// Drag-and-drop buckets only. ``done`` is deliberately excluded — done
+// projects are auto-set, not dragged, and live in the History section.
 const SECTION_ORDER: ApiPriorityState[] = ["active", "planning", "parked"];
 
 // UI labels for ``priority_state`` enum values. The DB enum stays
@@ -84,6 +91,12 @@ const SECTION_COPY: Record<
   parked: {
     label: "Parked",
     sub: (n) => (n === 1 ? "1 not now" : `${n} not now`),
+  },
+  // ``done`` is rendered in the History section, not as a drag bucket;
+  // this entry only satisfies the exhaustive Record type.
+  done: {
+    label: "History",
+    sub: (n) => (n === 1 ? "1 completed" : `${n} completed`),
   },
 };
 
@@ -154,7 +167,9 @@ export function DashboardPrioritizer({ workspaceId, initial }: Props) {
     return allProjects
       .filter(
         (p): p is ApiPriorityProject & { priority_state: ApiPriorityState } =>
-          p.priority_state !== null && p.ordinal !== null,
+          p.priority_state !== null &&
+          p.priority_state !== "done" &&
+          p.ordinal !== null,
       )
       .slice()
       .sort((a, b) => {
@@ -174,14 +189,26 @@ export function DashboardPrioritizer({ workspaceId, initial }: Props) {
       active: [],
       planning: [],
       parked: [],
+      done: [],
     };
     for (const row of effectiveRows) acc[row.state].push(row);
     return acc;
   }, [effectiveRows]);
 
+  // Auto-completed projects — rendered in the collapsed History section,
+  // newest first. Never draggable; the agent picker ignores them.
+  const doneProjects = useMemo(() => {
+    return allProjects
+      .filter((p) => p.priority_state === "done")
+      .slice()
+      .sort((a, b) => (b.completed_at ?? "").localeCompare(a.completed_at ?? ""));
+  }, [allProjects]);
+
   const unprioritised = useMemo(() => {
     const seen = new Set(effectiveRows.map((r) => r.id));
-    return allProjects.filter((p) => !seen.has(p.project_native_id));
+    return allProjects.filter(
+      (p) => !seen.has(p.project_native_id) && p.priority_state !== "done",
+    );
   }, [allProjects, effectiveRows]);
 
   // ----- mutations --------------------------------------------------
@@ -208,6 +235,28 @@ export function DashboardPrioritizer({ workspaceId, initial }: Props) {
     setDraftOrder(null);
     setErrorMessage(null);
   }, []);
+
+  // Pull a project out of History back into Active. The agent picker
+  // resumes on it; the backstop won't re-complete it until its tickets
+  // are all Done again.
+  const returnToActive = useCallback(
+    (projectNativeId: string) => {
+      setErrorMessage(null);
+      startTransition(async () => {
+        const result = await setProjectStateAction(
+          workspaceId,
+          projectNativeId,
+          "active",
+        );
+        if (result.ok) {
+          setServerState(result.payload);
+        } else {
+          setErrorMessage(result.message);
+        }
+      });
+    },
+    [workspaceId],
+  );
 
   const toggleAutonomy = useCallback(() => {
     const nextPaused = !serverState.autonomy_paused;
@@ -538,6 +587,63 @@ export function DashboardPrioritizer({ workspaceId, initial }: Props) {
           {unprioritised.map((project) => renderRow(project, "active"))}
         </SectionGroup>
       )}
+      {doneProjects.length > 0 && (
+        <li className="-mx-3 mt-1">
+          <details className="group/history">
+            <summary className="flex cursor-pointer items-baseline gap-2 px-3 py-2 text-[10px] font-bold uppercase tracking-[0.18em] text-white/35 hover:text-white/60">
+              <span className="transition-transform group-open/history:rotate-90">
+                ▸
+              </span>
+              History
+              <span className="text-white/25">{doneProjects.length}</span>
+              <span className="font-normal normal-case tracking-normal text-white/25">
+                — completed, hidden from the agent
+              </span>
+            </summary>
+            <ul className="mt-1">
+              {doneProjects.map((project) => (
+                <li
+                  key={project.project_native_id}
+                  className="flex items-baseline justify-between gap-3 py-1.5 pl-7 pr-3 text-[12px] text-white/40"
+                >
+                  <span className="flex items-baseline gap-2 truncate">
+                    {project.url ? (
+                      <a
+                        href={project.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="truncate line-through decoration-white/20 hover:text-white/70"
+                      >
+                        {project.name}
+                      </a>
+                    ) : (
+                      <span className="truncate line-through decoration-white/20">
+                        {project.name}
+                      </span>
+                    )}
+                    {project.completed_at && (
+                      <time
+                        dateTime={project.completed_at}
+                        className="shrink-0 text-[10px] text-white/25"
+                      >
+                        {new Date(project.completed_at).toLocaleDateString()}
+                      </time>
+                    )}
+                  </span>
+                  <button
+                    type="button"
+                    disabled={pending}
+                    onClick={() => returnToActive(project.project_native_id)}
+                    className="shrink-0 text-[10px] font-bold uppercase tracking-widest text-white/30 hover:text-white/70 disabled:opacity-40"
+                  >
+                    Return to Active
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </details>
+        </li>
+      )}
       {dirty && (
         <li className="-mx-3 mt-1 flex items-baseline justify-between bg-white/[0.04] px-3 py-2">
           <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-white/50">
@@ -777,6 +883,7 @@ function SectionGroup({
     active: "text-white/55",
     planning: "text-lilac/85",
     parked: "text-white/40",
+    done: "text-white/30",
     none: "text-white/35",
   };
   const headerTone = headerToneByState[state ?? "none"];
