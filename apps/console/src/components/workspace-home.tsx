@@ -97,50 +97,55 @@ export function WorkspaceHome({
   const periodKicker = opsReportWindowShortLabel(opsWindow);
 
   return (
-    <div className="mx-auto max-w-4xl">
-      <div className="space-y-10">
-        <OpsWindowSegment
-          workspaceId={workspaceId}
-          multiWs={multiWs}
-          current={opsWindow}
-          skipWizard={skipWizard}
-        />
+    <div className="mx-auto max-w-6xl">
+      <div className="grid grid-cols-1 gap-x-10 gap-y-8 lg:grid-cols-12">
+        {/* Left — what the operator acts on: blockers, the decisions
+            waiting, and the project queue the agent picks from. */}
+        <div className="space-y-8 lg:col-span-7">
+          {(reposNeedingUpdate.length > 0 || summary.blockers.length > 0) && (
+            <StatusAlerts
+              blockers={summary.blockers}
+              reposNeedingUpdate={reposNeedingUpdate}
+              workspaceId={workspaceId}
+              multiWs={multiWs}
+            />
+          )}
 
-        {(reposNeedingUpdate.length > 0 || summary.blockers.length > 0) && (
-          <StatusAlerts
-            blockers={summary.blockers}
-            reposNeedingUpdate={reposNeedingUpdate}
+          <NeedsYouSection
+            decisions={decisions}
+            decisionsTotal={decisionsTotal}
+            prsReadyToMerge={prsReadyToMerge}
+            shippedTotal={totalShipped}
+            blockerCount={blockerCount}
+            workspaceId={workspaceId}
+            periodKicker={periodKicker}
+          />
+
+          {priorities ? (
+            <DashboardPrioritizer
+              workspaceId={workspaceId}
+              initial={priorities}
+            />
+          ) : null}
+        </div>
+
+        {/* Right — ambient context, recedes. Sticky so it stays put
+            while the queue scrolls. */}
+        <aside className="space-y-6 lg:col-span-5 lg:sticky lg:top-6 lg:self-start">
+          <OpsWindowSegment
             workspaceId={workspaceId}
             multiWs={multiWs}
+            current={opsWindow}
+            skipWizard={skipWizard}
           />
-        )}
-
-        <LiveSystemStrip data={liveSystem} workspaceId={workspaceId} />
-
-        <NeedsYouSection
-          decisions={decisions}
-          decisionsTotal={decisionsTotal}
-          prsReadyToMerge={prsReadyToMerge}
-          shippedTotal={totalShipped}
-          blockerCount={blockerCount}
-          workspaceId={workspaceId}
-          periodKicker={periodKicker}
-        />
-
-        {priorities ? (
-          <DashboardPrioritizer
+          <LiveSystemStrip data={liveSystem} workspaceId={workspaceId} />
+          <LastActionStrip lastAction={priorities?.last_action ?? null} />
+          <ActiveTicketsStrip
+            inFlight={inFlight}
+            inProgress={inProgress}
             workspaceId={workspaceId}
-            initial={priorities}
           />
-        ) : null}
-
-        <LastActionStrip lastAction={priorities?.last_action ?? null} />
-
-        <ActiveTicketsStrip
-          inFlight={inFlight}
-          inProgress={inProgress}
-          workspaceId={workspaceId}
-        />
+        </aside>
       </div>
     </div>
   );
@@ -261,8 +266,18 @@ function LiveSystemStrip({
       {failures > 0 && (
         <>
           <span className="text-white/15">·</span>
-          <span className="text-coral">
-            {failures} failure{failures === 1 ? "" : "s"}
+          {/* 7-day cumulative — label it so it doesn't read as "N on
+              fire right now" or fight the ops-window toggle. Coral only
+              when the latest run actually errored. */}
+          <span
+            className={
+              data.masthead.last_run_status === "error"
+                ? "text-coral"
+                : "text-white/45"
+            }
+          >
+            {failures} failure{failures === 1 ? "" : "s"}{" "}
+            <span className="text-white/30">7d</span>
           </span>
         </>
       )}
@@ -394,10 +409,8 @@ function NeedsYouSection({
   const subtitleParts: React.ReactNode[] = [];
   if (decisionsTotal > 0) {
     subtitleParts.push(
-      <span key="decisions">
-        <span className="font-display font-bold text-white">
-          {decisionsTotal}
-        </span>{" "}
+      <span key="decisions" className="text-sun">
+        <span className="font-display font-bold">{decisionsTotal}</span>{" "}
         decision{decisionsTotal === 1 ? "" : "s"} waiting
       </span>,
     );
@@ -439,10 +452,12 @@ function NeedsYouSection({
         <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-white/40">
           Needs you
         </p>
-        <h2 className="font-display text-3xl font-bold leading-tight text-white">
-          {decisionsTotal + prsReadyToMerge.length + blockerCount > 0
-            ? "Three things to look at."
-            : "Nothing on your plate."}
+        <h2 className="font-display text-2xl font-bold leading-tight text-white">
+          {decisionsTotal > 0
+            ? `${decisionsTotal} ${decisionsTotal === 1 ? "decision needs" : "decisions need"} you.`
+            : prsReadyToMerge.length + blockerCount > 0
+              ? "A few things to look at."
+              : "Nothing on your plate."}
         </h2>
         <p className="text-sm text-white/65">
           {subtitleParts.flatMap((node, idx) =>
