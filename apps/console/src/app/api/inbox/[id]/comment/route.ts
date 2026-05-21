@@ -44,11 +44,11 @@ export async function POST(
     return back(origin, id, codeFor(err));
   }
 
-  return NextResponse.redirect(new URL(`/inbox/${id}`, origin), 303);
+  return NextResponse.redirect(new URL(`/inbox?selected=${id}`, origin), 303);
 }
 
 function back(origin: string, id: string, code: string) {
-  const url = new URL(`/inbox/${id}`, origin);
+  const url = new URL(`/inbox?selected=${id}`, origin);
   url.searchParams.set("error", code);
   return NextResponse.redirect(url, 303);
 }

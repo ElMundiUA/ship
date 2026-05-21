@@ -8,9 +8,11 @@
  *
  * The earlier tier-sectioned editorial layout was simplified per
  * operator feedback: less chrome, fewer cards, "I just want to read
- * letters and click answer." Deep-link ``/inbox/[id]`` still renders
- * the bigger detail surface (events timeline, snooze controls,
- * reassign) for power-user flows.
+ * letters and click answer." The standalone ``/inbox/[id]`` detail
+ * route was retired — this preview is the single surface, rendering
+ * both resolution systems: structured ``action_items`` via
+ * ``InboxActionPanel``, and the type-driven accept/dismiss/answer
+ * dispositions via ``InboxDispositionPanel``.
  */
 
 import Link from "next/link";
@@ -20,6 +22,7 @@ import { ApiUnavailable } from "@/components/api-unavailable";
 import { PageBody, PageHeader } from "@/components/app-shell";
 import { InboxMailboxListClient } from "@/components/inbox/inbox-mailbox-list-client";
 import { InboxActionPanel } from "@/components/inbox/inbox-action-panel";
+import { InboxDispositionPanel } from "@/components/inbox/inbox-disposition-panel";
 import { MailboxFooter } from "@/components/inbox/mailbox-footer";
 import { MarkdownBlock } from "@/components/markdown-block";
 import { EmptyState } from "@/components/ui";
@@ -45,7 +48,7 @@ import {
   type InboxListResponse,
   type InboxType,
 } from "@/lib/inbox-types";
-import { pickWorkspace, withWorkspaceQuery } from "@/lib/workspace-scope";
+import { pickWorkspace } from "@/lib/workspace-scope";
 
 export const dynamic = "force-dynamic";
 
@@ -366,6 +369,11 @@ function MailboxPreview({
   const isClosed = detail.status === "resolved" || detail.status === "dismissed";
   const previewHeadline = formatInboxHeadline(detail);
   const checklistItems = parseChecklistActionItems(detail.payload);
+  const rawActionItems = (detail.payload as Record<string, unknown> | undefined)?.[
+    "action_items"
+  ];
+  const hasActionItems =
+    Array.isArray(rawActionItems) && rawActionItems.length > 0;
   const returnTo = buildMailboxReturnTo({
     selectedId: detail.id,
     ownership,
@@ -415,18 +423,6 @@ function MailboxPreview({
             </span>
           </p>
         )}
-        <p className="mt-1 text-xs text-white/40">
-          <Link
-            href={withWorkspaceQuery(
-              `/inbox/${encodeURIComponent(detail.id)}`,
-              workspaceScope ?? "",
-              Boolean(workspaceScope),
-            )}
-            className="underline-offset-2 hover:text-white hover:underline"
-          >
-            Open full detail →
-          </Link>
-        </p>
       </header>
 
       <div className="max-h-[70vh] overflow-y-auto px-6 py-5">
@@ -440,14 +436,28 @@ function MailboxPreview({
       </div>
 
       <footer className="space-y-3 border-t border-white/[0.06] px-6 py-4">
-        {checklistItems.length > 0 && !isClosed ? (
+        {isClosed ? (
+          <p className="text-xs italic text-white/40">
+            This letter is {detail.status}.
+          </p>
+        ) : checklistItems.length > 0 ? (
           <MailboxFooter
             detail={detail}
             workspaceId={workspaceId}
             returnTo={returnTo}
           />
-        ) : (
+        ) : hasActionItems ? (
           <InboxActionPanel workspaceId={workspaceId} item={detail} />
+        ) : (
+          // No structured action_items → fall back to the type-driven
+          // disposition buttons (accept / dismiss / answer / …). This is
+          // what made knowledge-draft / approval letters actionable in
+          // the preview after the standalone detail route was retired.
+          <InboxDispositionPanel
+            workspaceId={workspaceId}
+            itemId={detail.id}
+            itemType={detail.type as InboxType}
+          />
         )}
       </footer>
     </div>

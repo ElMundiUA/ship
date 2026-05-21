@@ -118,12 +118,12 @@ export async function POST(
     return back(origin, id, codeFor(err), returnTo);
   }
 
-  const successTarget = returnTo ?? `/inbox/${id}`;
+  const successTarget = returnTo ?? `/inbox?selected=${id}`;
   return NextResponse.redirect(new URL(successTarget, origin), 303);
 }
 
 function back(origin: string, id: string, code: string, returnTo: string | null) {
-  const url = new URL(returnTo ?? `/inbox/${id}`, origin);
+  const url = new URL(returnTo ?? `/inbox?selected=${id}`, origin);
   url.searchParams.set("error", code);
   return NextResponse.redirect(url, 303);
 }
