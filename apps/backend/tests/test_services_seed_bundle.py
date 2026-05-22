@@ -529,3 +529,25 @@ def test_render_tracker_fsm_surfaces_workspace_override() -> None:
     assert "jira" in body.lower()
     assert "overrides the workspace default" in body.lower()
     assert "linear" in body.lower()
+
+
+def test_bundle_supports_ship_run_id_gates_on_037() -> None:
+    """The E16 dispatcher must only send the ``ship_run_id`` workflow
+    input to repos whose bundle (>=0.37) declares it. askslayer ran on
+    0.36 and every dispatch 422'd on ``Unexpected inputs provided``."""
+    from backend.app.services.seed_bundle import (
+        bundle_supports_ship_run_id,
+        bundle_version_tuple,
+    )
+
+    assert bundle_supports_ship_run_id("0.37") is True
+    assert bundle_supports_ship_run_id("0.38") is True
+    assert bundle_supports_ship_run_id("1.0") is True
+    # Pre-0.37 and unknown versions must be omitted, not sent.
+    assert bundle_supports_ship_run_id("0.36") is False
+    assert bundle_supports_ship_run_id("0.9") is False
+    assert bundle_supports_ship_run_id(None) is False
+    assert bundle_supports_ship_run_id("") is False
+    assert bundle_version_tuple("0.36") == (0, 36)
+    assert bundle_version_tuple("1.2.3") == (1, 2, 3)
+    assert bundle_version_tuple(None) == ()

@@ -672,6 +672,9 @@ async def test_file_overlap_warning_attached_on_dev_dispatch(
         default_branch="main",
         private=False,
         html_url="https://github.com/acme/ship",
+        # Current bundle so the dispatcher includes ``ship_run_id``;
+        # the gate omits it for pre-0.37 repos (see askslayer 422 fix).
+        installed_bundle_version="0.37",
         activated_at=datetime.now(timezone.utc),
     )
     db_session.add(repo)

@@ -227,6 +227,42 @@ from backend.app.services.tracker_fsm import (
 #         input for ELS-156 file-overlap honour telemetry correlation.
 BUNDLE_VERSION: str = "0.37"
 
+# First bundle whose ``ship-agent-run.yml`` declares the ``ship_run_id``
+# ``workflow_dispatch`` input. The E16 cron dispatcher must NOT send this
+# input to repos on an older bundle: GitHub rejects any undeclared input
+# with HTTP 422 ``Unexpected inputs provided: ["ship_run_id"]``, which
+# fails 100% of dispatches and silently stalls the whole pipeline
+# (observed on askslayer/visitor-* 2026-05-22 — 477 dispatch.failed/24h).
+# ``ship_run_id`` is only a telemetry correlation id, so omitting it for
+# old bundles degrades gracefully; the customer regains it on bundle
+# update.
+SHIP_RUN_ID_MIN_BUNDLE: str = "0.37"
+
+
+def bundle_version_tuple(value: str | None) -> tuple[int, ...]:
+    """Parse a dotted bundle version into an int tuple for comparison.
+    Non-numeric segments collapse to 0; ``None``/empty → ``()``."""
+    if not value:
+        return ()
+    parts: list[int] = []
+    for part in str(value).split("."):
+        try:
+            parts.append(int(part))
+        except ValueError:
+            parts.append(0)
+    return tuple(parts)
+
+
+def bundle_supports_ship_run_id(installed: str | None) -> bool:
+    """True when the repo's installed bundle declares the ``ship_run_id``
+    dispatch input. Unknown/old versions return False so the dispatcher
+    omits the input rather than tripping GitHub's 422."""
+    if not installed:
+        return False
+    return bundle_version_tuple(installed) >= bundle_version_tuple(
+        SHIP_RUN_ID_MIN_BUNDLE
+    )
+
 # Default knowledge starters for PR 1. Empty by design: generated knowledge is
 # analyzed post-merge and proposed in a second PR. Historical callers can still
 # pass explicit slugs for compatibility.

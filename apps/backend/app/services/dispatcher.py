@@ -50,6 +50,7 @@ from backend.app.integrations.github.workflows import (
 from backend.app.services import tracker_resolver as tracker_resolver_module
 from backend.app.services.file_overlap import build_file_coordination_warning
 from backend.app.services.file_overlap_telemetry import emit_file_overlap_warnings
+from backend.app.services.seed_bundle import bundle_supports_ship_run_id
 
 
 # Stage label (Linear's ``stage:<id>``) → routine id. The dispatcher
@@ -1047,17 +1048,22 @@ async def maybe_dispatch(
 
     # 6. Fire ``workflow_dispatch``. GitHub returns 204 on accept;
     # ``WorkflowDispatchError`` covers 4xx (workflow file missing,
-    # branch gone, etc).
+    # branch gone, etc). ``ship_run_id`` is only declared by the
+    # bundle from 0.37 on; sending it to an older repo trips GitHub's
+    # 422 ``Unexpected inputs provided`` and fails every dispatch, so
+    # gate it on the installed bundle version.
+    dispatch_inputs: dict[str, str] = {
+        "routine_id": routine_id,
+        "ticket_ref": ticket_ref,
+    }
+    if bundle_supports_ship_run_id(repo.installed_bundle_version):
+        dispatch_inputs["ship_run_id"] = dispatch_run_id
     try:
         await dispatch_workflow(
             repo,
             install,
             WORKFLOW_FILE,
-            inputs={
-                "routine_id": routine_id,
-                "ticket_ref": ticket_ref,
-                "ship_run_id": dispatch_run_id,
-            },
+            inputs=dispatch_inputs,
             settings=settings,
             client=client,
         )
