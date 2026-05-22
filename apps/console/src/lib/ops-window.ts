@@ -2,13 +2,17 @@ export const OPS_REPORT_WINDOWS = ["24h", "7d", "30d", "all"] as const;
 
 export type OpsReportWindow = (typeof OPS_REPORT_WINDOWS)[number];
 
-/** Normalise URL / search-param input; invalid tokens fall back to **24h**. */
+/** Normalise URL / search-param input; invalid tokens fall back to a
+ *  caller-supplied default (or **24h**). The workspace home passes
+ *  ``"7d"`` because agentic-SDLC throughput is bursty — a quiet 24h
+ *  window routinely reads all-zero and makes the pipeline look dead. */
 export function parseOpsReportWindow(
   raw: string | string[] | undefined,
+  fallback: OpsReportWindow = "24h",
 ): OpsReportWindow {
   const v = Array.isArray(raw) ? raw[0] : raw;
   if (v === "24h" || v === "7d" || v === "30d" || v === "all") return v;
-  return "24h";
+  return fallback;
 }
 
 /** Compact kicker, e.g. `(7D)` / `(ALL)`. */

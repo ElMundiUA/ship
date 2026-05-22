@@ -93,7 +93,7 @@ export function WorkspaceHome({
   const periodKicker = opsReportWindowShortLabel(opsWindow);
 
   return (
-    <div className="mx-auto w-full max-w-[1600px] space-y-8">
+    <div className="mx-auto w-full max-w-[1600px] space-y-10">
       {(reposNeedingUpdate.length > 0 || summary.blockers.length > 0) && (
         <StatusAlerts
           blockers={summary.blockers}
@@ -103,11 +103,39 @@ export function WorkspaceHome({
         />
       )}
 
-      <FlowStrip flow={summary.flow} periodKicker={periodKicker} />
+      {/* HERO — full-width FSM pipeline + the window toggle that drives
+          it. Hidden entirely when the window carries no throughput so a
+          quiet day never shows a row of dead zeros. */}
+      <FlowStrip
+        flow={summary.flow}
+        periodKicker={periodKicker}
+        windowToggle={
+          <OpsWindowSegment
+            workspaceId={workspaceId}
+            multiWs={multiWs}
+            current={opsWindow}
+            skipWizard={skipWizard}
+          />
+        }
+      />
 
-      <div className="grid grid-cols-1 gap-x-10 gap-y-10 lg:grid-cols-12">
-        {/* AWAITING YOU — the two FSM human gates + inbox decisions. */}
-        <section className="lg:col-span-4">
+      <div className="grid grid-cols-1 gap-x-12 gap-y-12 lg:grid-cols-12">
+        {/* PROJECT QUEUE — the order the agent picks work in. The widest,
+            tallest column: it's the thing the operator manages daily. */}
+        <section className="lg:col-span-8">
+          {priorities ? (
+            <DashboardPrioritizer
+              workspaceId={workspaceId}
+              initial={priorities}
+            />
+          ) : (
+            <p className="text-base text-white/45">No projects yet.</p>
+          )}
+        </section>
+
+        {/* Right rail — what needs you, then what shipped. Stacked so the
+            column runs tall next to the queue instead of leaving a void. */}
+        <aside className="space-y-12 lg:col-span-4">
           <AwaitingYouColumn
             decisions={decisions}
             decisionsTotal={decisionsTotal}
@@ -115,28 +143,6 @@ export function WorkspaceHome({
             parkedCount={parkedCount}
             workspaceId={workspaceId}
           />
-        </section>
-
-        {/* PROJECT QUEUE — the order the agent picks work in. */}
-        <section className="lg:col-span-5">
-          <div className="mb-4 flex items-center gap-3">
-            <h3 className="text-[10px] font-bold uppercase tracking-[0.22em] text-white/40">
-              Project queue
-            </h3>
-            <div className="h-px flex-1 bg-white/[0.06]" />
-          </div>
-          {priorities ? (
-            <DashboardPrioritizer
-              workspaceId={workspaceId}
-              initial={priorities}
-            />
-          ) : (
-            <p className="text-sm text-white/45">No projects yet.</p>
-          )}
-        </section>
-
-        {/* SHIPPED — what merged in the window. Ambient, sticky. */}
-        <aside className="lg:col-span-3 lg:sticky lg:top-6 lg:self-start">
           <ShippedColumn
             items={summary.shipped.items}
             featuresCount={summary.shipped.features_shipped_count}
@@ -148,14 +154,8 @@ export function WorkspaceHome({
         </aside>
       </div>
 
-      {/* Footer — ambient context strips. */}
-      <div className="space-y-3 border-t border-white/[0.06] pt-5">
-        <OpsWindowSegment
-          workspaceId={workspaceId}
-          multiWs={multiWs}
-          current={opsWindow}
-          skipWizard={skipWizard}
-        />
+      {/* Footer — ambient system strips. */}
+      <div className="space-y-3 border-t border-white/[0.06] pt-6">
         <LiveSystemStrip data={liveSystem} workspaceId={workspaceId} />
         <LastActionStrip lastAction={priorities?.last_action ?? null} />
       </div>
@@ -181,41 +181,63 @@ const FLOW_STAGE_LABEL: Record<string, string> = {
 function FlowStrip({
   flow,
   periodKicker,
+  windowToggle,
 }: {
-  flow: ApiOpsFlow;
+  flow: ApiOpsFlow | null | undefined;
   periodKicker: string;
+  windowToggle: React.ReactNode;
 }) {
+  const stages = flow?.stages ?? [];
+  const hasThroughput = stages.some((s) => s.count > 0);
+  const hasGates = (flow?.awaiting_merge ?? 0) + (flow?.stuck_loop ?? 0) > 0;
+  // A quiet window reads all-zero — don't paint a dead row of zeros.
+  // Keep the toggle visible so the operator can widen the window.
+  if (!flow || (!hasThroughput && !hasGates)) {
+    return (
+      <section className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-[11px] font-bold uppercase tracking-[0.22em] text-white/40">
+          Pipeline · no throughput in the last {periodKicker.toLowerCase()}
+        </p>
+        {windowToggle}
+      </section>
+    );
+  }
   return (
-    <section className="space-y-3">
-      <div className="flex flex-wrap items-center gap-3">
-        <h3 className="text-[10px] font-bold uppercase tracking-[0.22em] text-white/40">
-          Pipeline · throughput{" "}
-          <span className="font-mono normal-case tracking-normal text-white/30">
-            ({periodKicker})
-          </span>
-        </h3>
-        <div className="h-px min-w-6 flex-1 bg-white/[0.06]" />
-        {flow.stuck_loop > 0 && (
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-coral/40 bg-coral/10 px-2.5 py-1 text-[11px] font-semibold text-coral">
-            <span aria-hidden>↺</span> {flow.stuck_loop} stuck in dev↔review
-          </span>
-        )}
+    <section className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <h3 className="text-[11px] font-bold uppercase tracking-[0.22em] text-white/45">
+            Pipeline · throughput{" "}
+            <span className="font-mono normal-case tracking-normal text-white/30">
+              ({periodKicker})
+            </span>
+          </h3>
+          {flow.stuck_loop > 0 && (
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-coral/40 bg-coral/10 px-2.5 py-1 text-xs font-semibold text-coral">
+              <span aria-hidden>↺</span> {flow.stuck_loop} stuck in dev↔review
+            </span>
+          )}
+        </div>
+        {windowToggle}
       </div>
-      <ol className="flex items-stretch gap-1 overflow-x-auto pb-1">
-        {flow.stages.map((stage, idx) => {
+      <ol className="flex flex-col items-stretch gap-2 sm:flex-row">
+        {stages.map((stage, idx) => {
           const isGate = stage.stage === "auto_merge";
           return (
-            <li key={stage.stage} className="flex items-stretch">
+            <li
+              key={stage.stage}
+              className="flex flex-1 items-stretch"
+            >
               <FlowNode
                 label={FLOW_STAGE_LABEL[stage.stage] ?? stage.stage}
                 count={stage.count}
                 isGate={isGate}
                 gateCount={isGate ? flow.awaiting_merge : 0}
               />
-              {idx < flow.stages.length - 1 && (
+              {idx < stages.length - 1 && (
                 <span
                   aria-hidden
-                  className="flex items-center px-1 text-white/20"
+                  className="hidden items-center px-2 text-lg text-white/20 sm:flex"
                 >
                   →
                 </span>
@@ -244,7 +266,7 @@ function FlowNode({
   return (
     <div
       className={cn(
-        "flex min-w-[112px] flex-col justify-between rounded-lg border px-3 py-2.5 transition",
+        "flex flex-1 flex-col justify-between rounded-xl border px-4 py-4 transition",
         gateHot
           ? "border-sun/50 bg-sun/[0.08]"
           : "border-white/[0.08] bg-white/[0.02]",
@@ -252,25 +274,25 @@ function FlowNode({
     >
       <p
         className={cn(
-          "text-[10px] font-bold uppercase tracking-[0.16em]",
-          gateHot ? "text-sun" : "text-white/45",
+          "text-xs font-bold uppercase tracking-[0.16em]",
+          gateHot ? "text-sun" : "text-white/50",
         )}
       >
         {label}
       </p>
-      <p className="mt-1.5 flex items-baseline gap-1.5">
+      <p className="mt-3 flex items-baseline gap-2">
         <span
           className={cn(
-            "font-display text-2xl font-bold leading-none",
-            count > 0 ? "text-white" : "text-white/30",
+            "font-display text-4xl font-bold leading-none",
+            count > 0 ? "text-white" : "text-white/25",
           )}
         >
           {count}
         </span>
-        <span className="text-[10px] text-white/35">done</span>
+        <span className="text-xs text-white/35">done</span>
       </p>
       {gateHot && (
-        <p className="mt-1.5 text-[11px] font-semibold text-sun">
+        <p className="mt-2 text-xs font-semibold text-sun">
           {gateCount} awaiting you
         </p>
       )}
@@ -301,38 +323,33 @@ function OpsWindowSegment({
     all: "All",
   };
   return (
-    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-      <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-white/40">
-        Workspace ops · UTC window
-      </p>
-      <nav
-        className="inline-flex rounded-full border border-white/10 bg-white/[0.03] p-1 text-xs font-semibold"
-        aria-label="Ops dashboard period"
-      >
-        {OPS_REPORT_WINDOWS.map((w) => {
-          const active = w === current;
-          const p = new URLSearchParams();
-          p.set("window", w);
-          if (multiWs) p.set("ws", workspaceId);
-          if (skipWizard) p.set("skipWizard", "1");
-          const href = `/?${p.toString()}`;
-          return (
-            <Link
-              key={w}
-              href={href}
-              aria-current={active ? "page" : undefined}
-              className={
-                active
-                  ? "rounded-full bg-white/15 px-3 py-1.5 text-white"
-                  : "rounded-full px-3 py-1.5 text-white/60 transition hover:text-white"
-              }
-            >
-              {labels[w]}
-            </Link>
-          );
-        })}
-      </nav>
-    </div>
+    <nav
+      className="inline-flex rounded-full border border-white/10 bg-white/[0.03] p-1 text-xs font-semibold"
+      aria-label="Ops dashboard period (UTC)"
+    >
+      {OPS_REPORT_WINDOWS.map((w) => {
+        const active = w === current;
+        const p = new URLSearchParams();
+        p.set("window", w);
+        if (multiWs) p.set("ws", workspaceId);
+        if (skipWizard) p.set("skipWizard", "1");
+        const href = `/?${p.toString()}`;
+        return (
+          <Link
+            key={w}
+            href={href}
+            aria-current={active ? "page" : undefined}
+            className={
+              active
+                ? "rounded-full bg-white/15 px-3 py-1.5 text-white"
+                : "rounded-full px-3 py-1.5 text-white/60 transition hover:text-white"
+            }
+          >
+            {labels[w]}
+          </Link>
+        );
+      })}
+    </nav>
   );
 }
 
@@ -532,12 +549,12 @@ function AwaitingYouColumn({
   const nothing = total === 0;
 
   return (
-    <div className="space-y-6">
-      <header className="space-y-1.5">
-        <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-sun/80">
+    <div className="space-y-7">
+      <header className="space-y-2">
+        <p className="text-[11px] font-bold uppercase tracking-[0.22em] text-sun/80">
           Awaiting you
         </p>
-        <h2 className="font-display text-xl font-bold leading-tight text-white">
+        <h2 className="font-display text-2xl font-bold leading-tight text-white">
           {nothing
             ? "Nothing on your plate."
             : `${total} thing${total === 1 ? "" : "s"} need${total === 1 ? "s" : ""} you.`}
@@ -545,7 +562,7 @@ function AwaitingYouColumn({
       </header>
 
       {nothing && (
-        <p className="text-sm italic text-white/45">
+        <p className="text-[15px] italic leading-relaxed text-white/45">
           No decisions, no PRs at the merge gate, no parked projects.
           The pipeline is running itself.
         </p>
@@ -598,7 +615,7 @@ function AwaitingYouColumn({
       {parkedCount > 0 && (
         <div className="space-y-2.5">
           <GateHeading label="Parked" count={parkedCount} tone="white" />
-          <p className="text-[13px] text-white/60">
+          <p className="text-[15px] leading-relaxed text-white/60">
             {parkedCount} project{parkedCount === 1 ? "" : "s"} on hold —
             promote {parkedCount === 1 ? "it" : "them"} in the queue to let
             the agent pick {parkedCount === 1 ? "it" : "them"} up.
@@ -629,7 +646,7 @@ function GateHeading({
     <div className="flex items-center gap-3">
       <h3
         className={cn(
-          "text-[10px] font-bold uppercase tracking-[0.22em]",
+          "text-[11px] font-bold uppercase tracking-[0.22em]",
           toneClass,
         )}
       >
@@ -671,9 +688,9 @@ function ShippedColumn({
   const total = featuresCount + fixesCount + rollbacksCount;
   const analyticsHref = `/analytics?ws=${encodeURIComponent(workspaceId)}`;
   return (
-    <div className="space-y-3">
+    <div className="space-y-3.5">
       <div className="flex items-center gap-3">
-        <h3 className="text-[10px] font-bold uppercase tracking-[0.22em] text-aqua/75">
+        <h3 className="text-[11px] font-bold uppercase tracking-[0.22em] text-aqua/75">
           Shipped{" "}
           <span className="font-mono normal-case tracking-normal text-white/30">
             ({periodKicker})
@@ -683,13 +700,13 @@ function ShippedColumn({
       </div>
 
       {total === 0 ? (
-        <p className="text-sm italic text-white/45">
+        <p className="text-[15px] italic text-white/45">
           Nothing merged in this window.
         </p>
       ) : (
         <>
-          <p className="text-[13px] text-white/60">
-            <span className="font-display text-lg font-bold text-aqua">
+          <p className="text-[15px] text-white/60">
+            <span className="font-display text-xl font-bold text-aqua">
               {total}
             </span>{" "}
             merged
@@ -705,7 +722,7 @@ function ShippedColumn({
             ))}
           </ul>
           {total > items.slice(0, 8).length && (
-            <p className="text-[11px]">
+            <p className="text-xs">
               <Link
                 href={analyticsHref}
                 className="font-semibold text-white/55 hover:text-white"
@@ -723,8 +740,8 @@ function ShippedColumn({
 
 function ShippedRow({ item }: { item: ApiOpsShippedItem }) {
   const inner = (
-    <div className="py-2.5">
-      <p className="flex items-center gap-2 text-[10px] uppercase tracking-[0.16em] text-white/45">
+    <div className="py-3">
+      <p className="flex items-center gap-2 text-[11px] uppercase tracking-[0.16em] text-white/45">
         <span className={SHIPPED_TONE[item.type]}>{item.type}</span>
         {item.repo && (
           <>
@@ -735,7 +752,7 @@ function ShippedRow({ item }: { item: ApiOpsShippedItem }) {
           </>
         )}
       </p>
-      <p className="mt-0.5 truncate text-[13px] text-white/85">{item.name}</p>
+      <p className="mt-1 truncate text-[14px] text-white/85">{item.name}</p>
     </div>
   );
   if (item.href) {
@@ -765,7 +782,7 @@ function DecisionRow({
   return (
     <Link
       href={href}
-      className="group relative flex items-baseline justify-between gap-4 py-3 pl-4 transition hover:bg-white/[0.025]"
+      className="group relative flex items-baseline justify-between gap-4 py-3.5 pl-4 transition hover:bg-white/[0.025]"
     >
       <span
         aria-hidden
@@ -776,7 +793,7 @@ function DecisionRow({
         )}
       />
       <div className="min-w-0 flex-1">
-        <p className="flex items-center gap-2 text-[10px] uppercase tracking-[0.16em] text-white/45">
+        <p className="flex items-center gap-2 text-[11px] uppercase tracking-[0.16em] text-white/45">
           <span>{item.type}</span>
           {item.summary && (
             <>
@@ -787,11 +804,11 @@ function DecisionRow({
             </>
           )}
         </p>
-        <p className="mt-1 truncate text-[15px] font-semibold text-white">
+        <p className="mt-1 truncate text-base font-semibold text-white">
           {item.title}
         </p>
       </div>
-      <span className="shrink-0 text-[11px] font-semibold uppercase tracking-wide text-aqua opacity-0 transition group-hover:opacity-100">
+      <span className="shrink-0 text-xs font-semibold uppercase tracking-wide text-aqua opacity-0 transition group-hover:opacity-100">
         {canonicalActionLabel(item.type)}
       </span>
     </Link>
@@ -814,10 +831,10 @@ function ReadyToMergeRow({ pr }: { pr: ReadyToMergePr }) {
       href={pr.href}
       target="_blank"
       rel="noreferrer"
-      className="group flex items-baseline justify-between gap-4 py-3 transition hover:bg-white/[0.025]"
+      className="group flex items-baseline justify-between gap-4 py-3.5 transition hover:bg-white/[0.025]"
     >
       <div className="min-w-0">
-        <p className="flex items-center gap-2 text-[10px] uppercase tracking-[0.16em] text-white/45">
+        <p className="flex items-center gap-2 text-[11px] uppercase tracking-[0.16em] text-white/45">
           <span className="font-mono text-aqua/85">#{pr.number}</span>
           {pr.ticketRef && (
             <>
@@ -832,11 +849,11 @@ function ReadyToMergeRow({ pr }: { pr: ReadyToMergePr }) {
             </>
           )}
         </p>
-        <p className="mt-1 truncate text-[15px] font-semibold text-white">
+        <p className="mt-1 truncate text-base font-semibold text-white">
           {pr.title}
         </p>
       </div>
-      <span className="shrink-0 text-[11px] font-semibold uppercase tracking-wide text-aqua opacity-0 transition group-hover:opacity-100">
+      <span className="shrink-0 text-xs font-semibold uppercase tracking-wide text-aqua opacity-0 transition group-hover:opacity-100">
         Merge
       </span>
     </a>

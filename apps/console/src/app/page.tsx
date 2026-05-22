@@ -92,7 +92,7 @@ export default async function CloudHomePage({
   }
 
   const skipWizard = params.skipWizard === "1";
-  const opsWindow = parseOpsReportWindow(params.window);
+  const opsWindow = parseOpsReportWindow(params.window, "7d");
 
   let list: ApiWorkspace[];
   try {
