@@ -543,7 +543,19 @@ async def _scan_one_workspace(
                     )
                 ).scalar_one_or_none()
                 if last_finish_outcome == "needs_clarification":
-                    continue
+                    # Honour the park only while the operator hasn't
+                    # answered. The guard keys off the *audit* outcome,
+                    # which is frozen at needs_clarification forever — but
+                    # once the operator answers (inbox /decide strips the
+                    # ``needs:clarification`` label, or an operator strips
+                    # it by hand) the ticket must resume, not sit parked
+                    # on the stale outcome. Re-fire when the live label is
+                    # gone. askslayer/visitor-back 2026-05-24: 13 PAC
+                    # code_review tickets answered days ago stayed frozen
+                    # because the scan only looked at the audit outcome.
+                    row_labels = row.get("labels") or []
+                    if "needs:clarification" in row_labels:
+                        continue
 
                 if await _looks_like_runner_fail_loop(
                     session, install.workspace_id, ref
