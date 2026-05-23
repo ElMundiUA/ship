@@ -551,3 +551,14 @@ def test_bundle_supports_ship_run_id_gates_on_037() -> None:
     assert bundle_version_tuple("0.36") == (0, 36)
     assert bundle_version_tuple("1.2.3") == (1, 2, 3)
     assert bundle_version_tuple(None) == ()
+
+
+def test_bundle_supports_file_overlap_warnings_gates_on_038() -> None:
+    from backend.app.services.seed_bundle import (
+        bundle_supports_file_overlap_warnings,
+    )
+
+    assert bundle_supports_file_overlap_warnings("0.38") is True
+    assert bundle_supports_file_overlap_warnings("0.39") is True
+    assert bundle_supports_file_overlap_warnings("0.37") is False
+    assert bundle_supports_file_overlap_warnings(None) is False

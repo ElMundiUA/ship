@@ -25,3 +25,24 @@ test("renderPrompt prepends file_coordination_warning before routine instruction
   assert.ok(idxRoutine >= 0);
   assert.ok(idxWarn < idxRoutine, "warning must precede routine instructions");
 });
+
+test("renderPrompt prefers FILE_OVERLAP_WARNINGS env over task field", () => {
+  const envWarning = "## File overlap warnings (advisory)\n\nHard migration conflict on 0074.";
+  const out = renderPrompt({
+    patternBody: "Do work on {{ISSUE}}.",
+    baseBody: "",
+    role: "developer",
+    routineSpec: { prompt: "Routine body here." },
+    task: {
+      ticket_ref: "ELS-3",
+      title: "Task",
+      body: "Desc",
+      file_coordination_warning: "> stale task warning",
+    },
+    fsmStage: "dev_implementation",
+    fileOverlapWarnings: envWarning,
+    finishCtx: { process: "development" },
+  });
+  assert.ok(out.includes("0074"));
+  assert.ok(!out.includes("stale task warning"));
+});

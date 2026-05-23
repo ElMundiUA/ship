@@ -84,6 +84,7 @@ from backend.app.services.linear_provisioner import (
 )
 from backend.app.services.file_overlap import (
     build_file_coordination_warning,
+    file_overlap_warnings_active,
     load_file_coordination_warning_from_audit,
 )
 from backend.app.services.file_overlap_telemetry import evaluate_file_overlap_honour
@@ -1158,7 +1159,15 @@ async def get_next_task(
     if file_coordination_warning is None and not is_anchor_pick:
         settings = get_settings()
         pick_project_id = pick.get("project_id")
-        if settings.enable_file_overlap_warnings and pick_project_id:
+        ws_settings_row = (
+            await session.execute(
+                select(Workspace.settings).where(Workspace.id == workspace_id)
+            )
+        ).scalar_one_or_none()
+        if (
+            file_overlap_warnings_active(settings, ws_settings_row)
+            and pick_project_id
+        ):
             snapshot_fn = getattr(resolved.gateway, "get_ticket_snapshot", None)
             overlap = await build_file_coordination_warning(
                 session,

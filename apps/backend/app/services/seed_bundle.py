@@ -225,7 +225,9 @@ from backend.app.services.tracker_fsm import (
 #         resolution against the server-side agent-role registry.
 # ``0.37`` → ``ship-agent-run.yml`` adds optional ``ship_run_id`` dispatch
 #         input for ELS-156 file-overlap honour telemetry correlation.
-BUNDLE_VERSION: str = "0.37"
+# ``0.38`` → ``ship-agent-run.yml`` adds optional ``file_overlap_warnings``
+#         dispatch input for ELS-155 dev-dispatch prompt injection.
+BUNDLE_VERSION: str = "0.38"
 
 # First bundle whose ``ship-agent-run.yml`` declares the ``ship_run_id``
 # ``workflow_dispatch`` input. The E16 cron dispatcher must NOT send this
@@ -237,6 +239,7 @@ BUNDLE_VERSION: str = "0.37"
 # old bundles degrades gracefully; the customer regains it on bundle
 # update.
 SHIP_RUN_ID_MIN_BUNDLE: str = "0.37"
+FILE_OVERLAP_WARNINGS_MIN_BUNDLE: str = "0.38"
 
 
 def bundle_version_tuple(value: str | None) -> tuple[int, ...]:
@@ -261,6 +264,15 @@ def bundle_supports_ship_run_id(installed: str | None) -> bool:
         return False
     return bundle_version_tuple(installed) >= bundle_version_tuple(
         SHIP_RUN_ID_MIN_BUNDLE
+    )
+
+
+def bundle_supports_file_overlap_warnings(installed: str | None) -> bool:
+    """True when the repo's installed bundle declares ``file_overlap_warnings``."""
+    if not installed:
+        return False
+    return bundle_version_tuple(installed) >= bundle_version_tuple(
+        FILE_OVERLAP_WARNINGS_MIN_BUNDLE
     )
 
 # Default knowledge starters for PR 1. Empty by design: generated knowledge is

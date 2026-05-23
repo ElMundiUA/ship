@@ -674,7 +674,7 @@ async def test_file_overlap_warning_attached_on_dev_dispatch(
         html_url="https://github.com/acme/ship",
         # Current bundle so the dispatcher includes ``ship_run_id``;
         # the gate omits it for pre-0.37 repos (see askslayer 422 fix).
-        installed_bundle_version="0.37",
+        installed_bundle_version="0.38",
         activated_at=datetime.now(timezone.utc),
     )
     db_session.add(repo)
@@ -749,6 +749,9 @@ async def test_file_overlap_warning_attached_on_dev_dispatch(
     dispatch_run_id = dispatch_row.payload.get("run_id")
     assert dispatch_run_id and str(dispatch_run_id).startswith("run_")
     assert captured_inputs.get("ship_run_id") == dispatch_run_id
+    assert "File-coordination warning" in (
+        captured_inputs.get("file_overlap_warnings") or ""
+    )
     overlap_row = (
         await db_session.execute(
             select(AuditLog).where(
@@ -772,6 +775,215 @@ async def test_file_overlap_warning_attached_on_dev_dispatch(
     assert telemetry_payload.get("run_id") == dispatch_run_id
     assert telemetry_payload.get("overlap_kind") == "schema"
     assert telemetry_payload.get("conflicted_paths")
+
+
+# ---------------------------------------------------------------------------
+# Dev file-overlap workflow input (ELS-155)
+# ---------------------------------------------------------------------------
+
+
+async def _make_overlap_workspace(
+    db_session,
+    *,
+    overlap_enabled: bool,
+) -> tuple[uuid.UUID, str]:
+    from backend.app.db.models.integrations import (
+        GitHubInstallation,
+        WorkspaceRepo,
+    )
+    from backend.app.db.models.tenancy import Org, Workspace
+
+    org = Org(
+        slug=f"t-{uuid.uuid4().hex[:8]}",
+        name="Test org",
+        plan="free",
+    )
+    db_session.add(org)
+    await db_session.flush()
+    settings = (
+        {"dev_file_overlap_warnings_enabled": True}
+        if overlap_enabled
+        else {}
+    )
+    workspace = Workspace(
+        org_id=org.id,
+        slug=f"t-{uuid.uuid4().hex[:8]}",
+        name="Test ws",
+        settings=settings,
+        max_concurrent_dispatches=10,
+    )
+    db_session.add(workspace)
+    await db_session.flush()
+    install = GitHubInstallation(
+        workspace_id=workspace.id,
+        installation_id=int(uuid.uuid4().int % 900_000) + 100_000,
+        account_login="acme",
+        account_type="Organization",
+        repository_selection="selected",
+        installed_at=datetime.now(timezone.utc),
+    )
+    db_session.add(install)
+    await db_session.flush()
+    repo = WorkspaceRepo(
+        workspace_id=workspace.id,
+        installation_id=install.id,
+        provider="github",
+        external_id=30_032_001,
+        full_name="acme/ship",
+        default_branch="main",
+        private=False,
+        html_url="https://github.com/acme/ship",
+        description=None,
+        installed_bundle_version="0.38",
+        activated_at=datetime.now(timezone.utc),
+        preset="web-app",
+    )
+    db_session.add(repo)
+    await db_session.flush()
+    return workspace.id, str(uuid.uuid4())
+
+
+@pytest.mark.asyncio
+async def test_dev_overlap_flag_off_omits_workflow_input(
+    db_session, monkeypatch
+) -> None:
+    from backend.app.integrations.gateway.tracker import TicketRef
+    from backend.app.services import tracker_resolver as tracker_resolver_module
+
+    ws, project_id = await _make_overlap_workspace(
+        db_session, overlap_enabled=False
+    )
+    captured: dict = {}
+
+    async def _dispatch(*_args, **kwargs):
+        captured.update(kwargs.get("inputs") or {})
+
+    monkeypatch.setattr(dispatcher, "dispatch_workflow", _dispatch)
+    monkeypatch.setattr(
+        dispatcher.get_settings(),
+        "tracker_poll_fire",
+        True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        dispatcher.get_settings(),
+        "enable_file_overlap_warnings",
+        False,
+        raising=False,
+    )
+
+    async def _no_overlap(*_a, **_k):
+        raise AssertionError("build_file_coordination_warning must not run")
+
+    monkeypatch.setattr(
+        dispatcher, "build_file_coordination_warning", _no_overlap
+    )
+
+    class _StubGateway:
+        async def get_ticket_snapshot(self, ticket: TicketRef):
+            return {"labels": [], "project_id": project_id}
+
+        async def get_ticket_blockers(self, ticket: TicketRef):
+            return []
+
+    class _Resolved:
+        kind = "linear"
+        gateway = _StubGateway()
+
+    async def _resolve(*_args, **_kwargs):
+        return _Resolved()
+
+    monkeypatch.setattr(
+        tracker_resolver_module, "resolve_for_workspace", _resolve
+    )
+
+    result = await maybe_dispatch(
+        db_session,
+        workspace_id=ws,
+        ticket_ref="ELS-155",
+        trigger_kind="tracker_poll",
+        fsm_stage="dev_implementation",
+    )
+    assert result.fired is True
+    assert "file_overlap_warnings" not in captured
+
+
+@pytest.mark.asyncio
+async def test_dev_overlap_injects_warning_into_dispatch_inputs(
+    db_session, monkeypatch
+) -> None:
+    from backend.app.integrations.gateway.tracker import TicketRef
+    from backend.app.services import tracker_resolver as tracker_resolver_module
+    from backend.app.services.file_overlap import FileOverlapResult
+
+    ws, project_id = await _make_overlap_workspace(
+        db_session, overlap_enabled=True
+    )
+    captured: dict = {}
+
+    async def _dispatch(*_args, **kwargs):
+        captured.update(kwargs.get("inputs") or {})
+
+    monkeypatch.setattr(dispatcher, "dispatch_workflow", _dispatch)
+    monkeypatch.setattr(
+        dispatcher.get_settings(),
+        "tracker_poll_fire",
+        True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        dispatcher.get_settings(),
+        "enable_file_overlap_warnings",
+        False,
+        raising=False,
+    )
+
+    warning_md = "> **File-coordination warning**:\n>\n> migration prefix 0074"
+
+    async def _overlap(*_a, **_k):
+        return FileOverlapResult(
+            warning_markdown=warning_md,
+            file_overlap_warnings=[
+                {
+                    "overlap_kind": "schema",
+                    "paths": ["apps/backend/migrations/versions/0074_x.py"],
+                }
+            ],
+        )
+
+    monkeypatch.setattr(
+        dispatcher, "build_file_coordination_warning", _overlap
+    )
+
+    class _StubGateway:
+        async def get_ticket_snapshot(self, ticket: TicketRef):
+            return {"labels": [], "project_id": project_id}
+
+        async def get_ticket_blockers(self, ticket: TicketRef):
+            return []
+
+    class _Resolved:
+        kind = "linear"
+        gateway = _StubGateway()
+
+    async def _resolve(*_args, **_kwargs):
+        return _Resolved()
+
+    monkeypatch.setattr(
+        tracker_resolver_module, "resolve_for_workspace", _resolve
+    )
+
+    result = await maybe_dispatch(
+        db_session,
+        workspace_id=ws,
+        ticket_ref="ELS-155",
+        trigger_kind="tracker_poll",
+        fsm_stage="dev_implementation",
+    )
+    assert result.fired is True
+    warnings = captured.get("file_overlap_warnings") or ""
+    assert "0074" in warnings
+    assert "File-coordination warning" in warnings
 
 
 # ---------------------------------------------------------------------------

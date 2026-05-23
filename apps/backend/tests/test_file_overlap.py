@@ -106,3 +106,21 @@ def test_hard_overlap_two_siblings_same_path() -> None:
 def test_file_overlap_result_empty() -> None:
     r = FileOverlapResult(warning_markdown=None, file_overlap_warnings=[])
     assert r.warning_markdown is None
+
+
+def test_dev_file_overlap_workspace_flag_default_off() -> None:
+    from backend.app.services.file_overlap import dev_file_overlap_warnings_enabled
+
+    assert dev_file_overlap_warnings_enabled({}) is False
+    assert dev_file_overlap_warnings_enabled(None) is False
+
+
+def test_dev_file_overlap_workspace_flag_on() -> None:
+    from backend.app.core.config import Settings
+    from backend.app.services.file_overlap import file_overlap_warnings_active
+
+    settings = Settings()
+    assert file_overlap_warnings_active(
+        settings, {"dev_file_overlap_warnings_enabled": True}
+    )
+    assert not file_overlap_warnings_active(settings, {})

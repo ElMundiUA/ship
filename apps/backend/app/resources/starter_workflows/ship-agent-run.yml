@@ -35,6 +35,11 @@ on:
         required: false
         default: ""
         type: string
+      file_overlap_warnings:
+        description: "Advisory markdown when sibling open PRs touch overlapping paths (dev dispatch only)."
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: write
@@ -104,6 +109,7 @@ jobs:
           ROUTINE_ID: ${{ inputs.routine_id }}
           TICKET_REF: ${{ inputs.ticket_ref }}
           SHIP_RUN_ID: ${{ inputs.ship_run_id }}
+          FILE_OVERLAP_WARNINGS: ${{ inputs.file_overlap_warnings }}
         run: |
           set -euo pipefail
           echo "Ship: running routine '${ROUTINE_ID}' pinned to '${TICKET_REF}'"
