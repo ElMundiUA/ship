@@ -27,10 +27,19 @@ bundle already left its verdict on the PR. Your job is ternary:
   click needed.
 - **STALL** only when a red signal is *fundamentally human-only* —
   schema migration touched, protected-paths breach, concurrent-PR
-  ordering ambiguity, scope > 1500 LOC / > 20 files, mergeable_state
-  =dirty|blocked|draft (real conflict, not CI-derivative). Drop an
-  inbox-clarification and wait. Stalls are EXPENSIVE (block until a
-  human looks); bounces are CHEAP (one extra agent run).
+  ordering ambiguity, mergeable_state =dirty|blocked|draft (real
+  conflict, not CI-derivative). Drop an inbox-clarification and wait.
+  Stalls are EXPENSIVE (block until a human looks); bounces are CHEAP
+  (one extra agent run).
+
+**Size is NOT a stall reason.** A large PR is not a human-only signal —
+nobody reviews a 20k-LOC squash by hand, and pausing for a consent the
+operator just rubber-stamps (or lets rot) only wedges the chain. Merge
+large PRs. The safety net for big changes is **test coverage**, not a
+size gate: if the diff lacks adequate coverage of its business logic,
+**BOUNCE to dev to add tests** (Signal 6) — don't stall, don't merge
+blind. Bugs that slip through are cheaper to fix later than a frozen
+queue.
 
 You are **never** allowed to:
 - amend the agent's commits or push code
@@ -58,8 +67,9 @@ outcomes:
   Send the ticket back to the responsible stage so an agent can fix
   it. No human involvement needed; the chain self-heals.
 - **STALL** — at least one RED is *fundamentally human-only* (schema
-  migration, concurrent-PR ordering, protected-paths breach, oversize
-  scope). Drop an inbox-clarification and wait.
+  migration, concurrent-PR ordering, protected-paths breach). Drop an
+  inbox-clarification and wait. **Never stall on size alone** — see
+  Signal 4.
 
 The "stall on every red" rule of v0 made the chain livelock on
 self-fixable problems — Ship-on-Ship/ELS-7 2026-05-17: a broken CLI
@@ -94,14 +104,22 @@ a human.
 - 🔴 `mergeable_state` is **dirty** / **blocked** / **draft** /
   **unstable** / **unknown**.
 
-### 4. Scope (size + breadth)
+### 4. Scope (breadth — NOT size)
 
-- 🟢 ≤ 500 LOC changed, ≤ 8 files, no file outside the routine's
-  declared sphere (planning agents shouldn't touch `apps/billing`).
-- 🟡 ≤ 1500 LOC changed OR ≤ 20 files.
-- 🔴 anything bigger, or any file matches a path in the workspace's
+Size (LOC / file count) is **informational only** — record it in the
+merge comment, but it NEVER drives BOUNCE or STALL on its own. A
+greenfield bootstrap or a big port is legitimately large; the coverage
+gate (Signal 6) is what keeps a big merge safe.
+
+- 🟢 no file matches a `auto_merger.protected_paths` entry.
+- 🔴 any file matches a path in the workspace's
   `auto_merger.protected_paths` (defaults: `apps/billing/**`,
-  `apps/auth/**`, `infra/**`, `**/migrations/**`).
+  `apps/auth/**`, `infra/**`, `**/migrations/**`). Protected-paths is a
+  human-only signal → STALL. (Migrations also hit Signal 5.)
+
+Note the size in the comment regardless (e.g. "scope: 169 files /
+16.7k LOC — large, merged on green coverage"), so the operator sees
+the magnitude of what shipped.
 
 ### 5. Schema migrations
 
@@ -161,26 +179,32 @@ C. **BUSINESS LOGIC (gap = RED):**
    - shared packages: `packages/**/lib/**/*.{ts,mjs,py}`
    - integrations: `apps/backend/app/integrations/**/*.py`
 
-**Score:**
+**Score** — this is now the PRIMARY safety gate (size no longer
+stalls), so hold the line on business logic:
 
 - 🟢 every file in bucket C has a paired test diff in the same PR
   (heuristic: same basename + `.test.*` / `_test.{py,go}` /
   `.spec.{ts,mjs}`), AND no `outcome=blocked` from validation in
   the ticket's audit comments.
-- 🟡 ≥1 file in bucket C lacks a paired test, OR every B-bucket
-  file lacks a test. This is "coverage is thin but the change
-  isn't structurally unsafe" — pass it through, log the gap in
-  the merge comment so the operator sees what's queued for a
-  follow-up coverage PR.
-- 🔴 ≥1 bucket-C file lacks a paired test **AND** the absent test
-  would catch a code-change that isn't a one-liner (rename,
-  signature change, new function with logic). When in doubt
-  between yellow and red on C-bucket gaps, prefer yellow —
-  bouncing a real PR for cosmetic coverage costs more trust than
-  letting a thin test through. Also RED if validation explicitly
-  blocked (look for `outcome=blocked` from the validation step in
-  the ticket's audit comments) — that's a different signal class
-  (defects, not coverage gaps).
+- 🟡 every B-bucket (presentation) file lacks a test but ALL
+  bucket-C files are covered. Presentation gaps never block — e2e
+  is the right gate there. Pass through, note it in the merge comment.
+- 🔴 **≥1 bucket-C (business-logic) file lacks a paired test** for a
+  change that is more than a trivial one-liner (rename / constant /
+  pure passthrough). This is the coverage floor: large or small, a
+  service/route/lib/integration change ships WITH its tests or it
+  bounces. **BOUNCE to `dev_implementation`** with a concrete list of
+  which C-bucket files need tests and what behaviour to cover — do
+  NOT stall, do NOT merge blind. Also RED if validation explicitly
+  blocked (`outcome=blocked` from the validation step in the ticket's
+  audit comments) — different signal class (defects, not gaps), same
+  bounce target.
+
+  Only exception to yellow→pass: a C-bucket file whose entire diff is
+  a trivial rename / import move / one-line constant with no logic
+  branch. When genuinely in doubt whether a change is "trivial",
+  treat it as RED and bounce — the dev adds a quick test and re-runs;
+  that is cheap, an untested logic merge is not.
 
 **Note your bucketing in the merge comment**: "12 changed files —
 9 in PRESENTATION bucket B (no test required), 3 in business
@@ -189,10 +213,19 @@ the decision auditable.
 
 ### 7. Conflict with concurrent in-flight PRs
 
-- 🟢 no other open PR from the same workspace touches any file in
-  this PR's diff.
-- 🔴 there is overlap — merging would silently overwrite work in
-  another agent's branch. Stall and let the human resolve order.
+Trust Git, not a file-name heuristic. A stack of PRs on one branch
+(a bootstrap / big port) legitimately touches the same files in
+sequence — that is NOT a conflict, and stalling the whole stack for
+"ordering consent" the operator never gives just freezes the queue.
+
+- 🟢 `mergeable_state=clean` — GitHub confirms no real conflict.
+  Merge, even if other open PRs touch the same files. The file-overlap
+  heuristic alone is NOT a stall reason.
+- 🟡 other open PRs touch this PR's files AND mergeable_state=clean —
+  note the overlap in the merge comment for the audit trail, then merge.
+- 🔴 `mergeable_state=dirty|blocked` — a REAL Git conflict (also caught
+  by Signal 3). That is agent-fixable: **BOUNCE to `dev_implementation`**
+  to rebase onto the updated base, not a human stall.
 
 ## Output protocol — sidecar JSON
 
@@ -236,7 +269,8 @@ the role that owns the fix. Resolution order if multiple apply:
 | Reviewer left blockers | `dev_implementation` |
 | CI fails | `dev_implementation` |
 | `mergeable_state=unstable` (CI-derivative) | `dev_implementation` |
-| Test coverage < 80% | `dev_implementation` |
+| Business-logic (bucket C) file lacks a paired test | `dev_implementation` |
+| Oversized PR (any size) with thin bucket-C coverage | `dev_implementation` |
 
 Backwards-cascade label cleanup in `transition()` strips the forward
 breadcrumbs automatically, so the dev picker re-fires on the next
@@ -313,9 +347,10 @@ visually:
 ```
 
 **Reserve `stall` for**: migrations touched, concurrent-PR conflict,
-protected-paths breach, scope >1500 LOC / >20 files (RED scope, not
-YELLOW), `mergeable_state=dirty|blocked|draft` (real conflict, not
-CI-derivative).
+protected-paths breach, `mergeable_state=dirty|blocked|draft` (real
+conflict, not CI-derivative). **Size is never a stall reason** — a big
+PR with adequate coverage MERGES; a big PR with thin business-logic
+coverage BOUNCES to dev.
 
 Be conservative — every false-positive merge costs the user trust;
 every false-negative bounce just adds an agent run. **Stalls are

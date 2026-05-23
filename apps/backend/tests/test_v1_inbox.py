@@ -1314,3 +1314,80 @@ async def test_binary_decide_duplicate_detected_from_events_not_payload(
     )
     assert second.status_code == 200, second.text
     assert second.json()["status"] == "resolved"
+
+
+@pytest.mark.asyncio
+async def test_decide_redispatches_paused_fsm_stage(
+    v1_client, seed_workspace, db_session, monkeypatch
+):
+    """Answering a clarification that PAUSED an SDLC stage re-arms that
+    stage immediately (auto-merger consent stall would otherwise sit
+    until a cron tick happened to re-pick it). See askslayer PAC-* —
+    operator answered, but the merge never re-fired."""
+    import backend.app.services.dispatcher as dispatcher_mod
+
+    user, raw, ws = seed_workspace
+    calls: list[dict] = []
+
+    async def _fake_dispatch(
+        session, *, workspace_id, ticket_ref, trigger_kind,
+        fsm_stage=None, settings=None, client=None,
+    ):
+        calls.append(
+            {
+                "ticket_ref": ticket_ref,
+                "fsm_stage": fsm_stage,
+                "trigger_kind": trigger_kind,
+            }
+        )
+        return None
+
+    monkeypatch.setattr(dispatcher_mod, "maybe_dispatch", _fake_dispatch)
+
+    # 1. A clarification carrying an fsm_stage → re-dispatch fires.
+    paused = await _make_item(
+        db_session,
+        ws,
+        type="clarification",
+        owner_user_id=user.id,
+        payload={
+            "fsm_stage": "auto_merge",
+            "ticket_ref": "PAC-21",
+            "action_items": [
+                {"id": "q1-yes", "kind": "choice", "label": "yes-merge"}
+            ],
+            "resolution_mode": "single_choice",
+        },
+    )
+    resp = await v1_client.post(
+        f"/v1/workspaces/{ws.id}/inbox/{paused.id}/decide",
+        headers=_auth(raw),
+        json={"selections": ["q1-yes"]},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "resolved"
+    assert len(calls) == 1
+    assert calls[0]["ticket_ref"] == "PAC-21"
+    assert calls[0]["fsm_stage"] == "auto_merge"
+
+    # 2. A clarification WITHOUT an fsm_stage → no re-dispatch.
+    plain = await _make_item(
+        db_session,
+        ws,
+        type="clarification",
+        owner_user_id=user.id,
+        payload={
+            "ticket_ref": "PAC-99",
+            "action_items": [
+                {"id": "q1-ok", "kind": "choice", "label": "ok"}
+            ],
+            "resolution_mode": "single_choice",
+        },
+    )
+    resp2 = await v1_client.post(
+        f"/v1/workspaces/{ws.id}/inbox/{plain.id}/decide",
+        headers=_auth(raw),
+        json={"selections": ["q1-ok"]},
+    )
+    assert resp2.status_code == 200, resp2.text
+    assert len(calls) == 1  # unchanged — no fsm_stage, no re-dispatch

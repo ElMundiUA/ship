@@ -1716,6 +1716,55 @@ async def post_decide(
         else:
             side_effects.append({"kind": "freeform", "result": "stored_only"})
 
+    # FSM re-arm. When the operator answers a clarification that PAUSED
+    # an SDLC stage (auto-merger stall, reviewer question, …), stripping
+    # ``needs:clarification`` alone only makes the ticket *eligible* for
+    # the next cron pick — it doesn't fire the stage. Historically the
+    # answer then sat until a tick happened to re-pick it (and, pre the
+    # auto-merger size-gate change, the stage would re-stall on the same
+    # signal). Proactively re-dispatch the paused stage so the operator's
+    # answer takes effect now. ``maybe_dispatch`` resolves the repo by
+    # project + honours the WIP locks, so a busy project just no-ops and
+    # the picker retries. Best-effort — a dispatch failure must never
+    # block the resolve.
+    fsm_stage_paused = (
+        (item.payload or {}).get("fsm_stage")
+        if isinstance(item.payload, dict)
+        else None
+    )
+    if fsm_stage_paused and source_ticket_ref:
+        try:
+            from backend.app.services.dispatcher import (
+                maybe_dispatch as _maybe_dispatch,
+            )
+
+            await _maybe_dispatch(
+                session,
+                workspace_id=workspace_id,
+                ticket_ref=source_ticket_ref,
+                trigger_kind="clarification_answer",
+                fsm_stage=str(fsm_stage_paused),
+                settings=_gs(),
+            )
+            side_effects.append(
+                {
+                    "kind": "redispatch",
+                    "result": "fired",
+                    "fsm_stage": str(fsm_stage_paused),
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 — never block the resolve
+            logger.warning(
+                "inbox.decide re-dispatch failed item=%s ticket=%s stage=%s: %s",
+                item.id,
+                source_ticket_ref,
+                fsm_stage_paused,
+                exc,
+            )
+            side_effects.append(
+                {"kind": "redispatch", "result": "error", "error": str(exc)[:200]}
+            )
+
     # Mark resolved. Resolution value derives from item type so existing
     # consumers (status filter, badge color) keep working.
     resolution = "answered"
