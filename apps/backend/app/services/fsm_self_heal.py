@@ -32,7 +32,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Final
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.config import get_settings
@@ -41,6 +41,7 @@ from backend.app.db.models.integrations import (
     NativeIntegrationInstallation,
     NativeIntegrationProvider,
     NativeIntegrationStatus,
+    WorkspaceRepo,
 )
 from backend.app.db.models.tenancy import AuditLog, Integration
 from backend.app.db.session import get_sessionmaker
@@ -588,43 +589,81 @@ async def _looks_like_workspace_runner_fail(
     session: AsyncSession,
     workspace_id,
 ) -> bool:
-    """Detect a workspace-wide runner death (billing block, org Actions
-    disabled, revoked secret) vs a single stuck ticket.
+    """Detect a TRUE workspace-wide runner death (billing block, org
+    Actions disabled, revoked secret affecting every repo) vs one dead
+    repo beside healthy/idle ones.
 
-    Signal: in ``RUNNER_FAIL_WINDOW``, at least
-    ``WORKSPACE_RUNNER_FAIL_ROLLUP_THRESHOLD`` *distinct* ticket
-    dispatches landed (scheduled routines excluded) and **zero**
-    ``agent_run.finish`` rows of any kind — every run died before it
-    could report. A healthy-but-idle workspace still finishes its
-    self-heal / digest ticks, so finishes>0 there; only a preflight-
-    level kill drives finishes to zero while dispatches keep firing."""
+    Per-repo signal: a repo is "dead" when, in ``RUNNER_FAIL_WINDOW``, it
+    dispatched ≥ ``WORKSPACE_RUNNER_FAIL_ROLLUP_THRESHOLD`` *distinct*
+    tickets (scheduled routines excluded) and **none** of those tickets
+    produced an ``agent_run.finish``. The workspace is only treated as a
+    full kill — and the per-ticket scan skipped — when EVERY activated
+    repo is dead.
+
+    Why per-repo: the old workspace-wide test paused self-heal for the
+    *whole* workspace the moment any one repo racked up failing
+    dispatches. askslayer/visitor-web + visitor-mob were missing
+    ``CURSOR_API_KEY`` (every run exited 7 before finish), which tripped
+    the rollup and froze visitor-back's healthy code_review queue for a
+    day (2026-05-24). A single dead repo must stay repo-local — its
+    tickets get the per-ticket ``runner_fail_loop`` path — while the
+    healthy/idle repos keep self-healing."""
     cutoff = datetime.now(timezone.utc) - RUNNER_FAIL_WINDOW
-    finishes = (
+    disp_rows = (
         await session.execute(
-            select(AuditLog.id).where(
-                AuditLog.workspace_id == workspace_id,
-                AuditLog.action == "agent_run.finish",
-                AuditLog.created_at >= cutoff,
-            ).limit(1)
-        )
-    ).first()
-    if finishes is not None:
-        return False  # something finished → not a workspace-wide kill
-    dispatched_targets = (
-        await session.execute(
-            select(AuditLog.target_id).where(
+            select(
+                AuditLog.payload["repo"].astext.label("repo"),
+                AuditLog.target_id,
+            ).where(
                 AuditLog.workspace_id == workspace_id,
                 AuditLog.action == "agent_run.dispatch",
                 AuditLog.created_at >= cutoff,
                 AuditLog.target_id.isnot(None),
-            ).distinct()
+            )
         )
-    ).scalars().all()
-    distinct_tickets = {
-        t for t in dispatched_targets
-        if t and t not in _SCHEDULED_ROUTINE_TARGETS
+    ).all()
+    tickets_by_repo: dict[str, set[str]] = {}
+    for repo, target in disp_rows:
+        if not repo or not target or target in _SCHEDULED_ROUTINE_TARGETS:
+            continue
+        tickets_by_repo.setdefault(repo, set()).add(target)
+    if not tickets_by_repo:
+        return False
+    finished_tickets = {
+        r[0]
+        for r in (
+            await session.execute(
+                select(AuditLog.payload["ticket_ref"].astext).where(
+                    AuditLog.workspace_id == workspace_id,
+                    AuditLog.action == "agent_run.finish",
+                    AuditLog.created_at >= cutoff,
+                )
+            )
+        ).all()
+        if r[0]
     }
-    return len(distinct_tickets) >= WORKSPACE_RUNNER_FAIL_ROLLUP_THRESHOLD
+    dead_repos = {
+        repo
+        for repo, tix in tickets_by_repo.items()
+        if len(tix) >= WORKSPACE_RUNNER_FAIL_ROLLUP_THRESHOLD
+        and not (tix & finished_tickets)
+    }
+    if not dead_repos:
+        return False
+    activated_repos = (
+        await session.execute(
+            select(func.count())
+            .select_from(WorkspaceRepo)
+            .where(
+                WorkspaceRepo.workspace_id == workspace_id,
+                WorkspaceRepo.activated_at.isnot(None),
+            )
+        )
+    ).scalar() or 0
+    # Full kill only when every activated repo is dead. One dead repo
+    # beside a healthy/idle one is repo-local — let the scan run so the
+    # healthy repos keep flowing.
+    return activated_repos > 0 and len(dead_repos) >= activated_repos
 
 
 async def _file_workspace_runner_fail_blocker(
