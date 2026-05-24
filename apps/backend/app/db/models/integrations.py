@@ -576,6 +576,66 @@ class NativeIntegrationAuditEvent(Base):
     created_at: Mapped[datetime] = _ts_created()
 
 
+class WorkspaceRepoRouting(Base):
+    """Explicit project→repo dispatch routing.
+
+    Maps a Linear project (``project_native_id``) to the
+    :class:`WorkspaceRepo` its tickets dispatch into. A single row with
+    ``project_native_id IS NULL`` is the **workspace default** — the
+    catch-all for tickets whose project has no binding, or that have no
+    project at all. ``dispatcher._pick_dispatch_repo`` resolves
+    binding → default → (nothing); on nothing it files a clarification
+    rather than dumping work on a random repo.
+
+    Replaces the old name-heuristic + oldest-activated fallback that
+    routed askslayer's projectless infra tickets onto a repo missing
+    CURSOR_API_KEY (2026-05-24), failing every run and freezing the
+    workspace. Shape enforced by two partial-unique indexes (see
+    migration 0079): one NULL-project default per workspace, one binding
+    per (workspace, project).
+    """
+
+    __tablename__ = "workspace_repo_routing"
+    __table_args__ = (
+        Index("ix_workspace_repo_routing_ws", "workspace_id"),
+        Index(
+            "uq_workspace_repo_routing_default",
+            "workspace_id",
+            unique=True,
+            postgresql_where=text("project_native_id IS NULL"),
+        ),
+        Index(
+            "uq_workspace_repo_routing_project",
+            "workspace_id",
+            "project_native_id",
+            unique=True,
+            postgresql_where=text("project_native_id IS NOT NULL"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # NULL == workspace default; non-null == per-project binding.
+    project_native_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    repo_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workspace_repos.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = _ts_created()
+    updated_at: Mapped[datetime] = _ts_updated()
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    updated_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+
 __all__ = [
     "GitHubInstallation",
     "NativeIntegrationAuditEvent",
@@ -587,4 +647,5 @@ __all__ = [
     "NativeIntegrationStatus",
     "NativeIntegrationSyncState",
     "WorkspaceRepo",
+    "WorkspaceRepoRouting",
 ]

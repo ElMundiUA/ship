@@ -52,6 +52,7 @@ from backend.app.api.v1.routes import (
     runs,
     policies,
     repo_home,
+    repo_routing,
     repo_secrets,
     repos,
     telegram,
@@ -96,6 +97,9 @@ api_router.include_router(planning.router)
 # Lives next to artifact_repos but is keyed off GitHub App installations
 # instead of paste-URL clones.
 api_router.include_router(repos.router)
+# Explicit project→repo dispatch routing (Variant A). Replaces the
+# name-heuristic + oldest-activated fallback in _pick_dispatch_repo.
+api_router.include_router(repo_routing.router)
 # E14 — write-side surface that ``shipctl run`` calls during a routine
 # run. Workspace-scoped (admin auth), vendor-agnostic ``ticket_ref``.
 # Server resolves the right TrackerGateway adapter so the CLI doesn't

@@ -45,6 +45,21 @@ and ship it.
 
 Per-phase responsibilities you can NOT skip:
 
+0. **Repo-structure readiness (do this FIRST for deployment work)** —
+   deployment / infra work lands in the project's main repo, which may
+   not yet have the layout your scripts assume. Before writing any
+   deploy logic, check the repo: is there an `infra/` (k8s / helm /
+   terraform), a `deploy/` or `docker-compose.yml`, a `tools/scripts/`
+   for deploy scripts, the env scaffolding? If the expected structure
+   is missing, your FIRST step is to **scaffold the correct folder
+   layout** — empty dirs with `.gitkeep`, a skeleton `docker-compose.yml`
+   / compose dirs, a `deploy/` with a README describing the topology —
+   as a separate, clearly-labelled commit ("scaffold deploy structure"),
+   THEN build the actual deploy logic on top. Do NOT assume the
+   structure exists, and do NOT cram deploy scripts into the repo root.
+   A multi-service deploy (e.g. a docker-compose that pulls sibling
+   service images) lives here too — author it in this one repo; it
+   orchestrates the other services at runtime.
 1. **Blast-radius read** — before touching anything, name in the
    PR body what production-shaped surface this change can break
    if it's wrong (e.g., "a typo in this helm value gates the

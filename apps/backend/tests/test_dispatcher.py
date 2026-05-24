@@ -648,6 +648,7 @@ async def test_file_overlap_warning_attached_on_dev_dispatch(
     from backend.app.db.models.integrations import (
         GitHubInstallation,
         WorkspaceRepo,
+        WorkspaceRepoRouting,
     )
     from backend.app.integrations.gateway.tracker import TicketRef
     from backend.app.services import tracker_resolver as tracker_resolver_module
@@ -678,6 +679,15 @@ async def test_file_overlap_warning_attached_on_dev_dispatch(
         activated_at=datetime.now(timezone.utc),
     )
     db_session.add(repo)
+    await db_session.flush()
+    # Workspace default route → this repo (routing is now explicit; no
+    # binding/default means the dispatcher files a clarification instead
+    # of dumping the run on an arbitrary repo).
+    db_session.add(
+        WorkspaceRepoRouting(
+            workspace_id=ws, project_native_id=None, repo_id=repo.id
+        )
+    )
     await db_session.flush()
 
     settings = dispatcher.get_settings()

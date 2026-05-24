@@ -25,7 +25,6 @@ migration.
 from __future__ import annotations
 
 import logging
-import re
 import secrets
 import uuid
 from dataclasses import dataclass
@@ -39,6 +38,7 @@ from backend.app.core.config import Settings, get_settings
 from backend.app.db.models.integrations import (
     GitHubInstallation,
     WorkspaceRepo,
+    WorkspaceRepoRouting,
 )
 from backend.app.db.models.tenancy import AuditLog, Workspace
 from sqlalchemy.orm.attributes import flag_modified
@@ -582,31 +582,84 @@ async def _pick_dispatch_repo(
     session: AsyncSession,
     *,
     workspace_id: uuid.UUID,
-    project_name_hint: str | None = None,
-) -> tuple[WorkspaceRepo, GitHubInstallation] | None:
-    """Pick one activated repo in ``workspace_id`` to dispatch to.
+    project_id: str | None = None,
+) -> tuple[WorkspaceRepo, GitHubInstallation, str] | None:
+    """Resolve the dispatch target via explicit ``workspace_repo_routing``.
 
-    Preference order:
+    Precedence:
 
-    1. **Project name match** — when ``project_name_hint`` is provided
-       (the Linear project the ticket lives in), pick a repo whose
-       ``full_name`` contains a slug-shaped token from the project
-       name. E.g. project ``"Переписывание visitor-back на Golang"``
-       matches ``askslayer/visitor-back``. This is the "follow the
-       ticket's repo" rule callers used to have to read from a
-       per-project binding row — keeping it heuristic for now
-       sidesteps a schema migration while still routing PAC tickets
-       to the visitor-back repo where the agent secrets actually
-       live (askslayer 2026-05-15: visitor-mob was getting every
-       dispatch because it was oldest-activated, but ANTHROPIC_API_KEY
-       only lived on visitor-back).
-    2. **Oldest activated** — original deterministic fallback. The
-       runtime inside the workflow re-reads the ticket from Linear
-       so the dispatch target is mostly a runner-host choice; this
-       falls through when no hint is supplied (workspace bundles,
-       legacy callers) or no repo name matches.
+    1. **Per-project binding** — ``project_native_id == project_id``.
+    2. **Workspace default** — the ``project_native_id IS NULL`` row;
+       catch-all for unbound / projectless tickets and workspace bundles.
+    3. **Unresolved → ``None``** — the caller files a clarification so
+       the operator binds a repo, rather than dumping the run on an
+       arbitrary one.
+
+    Replaces the retired name-heuristic + oldest-activated fallback,
+    which routed askslayer's projectless infra tickets onto a repo
+    missing CURSOR_API_KEY and froze the workspace (2026-05-24). Backfill
+    seeds bindings from the old heuristic so existing routing is kept.
+
+    Returns ``(repo, install, route)`` where ``route`` is
+    ``"binding"`` | ``"default"`` for the dispatch audit.
     """
-    rows = (
+    route = "binding"
+    repo_id: uuid.UUID | None = None
+    if project_id:
+        repo_id = (
+            await session.execute(
+                select(WorkspaceRepoRouting.repo_id).where(
+                    WorkspaceRepoRouting.workspace_id == workspace_id,
+                    WorkspaceRepoRouting.project_native_id == project_id,
+                ).limit(1)
+            )
+        ).scalar_one_or_none()
+    if repo_id is None:
+        route = "default"
+        repo_id = (
+            await session.execute(
+                select(WorkspaceRepoRouting.repo_id).where(
+                    WorkspaceRepoRouting.workspace_id == workspace_id,
+                    WorkspaceRepoRouting.project_native_id.is_(None),
+                ).limit(1)
+            )
+        ).scalar_one_or_none()
+    if repo_id is None:
+        # Transition guard: a workspace with NO routing configured at all
+        # keeps the pre-Variant-A behaviour (oldest-activated) so the
+        # rollout can't break un-backfilled workspaces. The moment ANY
+        # routing row exists (a default or a binding) this is skipped and
+        # an unresolved ticket files a clarification instead. Remove once
+        # every workspace has routing seeded
+        # (tools/scripts/backfill_repo_routing.py).
+        any_row = (
+            await session.execute(
+                select(WorkspaceRepoRouting.id).where(
+                    WorkspaceRepoRouting.workspace_id == workspace_id
+                ).limit(1)
+            )
+        ).first()
+        if any_row is not None:
+            return None
+        oldest = (
+            await session.execute(
+                select(WorkspaceRepo, GitHubInstallation)
+                .join(
+                    GitHubInstallation,
+                    GitHubInstallation.id == WorkspaceRepo.installation_id,
+                )
+                .where(
+                    WorkspaceRepo.workspace_id == workspace_id,
+                    WorkspaceRepo.activated_at.is_not(None),
+                )
+                .order_by(WorkspaceRepo.activated_at.asc())
+                .limit(1)
+            )
+        ).first()
+        if oldest is None:
+            return None
+        return oldest[0], oldest[1], "transition_oldest"
+    row = (
         await session.execute(
             select(WorkspaceRepo, GitHubInstallation)
             .join(
@@ -614,27 +667,73 @@ async def _pick_dispatch_repo(
                 GitHubInstallation.id == WorkspaceRepo.installation_id,
             )
             .where(
+                WorkspaceRepo.id == repo_id,
                 WorkspaceRepo.workspace_id == workspace_id,
                 WorkspaceRepo.activated_at.is_not(None),
             )
-            .order_by(WorkspaceRepo.activated_at.asc())
+            .limit(1)
         )
-    ).all()
-    if not rows:
+    ).first()
+    if row is None:
+        # Bound repo was deactivated / uninstalled — treat as unresolved
+        # so the operator re-binds rather than silently mis-routing.
         return None
-    if project_name_hint:
-        # Tokenize on whitespace / punctuation, keep slug-shaped chunks
-        # (at least 4 chars) so common Russian / English connecting
-        # words don't accidentally match short repo names.
-        tokens = [
-            t.lower() for t in re.split(r"[^A-Za-z0-9_-]+", project_name_hint)
-            if len(t) >= 4
-        ]
-        for r in rows:
-            name = r[0].full_name.lower()
-            if any(t in name for t in tokens):
-                return r[0], r[1]
-    return rows[0][0], rows[0][1]
+    return row[0], row[1], route
+
+
+async def _file_no_target_repo_letter(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    ticket_ref: str,
+    project_id: str | None,
+    project_name: str | None,
+) -> None:
+    """Ask the operator to bind a repo when routing can't resolve one.
+
+    Deduped per ticket via ``no-target-repo:<ticket>``. Beats the old
+    behaviour of dumping the run on an arbitrary (often key-less) repo.
+    """
+    from backend.app.db.models.inbox import InboxItem
+
+    handle = f"no-target-repo:{ticket_ref}"
+    existing = (
+        await session.execute(
+            select(InboxItem.id).where(
+                InboxItem.workspace_id == workspace_id,
+                InboxItem.intake_handle == handle,
+                InboxItem.status == "new",
+            )
+        )
+    ).first()
+    if existing is not None:
+        return
+    proj = project_name or project_id or "(no project)"
+    session.add(
+        InboxItem(
+            workspace_id=workspace_id,
+            repo_id=None,
+            type="clarification",
+            title=f"{ticket_ref}: no target repo — pick one"[:300],
+            summary=(
+                f"Ship can't dispatch {ticket_ref}: its project ({proj}) has "
+                f"no repo binding and the workspace has no default repo set. "
+                f"Bind the project to a repo, or set a workspace default repo, "
+                f"in Settings → repo routing — then it dispatches on the next "
+                f"tick."
+            )[:2000],
+            payload={
+                "ticket_ref": ticket_ref,
+                "project_id": project_id,
+                "project_name": project_name,
+            },
+            status="new",
+            category="decision_needed",
+            priority=8,
+            intake_handle=handle,
+            intake_reason="no_target_repo",
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -987,7 +1086,7 @@ async def maybe_dispatch(
     target = await _pick_dispatch_repo(
         session,
         workspace_id=workspace_id,
-        project_name_hint=project_name_hint,
+        project_id=project_id,
     )
     if target is None:
         await release_lock(
@@ -997,10 +1096,19 @@ async def maybe_dispatch(
             await release_lock(
                 session, workspace_id=workspace_id, key=f"project:{project_id}"
             )
+        # No binding + no workspace default → ask the operator to bind a
+        # repo instead of dumping the run on an arbitrary one.
+        await _file_no_target_repo_letter(
+            session,
+            workspace_id=workspace_id,
+            ticket_ref=ticket_ref,
+            project_id=project_id,
+            project_name=project_name_hint,
+        )
         return DispatchResult(
             fired=False, reason=_Reason.NO_REPO, lock_key=lock_key
         )
-    repo, install = target
+    repo, install, dispatch_route = target
 
     dispatch_run_id = f"run_{secrets.token_hex(8)}"
     file_coordination_warning: str | None = None
@@ -1125,6 +1233,7 @@ async def maybe_dispatch(
         payload={
             "trigger_kind": trigger_kind,
             "repo": repo.full_name,
+            "route": dispatch_route,
             "workflow_file": WORKFLOW_FILE,
             "routine_id": routine_id,
             "fsm_stage": fsm_stage,
@@ -1271,7 +1380,7 @@ async def maybe_dispatch_workspace_bundle(
         return DispatchResult(
             fired=False, reason=_Reason.NO_REPO, lock_key=lock_key
         )
-    repo, install = target
+    repo, install, _route = target
 
     try:
         await dispatch_workflow(
