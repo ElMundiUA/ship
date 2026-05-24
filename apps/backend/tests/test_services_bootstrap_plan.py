@@ -17,8 +17,12 @@ from backend.app.db.models.integrations import (
     WorkspaceRepo,
     WorkspaceRepoRouting,
 )
+from backend.app.db.models.repo_intel import RepoIntel
 from backend.app.integrations.gateway.tracker import CreatedTicket, TicketRef
-from backend.app.services.bootstrap_plan import generate_bootstrap_plan
+from backend.app.services.bootstrap_plan import (
+    generate_bootstrap_plan,
+    run_bootstrap_for_repo,
+)
 from backend.app.services.sdlc_readiness import ReadinessReport
 
 
@@ -332,3 +336,120 @@ async def test_routing_upsert_is_idempotent(db_session, seed_repo) -> None:
         )
     ).scalars().all()
     assert len(rows) == 1
+
+
+# ---------------------------------------------------------------------------
+# run_bootstrap_for_repo — shared orchestrator (readiness → generate)
+# ---------------------------------------------------------------------------
+
+
+class _FakeCodeGateway:
+    def __init__(self, paths: list[str]) -> None:
+        self._paths = paths
+
+    async def list_files(self, ref, *, ref_sha=None) -> list[str]:
+        return self._paths
+
+
+async def _seed_intel(db_session, workspace, repo, **kw) -> RepoIntel:
+    row = RepoIntel(
+        id=__import__("uuid").uuid4(),
+        workspace_id=workspace.id,
+        repo_id=repo.id,
+        version=1,
+        is_current=True,
+        languages={},
+        frameworks=kw.get("frameworks", []),
+        package_managers=kw.get("package_managers", []),
+        entry_points=[],
+        structure={},
+        commit_style={},
+        visual_tokens={},
+        project_type=kw.get("project_type"),
+        sdlc_maturity={},
+        harvested_by="wizard",
+    )
+    db_session.add(row)
+    await db_session.flush()
+    return row
+
+
+async def _secrets_none() -> list[str]:
+    return []
+
+
+@pytest.mark.asyncio
+async def test_run_bootstrap_for_repo_generates_when_not_ready(
+    db_session, seed_repo
+) -> None:
+    workspace, repo = seed_repo
+    await _seed_intel(
+        db_session, workspace, repo, project_type="web", frameworks=["react"]
+    )
+    tracker = _FakeTracker()
+    res = await run_bootstrap_for_repo(
+        session=db_session,
+        repo=repo,
+        tracker=tracker,
+        gateway=_FakeCodeGateway(["package.json", "src/index.tsx"]),
+        secret_lister=_secrets_none,
+    )
+    assert res["result"] == "bootstrap_generated"
+    assert res["ticket_count"] >= 1
+    assert tracker.project is not None
+
+
+@pytest.mark.asyncio
+async def test_run_bootstrap_for_repo_skips_when_no_intel(
+    db_session, seed_repo
+) -> None:
+    workspace, repo = seed_repo
+    tracker = _FakeTracker()
+    res = await run_bootstrap_for_repo(
+        session=db_session,
+        repo=repo,
+        tracker=tracker,
+        gateway=_FakeCodeGateway([]),
+        secret_lister=_secrets_none,
+    )
+    assert res["result"] == "skipped_no_blueprint"
+    assert tracker.project is None
+
+
+@pytest.mark.asyncio
+async def test_run_bootstrap_for_repo_skips_when_ready(
+    db_session, seed_repo
+) -> None:
+    workspace, repo = seed_repo
+    await _seed_intel(
+        db_session,
+        workspace,
+        repo,
+        project_type="web",
+        frameworks=["next.js", "react"],
+        package_managers=["npm"],
+    )
+
+    async def _secrets() -> list[str]:
+        return ["CURSOR_API_KEY"]
+
+    gw = _FakeCodeGateway(
+        [
+            "package.json",
+            "src/app/page.test.tsx",
+            "playwright.config.ts",
+            "Dockerfile",
+            "docker-compose.yml",
+            ".github/workflows/deploy.yml",
+        ]
+    )
+    tracker = _FakeTracker()
+    res = await run_bootstrap_for_repo(
+        session=db_session,
+        repo=repo,
+        tracker=tracker,
+        gateway=gw,
+        secret_lister=_secrets,
+    )
+    assert res["result"] == "skipped_already_ready"
+    assert tracker.project is None

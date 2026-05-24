@@ -366,24 +366,31 @@ async def file_bootstrap_recommendation(
             "missing_required_secrets": list(report.missing_required_secrets),
             "external_checklist": list(report.external_checklist),
             "intel_id": str(result.intel_id) if result.intel_id else None,
-            # Informational for now: the "Generate bootstrap tickets"
-            # action arrives in BS3 once the epic generator (executor)
-            # exists. Surfacing a "generate" pill before then would
-            # silently resolve the letter while doing nothing. Until
-            # then the letter is an acknowledge-only recommendation —
-            # the gaps + checklist below are the value.
+            # Actionable (BS3 wired): picking "start-bootstrap" runs the
+            # epic generator via the Inbox /decide handler, which
+            # special-cases this letter kind. "not-now" is a plain choice
+            # that just resolves the letter.
             "action_items": [
                 {
-                    "id": "acknowledge",
-                    "kind": "ack",
-                    "label": "Got it",
+                    "id": "start-bootstrap",
+                    "kind": "choice",
+                    "label": "Generate bootstrap tickets",
                     "hint": (
-                        "Re-run readiness from repo settings anytime. "
-                        "Bootstrap ticket generation lands soon."
+                        "Opens a DevOps epic that scaffolds the missing "
+                        "testing / Docker / deploy setup, routed to this repo."
+                    ),
+                },
+                {
+                    "id": "not-now",
+                    "kind": "choice",
+                    "label": "Not now",
+                    "hint": (
+                        "Dismiss. Re-run readiness from repo settings "
+                        "anytime."
                     ),
                 },
             ],
-            "resolution_mode": "ack_only",
+            "resolution_mode": "single_choice",
         },
         status="new",
         category="attention",

@@ -1600,9 +1600,51 @@ async def post_decide(
     side_effects: list[dict[str, Any]] = []
     created_ticket_refs: list[str] = []
 
+    is_bootstrap_letter = (
+        isinstance(item.payload, dict)
+        and item.payload.get("kind") == "bootstrap_readiness"
+    )
+
     for sid in selections:
         ai = by_id[sid]
         try:
+            # BS2/BS3 — the bootstrap recommendation letter's "generate"
+            # choice runs the epic generator (assess readiness → create
+            # project + per-gap infra tickets) instead of posting a
+            # comment. Keyed on the letter kind + action id so it can't
+            # fire on any other letter.
+            if is_bootstrap_letter and sid == "start-bootstrap":
+                from backend.app.db.models.integrations import (
+                    WorkspaceRepo as _WR,
+                )
+                from backend.app.services.bootstrap_plan import (
+                    run_bootstrap_for_repo,
+                )
+
+                repo_row = (
+                    await session.get(_WR, item.repo_id)
+                    if item.repo_id
+                    else None
+                )
+                if repo_row is None or repo_row.workspace_id != workspace_id:
+                    side_effects.append(
+                        {"id": sid, "result": "skipped_no_repo"}
+                    )
+                    continue
+                if resolved_tracker is None:
+                    side_effects.append(
+                        {"id": sid, "result": "skipped_no_tracker"}
+                    )
+                    continue
+                res = await run_bootstrap_for_repo(
+                    session=session,
+                    repo=repo_row,
+                    tracker=resolved_tracker.gateway,
+                    settings=_gs(),
+                    actor_user_id=auth.user.id,
+                )
+                side_effects.append({"id": sid, **res})
+                continue
             if ai.kind == "choice":
                 if resolved_tracker is None or not source_ticket_ref:
                     side_effects.append(

@@ -338,8 +338,58 @@ async def generate_bootstrap_plan(
     )
 
 
+async def run_bootstrap_for_repo(
+    *,
+    session: AsyncSession,
+    repo: WorkspaceRepo,
+    tracker: TrackerGateway,
+    settings=None,
+    gateway=None,
+    secret_lister=None,
+    actor_user_id: uuid.UUID | None = None,
+) -> dict:
+    """Assess readiness then generate the bootstrap epic in one call.
+
+    The shared path behind both the BS3 endpoint and the BS2 Inbox
+    "generate tickets" action. Returns a result dict (never raises on the
+    nothing-to-do cases) so the Inbox /decide handler can record it as a
+    side-effect: ``{"result": "bootstrap_generated", "project_url", ...}``
+    or a ``skipped_*`` reason. ``gateway`` / ``secret_lister`` are the
+    code-host hooks for ``build_readiness`` (injectable for tests)."""
+    from backend.app.services.sdlc_readiness import build_readiness
+
+    rdy = await build_readiness(
+        session=session,
+        repo=repo,
+        settings=settings,
+        gateway=gateway,
+        secret_lister=secret_lister,
+    )
+    if not rdy.has_blueprint or rdy.report is None:
+        return {"result": "skipped_no_blueprint", "detail": rdy.detail}
+    if rdy.report.ready:
+        return {"result": "skipped_already_ready"}
+    if not rdy.report.gaps:
+        return {"result": "skipped_no_gaps"}
+
+    plan = await generate_bootstrap_plan(
+        session=session,
+        tracker=tracker,
+        repo=repo,
+        report=rdy.report,
+        actor_user_id=actor_user_id,
+    )
+    return {
+        "result": "bootstrap_generated",
+        "project_url": plan.project_url,
+        "project_native_id": plan.project_native_id,
+        "ticket_count": len(plan.tickets),
+    }
+
+
 __all__ = [
     "BootstrapPlanResult",
     "BootstrapTicket",
     "generate_bootstrap_plan",
+    "run_bootstrap_for_repo",
 ]

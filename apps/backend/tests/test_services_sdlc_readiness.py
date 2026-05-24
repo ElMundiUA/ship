@@ -491,11 +491,11 @@ async def test_files_letter_when_not_ready(db_session, seed_repo) -> None:
     assert item.intake_reason == "bootstrap_readiness"
     assert item.payload["kind"] == "bootstrap_readiness"
     assert "containerization" in item.payload["gaps"]
-    # Informational (acknowledge-only) until BS3 wires the epic generator.
+    # Actionable: "start-bootstrap" runs the epic generator via /decide.
     ids = {a["id"] for a in item.payload["action_items"]}
-    assert ids == {"acknowledge"}
-    assert item.payload["action_items"][0]["kind"] == "ack"
-    assert item.payload["resolution_mode"] == "ack_only"
+    assert ids == {"start-bootstrap", "not-now"}
+    assert all(a["kind"] == "choice" for a in item.payload["action_items"])
+    assert item.payload["resolution_mode"] == "single_choice"
 
 
 @pytest.mark.asyncio
