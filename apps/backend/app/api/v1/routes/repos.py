@@ -1063,9 +1063,6 @@ async def wizard_seed(
             # would otherwise never get it pushed because we skip the
             # full setup path. put_repo_secret is idempotent at GH side.
             try:
-                from backend.app.db.models.integrations import (
-                    GitHubInstallation,
-                )
                 from backend.app.integrations.github.actions_secrets import (
                     put_repo_secret,
                 )
