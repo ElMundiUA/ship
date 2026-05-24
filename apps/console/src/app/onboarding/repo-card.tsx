@@ -42,6 +42,7 @@ import type {
   TrackerKind,
 } from "@/lib/api/client";
 import { Badge, type BadgeTone } from "@/components/ui";
+import { SdlcReadinessCard } from "@/components/sdlc-readiness-card";
 
 export interface RepoCardInitial {
   repo: {
@@ -792,6 +793,21 @@ export function RepoCard({
           </div>
         )}
       </footer>
+
+      {/* BS5 — SDLC readiness + bootstrap CTA right in the wizard, so a
+          freshly-connected repo can be brought up to its project-type
+          standard without leaving onboarding. Lazy: nothing fetches
+          until the operator clicks "Check readiness". */}
+      <div className="mt-5 border-t border-white/[0.06] pt-4">
+        <p className="mb-2 text-[11px] font-bold uppercase tracking-widest text-white/55">
+          SDLC readiness
+        </p>
+        <SdlcReadinessCard
+          workspaceId={workspaceId}
+          repoId={initial.repo.id}
+          repoFullName={initial.repo.full_name}
+        />
+      </div>
 
       {pendingSeed && (
         <ActivationModal
