@@ -327,6 +327,11 @@ async function _runCommandImpl(ctx, rest) {
     len: policiesPreamble ? policiesPreamble.length : 0,
   });
 
+  const fileOverlapWarnings = (process.env.FILE_OVERLAP_WARNINGS || "").trim();
+  step("file_overlap_warnings", fileOverlapWarnings ? "ok" : "empty", {
+    len: fileOverlapWarnings.length,
+  });
+
   // 5) Mint a run_id + render prompt with finish-protocol values
   // already substituted so the agent can call /agent-runs/finish from
   // inside Cursor without holding any extra config.
@@ -339,6 +344,7 @@ async function _runCommandImpl(ctx, rest) {
     routineSpec: resolved.executable,
     task,
     fsmStage,
+    fileOverlapWarnings,
     finishCtx: {
       apiBase,
       apiToken,
@@ -1571,7 +1577,7 @@ async function fetchWorkspaceAgentProvider({ apiBase, apiToken, workspaceId }) {
 }
 
 
-export function renderPrompt({ patternBody, baseBody, role, routineSpec, task, fsmStage, finishCtx }) {
+export function renderPrompt({ patternBody, baseBody, role, routineSpec, task, fsmStage, fileOverlapWarnings = "", finishCtx }) {
   const issueRef = task?.ticket_ref ? task.ticket_ref : "(no ticket)";
   const title = task?.title || "";
   const description = task?.body || "";
@@ -1584,19 +1590,22 @@ export function renderPrompt({ patternBody, baseBody, role, routineSpec, task, f
     .replace(/\{\{ISSUE\}\}/g, issueRef)
     .replace(/\{\{SKILLS_CONTEXT\}\}/g, "(no skills directory bundled in this run)");
 
+  const overlapBlock = fileOverlapWarnings.trim()
+    || (typeof task?.file_coordination_warning === "string"
+      ? task.file_coordination_warning.trim()
+      : "");
+
   const expanded = patternBody
     .replace(/\{\{BASE\}\}/g, baseExpanded)
+    .replace(/\{\{FILE_OVERLAP_WARNINGS\}\}/g, overlapBlock ? `${overlapBlock}\n` : "")
     .replace(/\{\{ROLE\}\}/g, role)
     .replace(/\{\{ISSUE\}\}/g, issueRef)
     .replace(/\{\{TITLE\}\}/g, title.slice(0, 500))
     .replace(/\{\{DESCRIPTION\}\}/g, description.slice(0, 8000));
 
   const out = [];
-  if (
-    typeof task?.file_coordination_warning === "string" &&
-    task.file_coordination_warning.trim()
-  ) {
-    out.push(task.file_coordination_warning.trim());
+  if (overlapBlock) {
+    out.push(overlapBlock);
     out.push("");
   }
   if (routineSpec.prompt) {

@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Final
 
 import httpx
 from sqlalchemy import select
@@ -23,6 +23,25 @@ from backend.app.integrations.github.code_host_adapter import GitHubCodeHost
 from backend.app.services.ticket_ref import parse_ticket_refs_from_pr_title
 
 log = logging.getLogger(__name__)
+
+DEV_FILE_OVERLAP_WARNINGS_ENABLED: Final = "dev_file_overlap_warnings_enabled"
+
+
+def dev_file_overlap_warnings_enabled(settings: dict | None) -> bool:
+    """Per-workspace JSONB toggle (ELS-155); default off when absent."""
+    return bool((settings or {}).get(DEV_FILE_OVERLAP_WARNINGS_ENABLED))
+
+
+def file_overlap_warnings_active(
+    settings: Settings,
+    workspace_settings: dict | None,
+) -> bool:
+    """True when global config or workspace JSONB enables overlap checks."""
+    return bool(
+        settings.enable_file_overlap_warnings
+        or dev_file_overlap_warnings_enabled(workspace_settings)
+    )
+
 
 _LOCKFILES: frozenset[str] = frozenset(
     {
@@ -190,11 +209,12 @@ async def build_file_coordination_warning(
     tracker_kind: str,
     snapshot_fn: Any,
     settings: Settings | None = None,
+    workspace_settings: dict | None = None,
     client: httpx.AsyncClient | None = None,
 ) -> FileOverlapResult:
     """Discover sibling open PR overlaps; return blockquote markdown or None."""
     settings = settings or get_settings()
-    if not settings.enable_file_overlap_warnings:
+    if not file_overlap_warnings_active(settings, workspace_settings):
         return FileOverlapResult(warning_markdown=None, file_overlap_warnings=[])
     if not project_id:
         return FileOverlapResult(warning_markdown=None, file_overlap_warnings=[])

@@ -48,9 +48,15 @@ from backend.app.integrations.github.workflows import (
     dispatch_workflow,
 )
 from backend.app.services import tracker_resolver as tracker_resolver_module
-from backend.app.services.file_overlap import build_file_coordination_warning
+from backend.app.services.file_overlap import (
+    build_file_coordination_warning,
+    file_overlap_warnings_active,
+)
 from backend.app.services.file_overlap_telemetry import emit_file_overlap_warnings
-from backend.app.services.seed_bundle import bundle_supports_ship_run_id
+from backend.app.services.seed_bundle import (
+    bundle_supports_file_overlap_warnings,
+    bundle_supports_ship_run_id,
+)
 
 
 # Stage label (Linear's ``stage:<id>``) → routine id. The dispatcher
@@ -999,10 +1005,18 @@ async def maybe_dispatch(
     dispatch_run_id = f"run_{secrets.token_hex(8)}"
     file_coordination_warning: str | None = None
     file_overlap_warnings: list[dict[str, Any]] = []
+    ws_settings_row = (
+        await session.execute(
+            select(Workspace.settings).where(Workspace.id == workspace_id)
+        )
+    ).scalar_one_or_none()
+    overlap_warnings_active = file_overlap_warnings_active(
+        settings, ws_settings_row
+    )
     if (
         routine_id == "developer"
         and not is_anchor
-        and settings.enable_file_overlap_warnings
+        and overlap_warnings_active
         and project_id
         and resolved_tracker is not None
     ):
@@ -1017,6 +1031,7 @@ async def maybe_dispatch(
             tracker_kind=resolved_tracker.kind,
             snapshot_fn=snapshot_fn,
             settings=settings,
+            workspace_settings=ws_settings_row,
             client=client,
         )
         file_coordination_warning = overlap.warning_markdown
@@ -1058,6 +1073,11 @@ async def maybe_dispatch(
     }
     if bundle_supports_ship_run_id(repo.installed_bundle_version):
         dispatch_inputs["ship_run_id"] = dispatch_run_id
+    if (
+        file_coordination_warning
+        and bundle_supports_file_overlap_warnings(repo.installed_bundle_version)
+    ):
+        dispatch_inputs["file_overlap_warnings"] = file_coordination_warning
     try:
         await dispatch_workflow(
             repo,
