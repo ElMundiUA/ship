@@ -28,10 +28,13 @@ from backend.app.services.sdlc_blueprint import (
     load_blueprint,
     parse_checklist,
 )
+from backend.app.db.models.inbox import InboxItem
 from backend.app.services.sdlc_readiness import (
     assess_readiness,
     build_readiness,
+    file_bootstrap_recommendation,
 )
+from sqlalchemy import select
 
 
 # ---------------------------------------------------------------------------
@@ -456,3 +459,106 @@ async def test_build_readiness_web_with_gaps(db_session, seed_repo) -> None:
     assert result.report.ready is False
     assert "containerization" in result.report.gaps
     assert "CURSOR_API_KEY" in result.report.missing_required_secrets
+
+
+# ---------------------------------------------------------------------------
+# 4. file_bootstrap_recommendation (inbox letter on harvest completion)
+# ---------------------------------------------------------------------------
+
+
+async def _bare_web_repo(db_session, workspace, repo):
+    await _seed_intel(
+        db_session, workspace, repo, project_type="web", frameworks=["react"]
+    )
+
+    async def _secrets() -> list[str]:
+        return []
+
+    return _FakeGateway(["package.json", "src/index.tsx"]), _secrets
+
+
+@pytest.mark.asyncio
+async def test_files_letter_when_not_ready(db_session, seed_repo) -> None:
+    workspace, repo, _ = seed_repo
+    gw, secrets = await _bare_web_repo(db_session, workspace, repo)
+
+    item = await file_bootstrap_recommendation(
+        session=db_session, repo=repo, gateway=gw, secret_lister=secrets
+    )
+    assert item is not None
+    assert item.type == "improvement"
+    assert item.repo_id == repo.id
+    assert item.intake_reason == "bootstrap_readiness"
+    assert item.payload["kind"] == "bootstrap_readiness"
+    assert "containerization" in item.payload["gaps"]
+    # Informational (acknowledge-only) until BS3 wires the epic generator.
+    ids = {a["id"] for a in item.payload["action_items"]}
+    assert ids == {"acknowledge"}
+    assert item.payload["action_items"][0]["kind"] == "ack"
+    assert item.payload["resolution_mode"] == "ack_only"
+
+
+@pytest.mark.asyncio
+async def test_letter_deduped_on_repeat_harvest(db_session, seed_repo) -> None:
+    workspace, repo, _ = seed_repo
+    gw, secrets = await _bare_web_repo(db_session, workspace, repo)
+
+    first = await file_bootstrap_recommendation(
+        session=db_session, repo=repo, gateway=gw, secret_lister=secrets
+    )
+    second = await file_bootstrap_recommendation(
+        session=db_session, repo=repo, gateway=gw, secret_lister=secrets
+    )
+    assert first is not None
+    assert second is None  # deduped while the first is still 'new'
+
+    rows = (
+        await db_session.execute(
+            select(InboxItem).where(
+                InboxItem.repo_id == repo.id,
+                InboxItem.intake_reason == "bootstrap_readiness",
+            )
+        )
+    ).scalars().all()
+    assert len(rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_no_letter_when_ready(db_session, seed_repo) -> None:
+    workspace, repo, _ = seed_repo
+    await _seed_intel(
+        db_session,
+        workspace,
+        repo,
+        project_type="web",
+        frameworks=["next.js", "react"],
+        package_managers=["npm"],
+    )
+
+    async def _secrets() -> list[str]:
+        return ["CURSOR_API_KEY"]
+
+    gw = _FakeGateway(
+        [
+            "package.json",
+            "src/app/page.test.tsx",
+            "playwright.config.ts",
+            "Dockerfile",
+            "docker-compose.yml",
+            ".github/workflows/deploy.yml",
+        ]
+    )
+    item = await file_bootstrap_recommendation(
+        session=db_session, repo=repo, gateway=gw, secret_lister=_secrets
+    )
+    assert item is None
+
+
+@pytest.mark.asyncio
+async def test_no_letter_without_blueprint(db_session, seed_repo) -> None:
+    workspace, repo, _ = seed_repo
+    await _seed_intel(db_session, workspace, repo, project_type="backend")
+    item = await file_bootstrap_recommendation(
+        session=db_session, repo=repo, gateway=_FakeGateway([])
+    )
+    assert item is None

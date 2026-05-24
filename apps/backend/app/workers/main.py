@@ -21,8 +21,10 @@ from arq.connections import RedisSettings
 
 from backend.app.core.config import get_settings
 from backend.app.core.sentry import init_sentry
+from backend.app.db.models.integrations import WorkspaceRepo
 from backend.app.db.session import get_sessionmaker
 from backend.app.services.repo_intel import harvest_repo_intel
+from backend.app.services.sdlc_readiness import file_bootstrap_recommendation
 from backend.app.workers.archive_chat_threads import archive_idle_chat_threads
 from backend.app.workers.clarifications import cron_sync_tracker_clarifications
 from backend.app.workers.secret_probe import cron_probe_pending_secrets
@@ -66,6 +68,28 @@ async def harvest_repo_intel_job(
             triggered_by=triggered_by,
         )
         await session.commit()
+
+        # BS2 — surface a bootstrap recommendation in the Inbox if the
+        # repo isn't ready for its project-type SDLC setup. Fault-isolated
+        # so a letter-filing failure never fails the harvest job.
+        try:
+            repo_row = await session.get(WorkspaceRepo, uuid.UUID(repo_id))
+            if repo_row is not None:
+                filed = await file_bootstrap_recommendation(
+                    session=session, repo=repo_row
+                )
+                await session.commit()
+                if filed is not None:
+                    log.info(
+                        "bootstrap recommendation filed repo=%s item=%s",
+                        repo_id,
+                        filed.id,
+                    )
+        except Exception:
+            log.exception(
+                "bootstrap recommendation filing failed repo=%s", repo_id
+            )
+            await session.rollback()
     log.info(
         "repo_intel harvest done repo=%s version=%d duration_ms=%d",
         repo_id,

@@ -20,9 +20,11 @@ import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.config import Settings, get_settings
+from backend.app.db.models.inbox import InboxItem
 from backend.app.db.models.integrations import GitHubInstallation, WorkspaceRepo
 from backend.app.integrations.gateway.code_host import CodeHostGateway, RepoRef
 from backend.app.integrations.github.actions_secrets import list_repo_secrets
@@ -293,6 +295,107 @@ async def build_readiness(
     )
 
 
+async def file_bootstrap_recommendation(
+    *,
+    session: AsyncSession,
+    repo: WorkspaceRepo,
+    settings: Settings | None = None,
+    gateway: CodeHostGateway | None = None,
+    secret_lister: SecretLister | None = None,
+) -> InboxItem | None:
+    """File an Inbox recommendation if the repo isn't bootstrap-ready.
+
+    Called after an intel harvest. No-ops (returns ``None``) when there's
+    no blueprint for the project type (backend/library/unknown), the tree
+    couldn't be assessed, or the repo is already ready. Deduped on a
+    per-repo ``intake_handle`` so repeat harvests don't pile up letters
+    while one is still open.
+    """
+    result = await build_readiness(
+        session=session,
+        repo=repo,
+        settings=settings,
+        gateway=gateway,
+        secret_lister=secret_lister,
+    )
+    report = result.report
+    if not result.has_blueprint or report is None or report.ready:
+        return None
+
+    handle = f"bootstrap_readiness:{repo.id}"
+    existing = (
+        await session.execute(
+            select(InboxItem.id).where(
+                InboxItem.workspace_id == repo.workspace_id,
+                InboxItem.intake_handle == handle,
+                InboxItem.status == "new",
+            )
+        )
+    ).first()
+    if existing is not None:
+        return None
+
+    summary_parts = [
+        f"This {report.project_type} repo is missing parts of its "
+        "recommended SDLC setup."
+    ]
+    if report.gaps:
+        summary_parts.append(f"Gaps: {', '.join(report.gaps)}.")
+    if report.missing_required_secrets:
+        summary_parts.append(
+            f"Missing required secrets: "
+            f"{', '.join(report.missing_required_secrets)}."
+        )
+    if report.external_checklist:
+        summary_parts.append(
+            f"{len(report.external_checklist)} setup step(s) need you."
+        )
+
+    item = InboxItem(
+        workspace_id=repo.workspace_id,
+        repo_id=repo.id,
+        type="improvement",
+        title=f"Set up {report.project_type} SDLC for {repo.full_name}"[:255],
+        summary=" ".join(summary_parts),
+        payload={
+            "kind": "bootstrap_readiness",
+            "project_type": report.project_type,
+            "delivery": report.delivery,
+            "environments": list(report.environments),
+            "gaps": list(report.gaps),
+            "missing_required_secrets": list(report.missing_required_secrets),
+            "external_checklist": list(report.external_checklist),
+            "intel_id": str(result.intel_id) if result.intel_id else None,
+            # Informational for now: the "Generate bootstrap tickets"
+            # action arrives in BS3 once the epic generator (executor)
+            # exists. Surfacing a "generate" pill before then would
+            # silently resolve the letter while doing nothing. Until
+            # then the letter is an acknowledge-only recommendation —
+            # the gaps + checklist below are the value.
+            "action_items": [
+                {
+                    "id": "acknowledge",
+                    "kind": "ack",
+                    "label": "Got it",
+                    "hint": (
+                        "Re-run readiness from repo settings anytime. "
+                        "Bootstrap ticket generation lands soon."
+                    ),
+                },
+            ],
+            "resolution_mode": "ack_only",
+        },
+        status="new",
+        category="attention",
+        priority=30,
+        intake_handle=handle,
+        intake_reason="bootstrap_readiness",
+    )
+    session.add(item)
+    await session.flush()
+    return item
+
+
 __all__ = [
     "CapabilityStatus",
     "ReadinessReport",
@@ -300,4 +403,5 @@ __all__ = [
     "SecretStatus",
     "assess_readiness",
     "build_readiness",
+    "file_bootstrap_recommendation",
 ]
