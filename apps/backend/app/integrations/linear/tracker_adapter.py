@@ -544,7 +544,7 @@ class LinearTracker:
         runs out-of-band against any open ticket and falls back to the
         coarse "open" filter via ``list_tickets(state="open")``.
         """
-        from backend.app.services.linear_provisioner import previous_stage
+        from backend.app.services.linear_provisioner import previous_stages
 
         parts: list[dict[str, Any]] = []
         target_state_name = self._fsm_to_linear_state.get(stage)
@@ -595,14 +595,22 @@ class LinearTracker:
                 {"labels": {"some": {"id": {"eq": "00000000-0000-0000-0000-000000000000"}}}}
             )
 
-        # "previous role is done" — for non-entry stages.
-        prev = previous_stage(stage)
-        if prev:
-            prev_label = self._label_id_by_stage.get(prev)
-            if prev_label:
-                parts.append(
-                    {"labels": {"some": {"id": {"eq": prev_label}}}}
-                )
+        # "previous role is done" — for non-entry stages. A stage may
+        # have MORE than one valid predecessor: the SDLC and devops chains
+        # share the tail, so ``validation`` follows either
+        # ``dev_implementation`` (feature) or ``devops_implementation``
+        # (infra). Accept any predecessor breadcrumb (``in``), otherwise an
+        # infra ticket that falls back to this picker at a tail stage is
+        # silently stranded.
+        prev_label_ids = [
+            label_id
+            for prev in previous_stages(stage)
+            if (label_id := self._label_id_by_stage.get(prev))
+        ]
+        if prev_label_ids:
+            parts.append(
+                {"labels": {"some": {"id": {"in": prev_label_ids}}}}
+            )
 
         # ``needs:clarification`` is a *human-facing* marker only — the
         # agent posted a question and the operator hasn't answered yet.

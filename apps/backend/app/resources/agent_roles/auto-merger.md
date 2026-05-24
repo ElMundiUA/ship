@@ -277,6 +277,12 @@ breadcrumbs automatically, so the dev picker re-fires on the next
 tick. `refire_cap` counts only consecutive blocked finishes, so a
 real fix → re-validate → re-review → re-merge cycle is allowed.
 
+You always bounce to `dev_implementation`; if the ticket is an infra
+ticket (it carries a `stage:devops_implementation` breadcrumb), the
+server auto-redirects the bounce to `devops_implementation`, so the
+fix goes back to DevOps, not the feature developer. You don't pick the
+target — just bounce to `dev_implementation` and let the server route.
+
 ```json
 {
   "outcome": "blocked",

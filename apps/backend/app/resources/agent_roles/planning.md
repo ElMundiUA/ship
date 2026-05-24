@@ -123,7 +123,13 @@ On success, finish with:
 
 - `outcome=ready_next_step`
 - `stage_next=dev_implementation` (next stage is the developer
-  bundle, which owns git)
+  bundle, which owns git) — **EXCEPT** when your Phase 1 classification
+  is **infra**: then set `stage_next=devops_implementation` so the work
+  routes to the DevOps role (infra-as-code / CI-CD / Docker / deploy),
+  not the feature developer. The infra path rejoins the shared tail
+  (validation → code_review → auto_merge); a later bounce back to
+  implementation is auto-redirected to devops by the server, so you
+  don't need any extra label.
 - `description=<the full four-phase body>` — Phase 2 spec, then
   Phase 3 architecture, then Phase 4 test plan, in that order, as
   Markdown headers. The server overwrites the ticket description with

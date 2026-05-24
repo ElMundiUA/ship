@@ -4318,6 +4318,7 @@ async def finish_agent_run(
         from backend.app.services.dispatcher import (
             maybe_dispatch,
             maybe_release_project_lock_on_finish,
+            redirect_infra_bounce,
             release_lock,
         )
 
@@ -4344,6 +4345,14 @@ async def finish_agent_run(
             workspace_id=workspace_id,
             key=f"ticket:{payload.ticket_ref}",
         )
+        # Bounce-guard (BS0.1): infra tickets bounce to devops, not the
+        # developer. See ``dispatcher.redirect_infra_bounce``.
+        _redirected = redirect_infra_bounce(
+            payload.stage_next, list((finish_snapshot or {}).get("labels") or [])
+        )
+        if _redirected != payload.stage_next:
+            payload.stage_next = _redirected
+            actions.append("bounce:redirected_to_devops")
         if payload.stage_next:
             # 30s settle (was 15s — askslayer/PAC-22 dev_implementation
             # 2026-05-15 21:08 still saw an empty snapshot 25s after

@@ -56,6 +56,7 @@ SHIP_FSM_STAGES: tuple[str, ...] = (
     #     + tasks on the planning anchor.
     "planning",
     "dev_implementation",
+    "devops_implementation",
     "validation",
     "code_review",
     "auto_merge",
@@ -104,24 +105,64 @@ DECOMPOSITION_STAGE_ORDER: tuple[str, ...] = (
 )
 
 
+# Infra / deployment path. Diverges from the SDLC chain at ``planning``
+# (planning routes ``infra`` tickets here instead of ``dev_implementation``)
+# and rejoins the shared tail (validation → code_review → auto_merge).
+# ``previous_stage`` checks this chain LAST, so for tail stages the SDLC
+# chain wins — that's only the best-effort breadcrumb-cleanup target, and
+# the load-bearing infra bounce is handled by the kind-aware bounce-guard
+# in ``agent_runs.finish_agent_run`` (keys off the ``stage:devops_implementation``
+# breadcrumb), not by ``previous_stage``.
+DEVOPS_STAGE_ORDER: tuple[str, ...] = (
+    "planning",
+    "devops_implementation",
+    "validation",
+    "code_review",
+    "auto_merge",
+)
+
+
 def previous_stage(stage: str) -> str | None:
     """Return the stage immediately before ``stage``, or ``None`` when
     ``stage`` is the entry of its chain / runs out-of-band.
 
-    Walks both the development-process order (``FSM_STAGE_ORDER``) and
-    the decomposition-process order (``DECOMPOSITION_STAGE_ORDER``).
-    Each chain is independent — there is no transition from the last
-    decomposition stage into the first SDLC stage; child tickets that
-    decomposition emits enter SDLC at ``task_intake`` as their own
-    entry, not as a continuation of the anchor's chain.
+    Walks the development, decomposition, and devops chains. Each chain
+    is independent — there is no transition from the last decomposition
+    stage into the first SDLC stage; child tickets that decomposition
+    emits enter SDLC at ``task_intake`` as their own entry, not as a
+    continuation of the anchor's chain.
     """
-    for chain in (FSM_STAGE_ORDER, DECOMPOSITION_STAGE_ORDER):
+    for chain in (FSM_STAGE_ORDER, DECOMPOSITION_STAGE_ORDER, DEVOPS_STAGE_ORDER):
         if stage in chain:
             idx = chain.index(stage)
             if idx == 0:
                 return None
             return chain[idx - 1]
     return None
+
+
+def previous_stages(stage: str) -> list[str]:
+    """All possible immediate predecessors of ``stage`` across every
+    chain, de-duplicated in first-seen order.
+
+    The SDLC and devops chains share the tail
+    (``…→validation→code_review→auto_merge``) but diverge at the
+    implementation stage: ``validation`` follows BOTH
+    ``dev_implementation`` (feature path) and ``devops_implementation``
+    (infra path). The picker's "previous role is done" filter must accept
+    EITHER breadcrumb, otherwise an infra ticket that falls back to the
+    cron-poller / self-heal picker at a tail stage is silently stranded
+    (it carries ``stage:devops_implementation``, never
+    ``stage:dev_implementation``). ``previous_stage`` (singular) stays for
+    the backwards-cascade label-cleanup callers that want one value.
+    """
+    seen: list[str] = []
+    for chain in (FSM_STAGE_ORDER, DECOMPOSITION_STAGE_ORDER, DEVOPS_STAGE_ORDER):
+        if stage in chain:
+            idx = chain.index(stage)
+            if idx > 0 and chain[idx - 1] not in seen:
+                seen.append(chain[idx - 1])
+    return seen
 
 
 # Ship FSM stage → Linear workflow state name. Keys here drive label
@@ -132,6 +173,7 @@ FSM_TO_LINEAR_STATE: dict[str, str] = {
     # E16/ELS-123 bundle stages.
     "planning": "Todo",
     "dev_implementation": "In Progress",
+    "devops_implementation": "In Progress",
     "validation": "In Progress",
     # ``code_review`` and ``auto_merge`` both run while the ticket
     # sits in Linear's ``Review`` column. Reviewer leaves feedback

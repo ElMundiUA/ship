@@ -121,6 +121,7 @@ DEV_NOT_CONVERGING_REVIEW_STAGES: Final[frozenset[str]] = frozenset(
 SCAN_STAGES: tuple[str, ...] = (
     "planning",
     "dev_implementation",
+    "devops_implementation",
     "validation",
     "code_review",
     "auto_merge",
@@ -1026,7 +1027,9 @@ async def _looks_like_dev_not_converging(
                 AuditLog.action == "agent_run.finish",
                 AuditLog.created_at >= cutoff,
                 AuditLog.payload["outcome"].astext == "ready_next_step",
-                AuditLog.payload["fsm_stage"].astext == "dev_implementation",
+                AuditLog.payload["fsm_stage"].astext.in_(
+                    ("dev_implementation", "devops_implementation")
+                ),
                 (AuditLog.target_id == ticket_ref)
                 | (AuditLog.payload["ticket_ref"].astext == ticket_ref),
             )

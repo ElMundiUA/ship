@@ -92,6 +92,12 @@ Use this rarely — only when the blocker is "validation missed a
 class of defect"; if dev needs to add a test, that's the
 `dev_implementation` path above.
 
+> Infra tickets: always bounce to `dev_implementation` as above — if
+> the ticket is infra (carries a `stage:devops_implementation`
+> breadcrumb) the server auto-redirects the bounce to
+> `devops_implementation`, so the fix returns to DevOps, not the
+> feature developer. You don't pick the target.
+
 ### NEEDS_CLARIFICATION — operator-only call
 
 When the blocker is a decision the dev can't make on their own

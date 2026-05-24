@@ -74,6 +74,10 @@ _STAGE_TO_ROUTINE: dict[str, str] = {
     "code_review": "reviewer",
     "auto_merge": "auto-merger",
     "decomposition": "decomposition",
+    # Infra / deployment path. Planning routes a ticket it classifies
+    # as ``infra`` to this stage instead of ``dev_implementation``; it
+    # rejoins the shared tail (validation → code_review → auto_merge).
+    "devops_implementation": "devops",
     # Pre-E16 legacy stages absorbed into bundles.
     "task_intake": "planning",
     "ba_requirements": "planning",
@@ -103,6 +107,30 @@ def normalize_routine_id(value: str) -> str:
     unknown string) is returned unchanged.
     """
     return _STAGE_TO_ROUTINE.get(value, value)
+
+
+_DEVOPS_BREADCRUMB: Final[str] = "stage:devops_implementation"
+
+
+def redirect_infra_bounce(
+    stage_next: str | None, labels: list[str] | None
+) -> str | None:
+    """Redirect an implementation bounce to devops for infra tickets.
+
+    The auto-merger / B2 auto-cascade hardcode ``dev_implementation`` when
+    they bounce a ticket back to implementation. An infra ticket must
+    bounce to DevOps, not the feature developer. We detect "this is an
+    infra ticket" by the ``stage:devops_implementation`` breadcrumb the
+    devops stage already left on the live ticket — no extra label needed.
+    Server-side so the agent prompts can't forget. ``dev_implementation``
+    and ``devops_implementation`` both map to Linear "In Progress" and
+    both keep the project lock, so only the cascade's routine changes.
+    """
+    if stage_next == "dev_implementation" and _DEVOPS_BREADCRUMB in (
+        labels or []
+    ):
+        return "devops_implementation"
+    return stage_next
 
 
 log = logging.getLogger(__name__)
@@ -1461,6 +1489,7 @@ __all__ = [
     "maybe_dispatch",
     "maybe_dispatch_workspace_bundle",
     "normalize_routine_id",
+    "redirect_infra_bounce",
     "release_lock",
     "sweep_expired_locks",
 ]

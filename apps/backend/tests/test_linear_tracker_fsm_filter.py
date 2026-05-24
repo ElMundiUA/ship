@@ -33,8 +33,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
-
 from backend.app.integrations.linear.tracker_adapter import LinearTracker
 
 
@@ -53,21 +51,34 @@ def _make_tracker(stage_labels: dict[str, str] | None = None) -> LinearTracker:
             "Done": "done_state_id",
         },
         fsm_to_linear_state={
+            # E16 active chain (planning → dev_implementation → … → auto_merge).
+            "planning": "Todo",
+            "dev_implementation": "In Progress",
+            "validation": "In Progress",
+            "code_review": "Review",
+            "auto_merge": "Review",
+            # Legacy pre-E16 stages kept so the back-compat tests
+            # (missing-own-label fail-safe, clarification retirement) still
+            # exercise a stage that's bound to a Linear state but no longer
+            # in any *_STAGE_ORDER chain.
             "task_intake": "Todo",
             "bug_triage": "Todo",
             "ba_requirements": "Todo",
             "tech_arch_plan": "Todo",
-            "dev_implementation": "In Progress",
             "qa_manual": "In Progress",
             "pr_review": "Review",
         },
         label_id_by_stage=stage_labels
         or {
+            "planning": "lbl_planning",
+            "dev_implementation": "lbl_dev",
+            "validation": "lbl_validation",
+            "code_review": "lbl_code_review",
+            "auto_merge": "lbl_auto_merge",
             "task_intake": "lbl_intake",
             "bug_triage": "lbl_bug_triage",
             "ba_requirements": "lbl_ba",
             "tech_arch_plan": "lbl_tech_arch",
-            "dev_implementation": "lbl_dev",
             "qa_manual": "lbl_qa_manual",
             "pr_review": "lbl_pr_review",
         },
@@ -126,20 +137,31 @@ def test_intake_filter_state_clause_is_todo() -> None:
     assert state_parts[0] == {"state": {"id": {"eq": "todo_state_id"}}}
 
 
-def test_tech_arch_plan_filter_requires_previous_stage_label() -> None:
-    """Subsequent stages still depend on the previous stage's label
-    being set (intake adds ``stage:task_intake`` on transition).
-    ``ba_requirements`` was folded into ``task_intake``, so the
-    first non-entry SDLC stage is now ``tech_arch_plan`` and its
-    predecessor is ``task_intake``."""
+def test_non_entry_stage_filter_requires_previous_stage_label() -> None:
+    """Non-entry stages still depend on the previous stage's label
+    being set (the prior role adds its ``stage:<X>`` breadcrumb on
+    finish). Post-E16 the first non-entry stage is ``dev_implementation``
+    and its predecessor is ``planning``; the picker filter must demand
+    that breadcrumb via the ``some`` operator so a freshly-planned
+    ticket is only picked once planning is done."""
     tracker = _make_tracker()
-    parts = tracker._fsm_filter("tech_arch_plan")
+    parts = tracker._fsm_filter("dev_implementation")
     label_clauses = _find_label_clauses(parts)
     has_some = any("some" in p["labels"] for p in label_clauses)
     assert has_some, (
-        "tech_arch_plan must require the previous (task_intake) stage "
+        "dev_implementation must require the previous (planning) stage "
         "label via the ``some`` operator"
     )
+    # The predecessor clause must reference planning's label id.
+    some_ids = [
+        p["labels"]["some"].get("id", {})
+        for p in label_clauses
+        if "some" in p["labels"]
+    ]
+    assert any(
+        ("lbl_planning" in (sid.get("in") or []) or sid.get("eq") == "lbl_planning")
+        for sid in some_ids
+    ), "predecessor clause must reference planning's label id"
     # The own-label exclusion must use ``every / neq``.
     has_every = any("every" in p["labels"] for p in label_clauses)
     assert has_every
