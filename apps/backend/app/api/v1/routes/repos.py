@@ -767,6 +767,7 @@ async def generate_bootstrap_plan_route(
         tracker=resolved.gateway,
         repo=repo_row,
         report=result.report,
+        actor_user_id=auth.user.id,
     )
     session.add(
         AuditLog(

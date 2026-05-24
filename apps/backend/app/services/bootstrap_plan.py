@@ -13,6 +13,7 @@ classification is the canonical infra-routing mechanism.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass
 
@@ -25,6 +26,14 @@ from backend.app.db.models.integrations import (
 )
 from backend.app.integrations.gateway.tracker import TrackerGateway
 from backend.app.services.sdlc_readiness import ReadinessReport
+
+logger = logging.getLogger(__name__)
+
+# Linear project states that mean "this epic is still live" — a bootstrap
+# project in any of these is reused on re-run instead of duplicated.
+_OPEN_PROJECT_STATES: frozenset[str] = frozenset(
+    {"backlog", "planned", "started", "paused"}
+)
 
 
 # capability → (ticket title, what the DevOps agent should scaffold).
@@ -185,6 +194,7 @@ async def _upsert_routing(
     workspace_id: uuid.UUID,
     project_native_id: str,
     repo_id: uuid.UUID,
+    actor_user_id: uuid.UUID | None = None,
 ) -> None:
     """Bind a tracker project to a repo (Variant A) so its tickets
     dispatch into ``repo_id``. Idempotent on (workspace, project)."""
@@ -198,14 +208,40 @@ async def _upsert_routing(
     ).scalars().first()
     if existing is not None:
         existing.repo_id = repo_id
+        if actor_user_id is not None:
+            existing.updated_by_user_id = actor_user_id
         return
     session.add(
         WorkspaceRepoRouting(
             workspace_id=workspace_id,
             project_native_id=project_native_id,
             repo_id=repo_id,
+            created_by_user_id=actor_user_id,
+            updated_by_user_id=actor_user_id,
         )
     )
+
+
+async def _find_open_bootstrap_project(
+    tracker: TrackerGateway, *, name: str
+) -> dict | None:
+    """Return an existing OPEN bootstrap project with this exact name, or
+    ``None``. Best-effort dedup so a re-run reuses the epic instead of
+    minting a duplicate project + duplicate tickets. Tolerant of trackers
+    that can't list / filter projects (returns None → caller creates)."""
+    try:
+        projects = await tracker.list_projects(query=name, limit=50)
+    except Exception as exc:  # noqa: BLE001 — dedup is best-effort
+        logger.warning("bootstrap dedup: list_projects failed: %s", exc)
+        return None
+    for proj in projects or []:
+        if proj.get("name") != name:
+            continue
+        state = str(proj.get("state") or "").lower()
+        # No state info → assume open (don't duplicate on uncertainty).
+        if not state or state in _OPEN_PROJECT_STATES:
+            return proj
+    return None
 
 
 async def generate_bootstrap_plan(
@@ -214,18 +250,46 @@ async def generate_bootstrap_plan(
     tracker: TrackerGateway,
     repo: WorkspaceRepo,
     report: ReadinessReport,
+    actor_user_id: uuid.UUID | None = None,
 ) -> BootstrapPlanResult:
     """Create the bootstrap project + one infra ticket per gap, bound to
     ``repo``. Requires ``report`` to have capability gaps — a repo that's
     only ``ready=False`` because of a missing required secret has nothing
     to scaffold, so we refuse rather than mint an empty epic + a dangling
     routing row. The endpoint 409s on this before calling; the guard here
-    is the backstop for any other caller (e.g. BS5 wizard)."""
+    is the backstop for any other caller (e.g. BS5 wizard).
+
+    Idempotent on re-run: if an OPEN bootstrap project with the same
+    deterministic name already exists, reuse it (re-assert the routing
+    binding) instead of minting a duplicate project + duplicate tickets."""
     if not report.gaps:
         raise ValueError(
             "generate_bootstrap_plan requires capability gaps; none present"
         )
     name = f"Bootstrap {report.project_type} SDLC — {repo.full_name}"[:255]
+
+    # Per-repo isolation rests entirely on ``repo.full_name`` being in the
+    # name — the dedup matches by name only, so two different repos can't
+    # collide unless their full_names match (impossible within a workspace).
+    existing = await _find_open_bootstrap_project(tracker, name=name)
+    if existing is not None:
+        project_id = str(existing.get("id") or "")
+        await _upsert_routing(
+            session,
+            workspace_id=repo.workspace_id,
+            project_native_id=project_id,
+            repo_id=repo.id,
+            actor_user_id=actor_user_id,
+        )
+        await session.flush()
+        return BootstrapPlanResult(
+            project_id=project_id,
+            project_url=str(existing.get("url") or ""),
+            project_native_id=project_id,
+            bound_repo_id=repo.id,
+            tickets=(),  # epic already exists — don't duplicate its tickets
+        )
+
     project = await tracker.create_project(
         name=name, body=_project_narrative(repo, report)
     )
@@ -236,6 +300,7 @@ async def generate_bootstrap_plan(
         workspace_id=repo.workspace_id,
         project_native_id=project_id,
         repo_id=repo.id,
+        actor_user_id=actor_user_id,
     )
 
     tickets: list[BootstrapTicket] = []

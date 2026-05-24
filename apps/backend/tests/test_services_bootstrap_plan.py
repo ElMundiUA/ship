@@ -23,11 +23,15 @@ from backend.app.services.sdlc_readiness import ReadinessReport
 
 
 class _FakeTracker:
-    def __init__(self) -> None:
+    def __init__(self, existing_projects: list[dict] | None = None) -> None:
         self.project: dict | None = None
         self.tickets: list[dict] = []
         self.sections: dict[str, str] = {}
+        self.existing_projects = existing_projects or []
         self._n = 0
+
+    async def list_projects(self, *, limit=50, state=None, query=None):
+        return list(self.existing_projects)
 
     async def create_project(self, *, name, body, description=None):
         self.project = {"name": name, "body": body}
@@ -180,6 +184,130 @@ async def test_no_gaps_refuses_to_mint_empty_epic(db_session, seed_repo) -> None
         )
     assert tracker.project is None
     assert tracker.tickets == []
+
+
+@pytest.mark.asyncio
+async def test_reuses_existing_open_bootstrap_project(db_session, seed_repo) -> None:
+    workspace, repo = seed_repo
+    name = f"Bootstrap web SDLC — {repo.full_name}"
+    tracker = _FakeTracker(
+        existing_projects=[
+            {
+                "id": "proj-existing",
+                "name": name,
+                "state": "started",
+                "url": "https://linear.app/acme/project/existing",
+            }
+        ]
+    )
+    report = _report(["containerization", "e2e_tests"])
+
+    result = await generate_bootstrap_plan(
+        session=db_session, tracker=tracker, repo=repo, report=report
+    )
+    # Reused the existing epic — no new project, no duplicate tickets.
+    assert tracker.project is None
+    assert tracker.tickets == []
+    assert result.project_native_id == "proj-existing"
+    assert result.tickets == ()
+    # Routing still (re-)bound to the existing project.
+    routing = (
+        await db_session.execute(
+            select(WorkspaceRepoRouting).where(
+                WorkspaceRepoRouting.project_native_id == "proj-existing",
+            )
+        )
+    ).scalars().first()
+    assert routing is not None
+    assert routing.repo_id == repo.id
+
+
+@pytest.mark.asyncio
+async def test_completed_bootstrap_project_does_not_block_new_one(
+    db_session, seed_repo
+) -> None:
+    workspace, repo = seed_repo
+    name = f"Bootstrap web SDLC — {repo.full_name}"
+    # A completed same-name project must NOT be reused — create a fresh one.
+    tracker = _FakeTracker(
+        existing_projects=[
+            {"id": "proj-old", "name": name, "state": "completed", "url": "x"}
+        ]
+    )
+    report = _report(["containerization"])
+
+    result = await generate_bootstrap_plan(
+        session=db_session, tracker=tracker, repo=repo, report=report
+    )
+    assert tracker.project is not None  # a new project was created
+    assert result.project_native_id == "proj-uuid-1"
+    assert len(result.tickets) == 1
+
+
+@pytest.mark.asyncio
+async def test_list_projects_failure_falls_through_to_create(
+    db_session, seed_repo
+) -> None:
+    # Best-effort dedup: if list_projects raises, we create (fail-open)
+    # rather than block a legitimate first-time bootstrap.
+    workspace, repo = seed_repo
+
+    class _RaisingTracker(_FakeTracker):
+        async def list_projects(self, *, limit=50, state=None, query=None):
+            raise RuntimeError("tracker down")
+
+    tracker = _RaisingTracker()
+    result = await generate_bootstrap_plan(
+        session=db_session, tracker=tracker, repo=repo, report=_report(["containerization"])
+    )
+    assert tracker.project is not None
+    assert len(result.tickets) == 1
+
+
+@pytest.mark.asyncio
+async def test_project_without_state_is_treated_as_open(
+    db_session, seed_repo
+) -> None:
+    # An adapter that omits state → assume open (don't risk duplication).
+    workspace, repo = seed_repo
+    name = f"Bootstrap web SDLC — {repo.full_name}"
+    tracker = _FakeTracker(
+        existing_projects=[{"id": "proj-nostate", "name": name, "url": "x"}]
+    )
+    result = await generate_bootstrap_plan(
+        session=db_session, tracker=tracker, repo=repo, report=_report(["containerization"])
+    )
+    assert tracker.project is None  # reused, not created
+    assert result.project_native_id == "proj-nostate"
+
+
+@pytest.mark.asyncio
+async def test_routing_records_actor_provenance(
+    db_session, seed_repo, seed_workspace
+) -> None:
+    workspace, repo = seed_repo
+    tracker = _FakeTracker()
+    report = _report(["containerization"])
+    # Real seeded user — created_by_user_id is an FK to users.id.
+    actor = seed_workspace[0].id
+
+    await generate_bootstrap_plan(
+        session=db_session,
+        tracker=tracker,
+        repo=repo,
+        report=report,
+        actor_user_id=actor,
+    )
+    routing = (
+        await db_session.execute(
+            select(WorkspaceRepoRouting).where(
+                WorkspaceRepoRouting.project_native_id == "proj-uuid-1",
+            )
+        )
+    ).scalars().first()
+    assert routing is not None
+    assert routing.created_by_user_id == actor
+    assert routing.updated_by_user_id == actor
 
 
 @pytest.mark.asyncio
