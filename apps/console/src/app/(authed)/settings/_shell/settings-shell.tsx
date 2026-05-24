@@ -13,6 +13,7 @@ import { cookies } from "next/headers";
 import { PageBody, PageHeader } from "@/components/app-shell";
 import { ApiUnavailable } from "@/components/api-unavailable";
 import { ConfigScopeCard } from "@/components/config-scope-card";
+import { RepoRoutingPanel } from "@/components/repo-routing-panel";
 import {
   IntegrationsWorkspaceBody,
   loadIntegrationsWorkspaceMode,
@@ -395,11 +396,17 @@ export async function SettingsShell({
           )}
 
           {activeTab === "repositories" && (
-            <RepositoriesPanel
-              workspaceId={workspace.id}
-              repositories={activatedRepos}
-              repoConfigs={repoConfigs}
-            />
+            <>
+              <RepositoriesPanel
+                workspaceId={workspace.id}
+                repositories={activatedRepos}
+                repoConfigs={repoConfigs}
+              />
+              <RepoRoutingPanel
+                workspaceId={workspace.id}
+                repositories={activatedRepos}
+              />
+            </>
           )}
 
           {activeTab === "registries" && (

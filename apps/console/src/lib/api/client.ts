@@ -467,6 +467,64 @@ export function listActivatedRepos(
   );
 }
 
+// --- Repo routing (Variant A) -----------------------------------------------
+
+export interface ApiRepoRoutingBinding {
+  project_native_id: string;
+  repo_id: string;
+  repo_full_name: string | null;
+}
+
+export interface ApiRepoRouting {
+  default_repo_id: string | null;
+  default_repo_full_name: string | null;
+  bindings: ApiRepoRoutingBinding[];
+}
+
+export function getRepoRouting(
+  workspaceId: string,
+  token?: string,
+): Promise<ApiRepoRouting> {
+  return apiFetch<ApiRepoRouting>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repo-routing`,
+    { token },
+  );
+}
+
+export function setDefaultRepo(
+  workspaceId: string,
+  repoId: string | null,
+  token?: string,
+): Promise<ApiRepoRouting> {
+  return apiFetch<ApiRepoRouting>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repo-routing/default`,
+    { method: "PUT", body: { repo_id: repoId }, token },
+  );
+}
+
+export function bindProjectRepo(
+  workspaceId: string,
+  projectNativeId: string,
+  repoId: string,
+  token?: string,
+): Promise<ApiRepoRouting> {
+  return apiFetch<ApiRepoRouting>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repo-routing/projects/${encodeURIComponent(projectNativeId)}`,
+    { method: "PUT", body: { repo_id: repoId }, token },
+  );
+}
+
+export function unbindProjectRepo(
+  workspaceId: string,
+  projectNativeId: string,
+  token?: string,
+): Promise<ApiRepoRouting> {
+  return apiFetch<ApiRepoRouting>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repo-routing/projects/${encodeURIComponent(projectNativeId)}`,
+    { method: "DELETE", token },
+  );
+}
+
 /**
  * Resolve an ``owner/repo`` slug to its activated repo row.
  *
