@@ -1177,6 +1177,7 @@ async def get_next_task(
                 tracker_kind=resolved.kind,
                 snapshot_fn=snapshot_fn,
                 settings=settings,
+                workspace_settings=ws_settings_row,
             )
             file_coordination_warning = overlap.warning_markdown
 

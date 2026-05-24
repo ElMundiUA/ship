@@ -1031,6 +1031,7 @@ async def maybe_dispatch(
             tracker_kind=resolved_tracker.kind,
             snapshot_fn=snapshot_fn,
             settings=settings,
+            workspace_settings=ws_settings_row,
             client=client,
         )
         file_coordination_warning = overlap.warning_markdown

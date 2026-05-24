@@ -209,11 +209,12 @@ async def build_file_coordination_warning(
     tracker_kind: str,
     snapshot_fn: Any,
     settings: Settings | None = None,
+    workspace_settings: dict | None = None,
     client: httpx.AsyncClient | None = None,
 ) -> FileOverlapResult:
     """Discover sibling open PR overlaps; return blockquote markdown or None."""
     settings = settings or get_settings()
-    if not settings.enable_file_overlap_warnings:
+    if not file_overlap_warnings_active(settings, workspace_settings):
         return FileOverlapResult(warning_markdown=None, file_overlap_warnings=[])
     if not project_id:
         return FileOverlapResult(warning_markdown=None, file_overlap_warnings=[])
