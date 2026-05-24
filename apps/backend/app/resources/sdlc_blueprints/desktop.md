@@ -1,4 +1,5 @@
 ---
+version: 1
 project_type: desktop
 display_name: Desktop application
 delivery: installer
@@ -25,6 +26,14 @@ required:
   - installers
   - code_signing
   - release_channel
+secrets:
+  required:
+    - CURSOR_API_KEY
+  optional:
+    - CSC_LINK
+    - CSC_KEY_PASSWORD
+    - APPLE_ID
+    - APPLE_APP_SPECIFIC_PASSWORD
 ---
 
 # Desktop application — SDLC blueprint (minimal)

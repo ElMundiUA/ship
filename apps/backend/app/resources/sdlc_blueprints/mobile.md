@@ -1,4 +1,5 @@
 ---
+version: 1
 project_type: mobile
 display_name: Mobile application
 delivery: app-store
@@ -24,6 +25,14 @@ required:
   - build_artifacts
   - internal_channel
   - store_release
+secrets:
+  required:
+    - CURSOR_API_KEY
+  optional:
+    - APP_STORE_CONNECT_API_KEY
+    - MATCH_PASSWORD
+    - ANDROID_KEYSTORE_BASE64
+    - ANDROID_KEYSTORE_PASSWORD
 ---
 
 # Mobile application — SDLC blueprint (minimal)

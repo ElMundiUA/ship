@@ -553,6 +553,120 @@ async def update_repo(
 
 
 # ---------------------------------------------------------------------------
+# SDLC bootstrap readiness (BS1)
+# ---------------------------------------------------------------------------
+
+
+class CapabilityStatusOut(BaseModel):
+    """One blueprint capability and whether the repo already has it."""
+
+    capability: str
+    required: bool
+    satisfied: bool
+    matched_by: str | None = None
+
+
+class SecretStatusOut(BaseModel):
+    """One expected secret and whether it's present on the repo."""
+
+    name: str
+    required: bool
+    present: bool
+
+
+class SdlcReadinessOut(BaseModel):
+    """Bootstrap readiness of a repo against its project-type blueprint.
+
+    ``has_blueprint=False`` with a ``detail`` covers the degraded cases
+    (intel not harvested yet, or no blueprint for the classified type —
+    e.g. backend / library / unknown). The console card renders
+    ``detail`` instead of the capability table in that case.
+    """
+
+    repo_id: uuid.UUID
+    intel_id: uuid.UUID | None
+    project_type: str | None
+    has_blueprint: bool
+    ready: bool
+    detail: str | None = None
+    delivery: str | None = None
+    environments: list[str] = []
+    capabilities: list[CapabilityStatusOut] = []
+    gaps: list[str] = []
+    secrets: list[SecretStatusOut] = []
+    missing_required_secrets: list[str] = []
+    external_checklist: list[str] = []
+
+
+@router.get("/{repo_id}/sdlc-readiness", response_model=SdlcReadinessOut)
+async def read_sdlc_readiness(
+    workspace_id: uuid.UUID,
+    repo_id: uuid.UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> SdlcReadinessOut:
+    """Assess a repo's SDLC bootstrap readiness against its blueprint.
+
+    Picks the blueprint by the repo's classified ``project_type`` (from
+    the latest ``repo_intel`` harvest), then checks which required
+    capabilities are present (file/dep probes against the live tree),
+    which expected secrets are configured, and what the operator still
+    has to do by hand. Read-only; safe to poll from the console card.
+    """
+    from backend.app.services.sdlc_readiness import build_readiness
+
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
+
+    repo_row = (
+        await session.execute(
+            select(WorkspaceRepo).where(
+                WorkspaceRepo.id == repo_id,
+                WorkspaceRepo.workspace_id == workspace_id,
+            )
+        )
+    ).scalars().first()
+    if repo_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Repo not found in this workspace.",
+        )
+
+    result = await build_readiness(
+        session=session, repo=repo_row, settings=settings
+    )
+    rep = result.report
+    return SdlcReadinessOut(
+        repo_id=result.repo_id,
+        intel_id=result.intel_id,
+        project_type=result.project_type,
+        has_blueprint=result.has_blueprint,
+        ready=bool(rep.ready) if rep else False,
+        detail=result.detail,
+        delivery=rep.delivery if rep else None,
+        environments=list(rep.environments) if rep else [],
+        capabilities=[
+            CapabilityStatusOut(
+                capability=c.capability,
+                required=c.required,
+                satisfied=c.satisfied,
+                matched_by=c.matched_by,
+            )
+            for c in (rep.capabilities if rep else ())
+        ],
+        gaps=list(rep.gaps) if rep else [],
+        secrets=[
+            SecretStatusOut(name=s.name, required=s.required, present=s.present)
+            for s in (rep.secrets if rep else ())
+        ],
+        missing_required_secrets=(
+            list(rep.missing_required_secrets) if rep else []
+        ),
+        external_checklist=list(rep.external_checklist) if rep else [],
+    )
+
+
+# ---------------------------------------------------------------------------
 # Wizard v2 unified seed PR (iter 5)
 #
 # Single-shot replacement for ``install_bundle`` + the retired knowledge seed:

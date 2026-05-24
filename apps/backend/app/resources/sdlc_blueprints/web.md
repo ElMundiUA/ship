@@ -1,4 +1,5 @@
 ---
+version: 1
 project_type: web
 display_name: Web application
 delivery: docker
@@ -25,6 +26,18 @@ required:
   - containerization
   - dev_env
   - prod_promotion
+# Secrets the readiness assessor checks against the repo's GitHub Actions
+# secrets. ``required`` gates readiness; ``optional`` is advisory because
+# the deploy-target creds are conditional (VPS vs k8s vs PaaS — the
+# operator picks one in the bootstrap ticket).
+secrets:
+  required:
+    - CURSOR_API_KEY
+  optional:
+    - REGISTRY_USERNAME
+    - REGISTRY_TOKEN
+    - DEV_DATABASE_URL
+    - PROD_DATABASE_URL
 ---
 
 # Web application — SDLC blueprint (minimal)
