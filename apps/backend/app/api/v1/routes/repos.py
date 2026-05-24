@@ -667,6 +667,140 @@ async def read_sdlc_readiness(
 
 
 # ---------------------------------------------------------------------------
+# SDLC bootstrap plan generation (BS3)
+# ---------------------------------------------------------------------------
+
+
+class BootstrapTicketOut(BaseModel):
+    capability: str
+    display_id: str
+    url: str
+
+
+class BootstrapPlanOut(BaseModel):
+    """Result of generating a bootstrap epic for a repo."""
+
+    repo_id: uuid.UUID
+    project_url: str
+    project_native_id: str
+    tickets: list[BootstrapTicketOut]
+
+
+@router.post("/{repo_id}/bootstrap/generate-plan", response_model=BootstrapPlanOut)
+async def generate_bootstrap_plan_route(
+    workspace_id: uuid.UUID,
+    repo_id: uuid.UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> BootstrapPlanOut:
+    """Generate the bootstrap epic: a tracker project + one infra ticket
+    per readiness gap, bound to this repo so its tickets dispatch here.
+
+    Admin-only. 409s when the repo is already ready, has no blueprint, or
+    the tree can't be assessed — there's nothing to bootstrap. The infra
+    tickets flow through planning → DevOps (BS0.1) to scaffold the setup.
+    """
+    from backend.app.services.bootstrap_plan import generate_bootstrap_plan
+    from backend.app.services.sdlc_readiness import build_readiness
+    from backend.app.services.tracker_resolver import resolve_for_workspace
+
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+
+    repo_row = (
+        await session.execute(
+            select(WorkspaceRepo).where(
+                WorkspaceRepo.id == repo_id,
+                WorkspaceRepo.workspace_id == workspace_id,
+            )
+        )
+    ).scalars().first()
+    if repo_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Repo not found in this workspace.",
+        )
+
+    result = await build_readiness(
+        session=session, repo=repo_row, settings=settings
+    )
+    if not result.has_blueprint or result.report is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                result.detail
+                or "No bootstrap blueprint for this repo's project type."
+            ),
+        )
+    if result.report.ready:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Repo is already SDLC-ready — nothing to bootstrap.",
+        )
+    if not result.report.gaps:
+        # ready=False only because of missing required secrets — there's
+        # nothing for the DevOps agent to scaffold; the operator adds the
+        # secrets by hand (see the readiness external checklist).
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "No capability gaps to bootstrap — only required secrets "
+                "are missing. Add them to the repo by hand "
+                "(Settings → Secrets); see the readiness checklist."
+            ),
+        )
+
+    resolved = await resolve_for_workspace(
+        session=session, settings=settings, workspace_id=workspace_id
+    )
+    if resolved is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "No tracker (Linear) is connected for this workspace, so "
+                "Ship can't create the bootstrap epic."
+            ),
+        )
+
+    plan = await generate_bootstrap_plan(
+        session=session,
+        tracker=resolved.gateway,
+        repo=repo_row,
+        report=result.report,
+    )
+    session.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=auth.user.id,
+            actor_token_id=auth.token.id if auth.token else None,
+            action="repo.bootstrap.generate_plan",
+            target_kind="workspace_repo",
+            target_id=str(repo_id),
+            payload={
+                "full_name": repo_row.full_name,
+                "project_native_id": plan.project_native_id,
+                "ticket_count": len(plan.tickets),
+                "gaps": [t.capability for t in plan.tickets],
+            },
+        )
+    )
+    await session.flush()
+    return BootstrapPlanOut(
+        repo_id=repo_row.id,
+        project_url=plan.project_url,
+        project_native_id=plan.project_native_id,
+        tickets=[
+            BootstrapTicketOut(
+                capability=t.capability,
+                display_id=t.display_id,
+                url=t.url,
+            )
+            for t in plan.tickets
+        ],
+    )
+
+
+# ---------------------------------------------------------------------------
 # Wizard v2 unified seed PR (iter 5)
 #
 # Single-shot replacement for ``install_bundle`` + the retired knowledge seed:
