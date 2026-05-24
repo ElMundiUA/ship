@@ -14,6 +14,7 @@ import { PageBody, PageHeader } from "@/components/app-shell";
 import { ApiUnavailable } from "@/components/api-unavailable";
 import { ConfigScopeCard } from "@/components/config-scope-card";
 import { RepoRoutingPanel } from "@/components/repo-routing-panel";
+import { SdlcReadinessCard } from "@/components/sdlc-readiness-card";
 import {
   IntegrationsWorkspaceBody,
   loadIntegrationsWorkspaceMode,
@@ -652,6 +653,27 @@ function RepositoriesPanel({
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+      {repositories.length > 0 && (
+        <div className="mt-6">
+          <h4 className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-white/45">
+            SDLC readiness
+          </h4>
+          <p className="mb-3 text-[11px] text-white/45">
+            Check whether each repo is set up for its project type (tests,
+            Docker, deploy) and generate the DevOps tickets to close the gaps.
+          </p>
+          <div className="space-y-2">
+            {repositories.map((repo) => (
+              <SdlcReadinessCard
+                key={repo.id}
+                workspaceId={workspaceId}
+                repoId={repo.id}
+                repoFullName={repo.full_name}
+              />
+            ))}
+          </div>
         </div>
       )}
       <div className="mt-4 rounded-xl border border-aqua/20 bg-aqua/[0.04] px-3 py-2.5 text-[11px] leading-relaxed text-aqua/85">

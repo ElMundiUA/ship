@@ -525,6 +525,72 @@ export function unbindProjectRepo(
   );
 }
 
+// --- SDLC bootstrap readiness (BS1/BS2/BS3) --------------------------------
+
+export interface ApiSdlcCapability {
+  capability: string;
+  required: boolean;
+  satisfied: boolean;
+  matched_by: string | null;
+}
+
+export interface ApiSdlcSecret {
+  name: string;
+  required: boolean;
+  present: boolean;
+}
+
+export interface ApiSdlcReadiness {
+  repo_id: string;
+  intel_id: string | null;
+  project_type: string | null;
+  has_blueprint: boolean;
+  ready: boolean;
+  detail: string | null;
+  delivery: string | null;
+  environments: string[];
+  capabilities: ApiSdlcCapability[];
+  gaps: string[];
+  secrets: ApiSdlcSecret[];
+  missing_required_secrets: string[];
+  external_checklist: string[];
+}
+
+export function getSdlcReadiness(
+  workspaceId: string,
+  repoId: string,
+  token?: string,
+): Promise<ApiSdlcReadiness> {
+  return apiFetch<ApiSdlcReadiness>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/sdlc-readiness`,
+    { token },
+  );
+}
+
+export interface ApiBootstrapTicket {
+  capability: string;
+  display_id: string;
+  url: string;
+}
+
+export interface ApiBootstrapPlan {
+  repo_id: string;
+  project_url: string;
+  project_native_id: string;
+  tickets: ApiBootstrapTicket[];
+}
+
+export function generateBootstrapPlan(
+  workspaceId: string,
+  repoId: string,
+  token?: string,
+): Promise<ApiBootstrapPlan> {
+  return apiFetch<ApiBootstrapPlan>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/bootstrap/generate-plan`,
+    { method: "POST", token },
+  );
+}
+
 /**
  * Resolve an ``owner/repo`` slug to its activated repo row.
  *
