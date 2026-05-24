@@ -122,6 +122,7 @@ class HarvestReport:
     files_examined: int
     languages_detected: int
     knowledge_articles_written: int
+    project_type: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -228,6 +229,14 @@ _JS_FRAMEWORKS: dict[str, str] = {
     "vite": "vite",
     "tailwindcss": "tailwindcss",
     "astro": "astro",
+    # Mobile / desktop shells — feed the BS0.2 project-type classifier.
+    # ``react-native`` always ships alongside ``react``; the classifier
+    # checks the mobile set first so the combo resolves to mobile.
+    "react-native": "react-native",
+    "expo": "expo",
+    "electron": "electron",
+    "@tauri-apps/api": "tauri",
+    "@tauri-apps/cli": "tauri",
 }
 
 _RUBY_FRAMEWORKS: dict[str, str] = {
@@ -330,6 +339,8 @@ async def harvest_repo_intel(
     structure: dict[str, Any] = {}
     commit_style: dict[str, Any] = {}
     visual_tokens: dict[str, Any] = {}
+    project_type: str | None = None
+    sdlc_maturity: dict[str, Any] = {}
     files_examined: int = 0
     error_text: str | None = None
 
@@ -361,6 +372,17 @@ async def harvest_repo_intel(
         visual_tokens = await _detect_visual_tokens(
             gw, ref=ref, repo=repo, paths=all_paths
         )
+
+        # BS0.2 — classify project type + delivery maturity from the
+        # signals gathered above. Pure + deterministic; never raises.
+        project_type, _pt_conf, _pt_signals = _classify_project(
+            frameworks=frameworks,
+            entry_points=entry_points,
+            paths=all_paths,
+        )
+        sdlc_maturity = _assess_sdlc_maturity(paths=all_paths)
+        sdlc_maturity["project_type_confidence"] = _pt_conf
+        sdlc_maturity["project_type_signals"] = _pt_signals
     except Exception as exc:  # noqa: BLE001 — recorded, not raised
         logger.exception(
             "repo_intel harvest failed for repo=%s", repo_id
@@ -385,6 +407,8 @@ async def harvest_repo_intel(
         structure=structure,
         commit_style=commit_style,
         visual_tokens=visual_tokens,
+        project_type=project_type,
+        sdlc_maturity=sdlc_maturity,
         harvested_by=triggered_by,
         harvest_duration_ms=duration_ms,
         harvest_error=error_text,
@@ -409,6 +433,7 @@ async def harvest_repo_intel(
         files_examined=files_examined,
         languages_detected=len(languages),
         knowledge_articles_written=articles_written,
+        project_type=project_type,
     )
 
 
@@ -822,6 +847,273 @@ def _percentile(values: list[int], q: float) -> int:
     ordered = sorted(values)
     idx = int(round(q * (len(ordered) - 1)))
     return ordered[max(0, min(idx, len(ordered) - 1))]
+
+
+# ---------------------------------------------------------------------------
+# Step 5b — project-type + SDLC-maturity classification (BS0.2)
+# ---------------------------------------------------------------------------
+#
+# Both passes are pure functions over already-harvested signals
+# (frameworks + entry points + the flat path list). They never hit the
+# network and never raise — an empty/garbage input yields ``unknown`` /
+# all-false flags rather than blowing up the harvest. The output feeds
+# the bootstrap readiness assessor (BS1) and recommendation card (BS2).
+
+
+# Canonical-framework → project-type category. Checked most-specific
+# first (mobile / desktop shells before web), because a React Native app
+# also declares ``react`` and an Electron app also declares its web
+# framework — the narrower signal must win.
+_MOBILE_FRAMEWORKS: frozenset[str] = frozenset({"react-native", "expo"})
+_DESKTOP_FRAMEWORKS: frozenset[str] = frozenset({"electron", "tauri"})
+_WEB_FRAMEWORKS: frozenset[str] = frozenset(
+    {"next.js", "nuxt", "remix", "astro", "svelte", "vue", "react"}
+)
+_BACKEND_FRAMEWORKS: frozenset[str] = frozenset(
+    {
+        "fastapi",
+        "django",
+        "flask",
+        "starlette",
+        "tornado",
+        "pyramid",
+        "sanic",
+        "litestar",
+        "express",
+        "nestjs",
+        "gin",
+        "echo",
+        "fiber",
+        "chi",
+        "rails",
+        "sinatra",
+        "actix-web",
+        "rocket",
+        "axum",
+        "warp",
+    }
+)
+
+
+def _classify_project(
+    *,
+    frameworks: list[str],
+    entry_points: list[dict[str, Any]],
+    paths: list[str],
+) -> tuple[str, str, list[str]]:
+    """Return ``(project_type, confidence, signals)``.
+
+    ``project_type`` is one of ``web`` / ``mobile`` / ``desktop`` /
+    ``backend`` / ``library`` / ``unknown``. ``confidence`` is ``high``
+    for a framework-backed match, ``medium`` for a path-marker-only
+    match, ``low`` for the library fallback, ``unknown`` for no signal.
+    ``signals`` is the human-readable evidence list shown on the
+    bootstrap card ("framework:next.js", "path:pubspec.yaml").
+    """
+    fw = set(frameworks)
+    paths_set = set(paths)
+    top_dirs = {p.split("/", 1)[0] for p in paths_set if "/" in p}
+    signals: list[str] = []
+
+    def _has_path(pred: Callable[[str], bool]) -> bool:
+        return any(pred(p) for p in paths_set)
+
+    # --- mobile (most specific) -----------------------------------------
+    mobile_fw = fw & _MOBILE_FRAMEWORKS
+    has_flutter = "pubspec.yaml" in paths_set
+    native_pair = {"ios", "android"} <= top_dirs
+    if mobile_fw or has_flutter or native_pair:
+        if mobile_fw:
+            signals.extend(f"framework:{n}" for n in sorted(mobile_fw))
+        if has_flutter:
+            signals.append("path:pubspec.yaml")
+        if native_pair:
+            signals.append("dirs:ios+android")
+        confidence = "high" if mobile_fw else "medium"
+        return "mobile", confidence, signals
+
+    # --- desktop --------------------------------------------------------
+    desktop_fw = fw & _DESKTOP_FRAMEWORKS
+    has_tauri_conf = _has_path(
+        lambda p: p.endswith("tauri.conf.json") or p.startswith("src-tauri/")
+    )
+    if desktop_fw or has_tauri_conf:
+        if desktop_fw:
+            signals.extend(f"framework:{n}" for n in sorted(desktop_fw))
+        if has_tauri_conf and not desktop_fw:
+            signals.append("path:src-tauri")
+        confidence = "high" if desktop_fw else "medium"
+        return "desktop", confidence, signals
+
+    # --- web ------------------------------------------------------------
+    web_fw = fw & _WEB_FRAMEWORKS
+    has_page = any(e.get("kind") == "page" for e in entry_points)
+    has_index_html = "index.html" in paths_set or _has_path(
+        lambda p: p.endswith("/index.html")
+    )
+    # ``vite`` is a build tool, not a UI framework — it backs both browser
+    # apps and publishable libs. Treat it as a web signal only with an app
+    # indicator (a routed page or a root ``index.html``); a vite lib has
+    # neither and falls through to the library branch below.
+    vite_app = "vite" in fw and (has_page or has_index_html)
+    if web_fw or vite_app:
+        signals.extend(f"framework:{n}" for n in sorted(web_fw))
+        if vite_app and "vite" not in web_fw:
+            signals.append("framework:vite")
+        if has_page:
+            signals.append("entry:page")
+        # A real UI framework is a high-confidence call; a vite-only app
+        # signal is weaker.
+        confidence = "high" if web_fw else "medium"
+        return "web", confidence, signals
+
+    # --- backend --------------------------------------------------------
+    backend_fw = fw & _BACKEND_FRAMEWORKS
+    if backend_fw:
+        signals.extend(f"framework:{n}" for n in sorted(backend_fw))
+        return "backend", "high", signals
+
+    # --- library (fallback): publishable code, no app/server shell ------
+    has_module_entry = any(
+        e.get("kind") == "module" for e in entry_points
+    )
+    has_manifest = bool(
+        paths_set & {"package.json", "pyproject.toml", "Cargo.toml", "go.mod"}
+    )
+    if has_module_entry and has_manifest:
+        signals.append("entry:module")
+        if has_page:
+            # Reachable: a routed page with no web framework and no vite
+            # app-indicator skips the web branch and lands here.
+            signals.append("entry:page")
+        return "library", "low", signals
+
+    return "unknown", "unknown", signals
+
+
+# Env-name extraction patterns. Each maps a path to the environment name
+# it implies; the harvester collects the distinct set so a repo with
+# ``.env.dev`` + ``.env.prod`` reports ``env_count=2``.
+# Capture the first ``.env.<name>`` segment, tolerating trailing dotted
+# qualifiers so ``.env.production.local`` still resolves to ``production``
+# (and is then kept, while bare ``.env.local`` resolves to ``local`` and
+# is dropped by ``_NON_ENV_NAMES``).
+_ENV_FILE_RE = re.compile(
+    r"(?:^|/)\.env\.(?P<name>[a-z0-9_-]+?)(?:\.[a-z0-9_-]+)*$"
+)
+_OVERLAY_RE = re.compile(r"(?:^|/)overlays/(?P<name>[a-z0-9_-]+)/")
+_HELM_VALUES_RE = re.compile(r"(?:^|/)values-(?P<name>[a-z0-9_-]+)\.ya?ml$")
+# ``.env.example`` / ``.env.local`` / templates are not deploy targets.
+_NON_ENV_NAMES: frozenset[str] = frozenset(
+    {"example", "sample", "template", "local", "dist", "defaults"}
+)
+
+
+def _assess_sdlc_maturity(*, paths: list[str]) -> dict[str, Any]:
+    """Derive delivery-maturity flags from the path listing.
+
+    Heuristic and deterministic — every flag is "does a path matching
+    this shape exist". Drives the bootstrap readiness assessor, not any
+    gate, so false positives are cheap; the assessor re-checks before it
+    files a recommendation.
+    """
+    paths_set = set(paths)
+
+    def _base(p: str) -> str:
+        return p.rsplit("/", 1)[-1]
+
+    has_dockerfile = _any(paths_set, lambda p: _base(p).startswith("Dockerfile"))
+    has_compose = _any(
+        paths_set,
+        lambda p: _base(p) in {
+            "docker-compose.yml",
+            "docker-compose.yaml",
+            "compose.yml",
+            "compose.yaml",
+        },
+    )
+    has_ci = _any(
+        paths_set,
+        lambda p: p.startswith(".github/workflows/")
+        and (p.endswith(".yml") or p.endswith(".yaml")),
+    )
+    has_unit_tests = _any(paths_set, _looks_like_unit_test)
+    has_e2e = _any(paths_set, _looks_like_e2e)
+
+    env_names: set[str] = set()
+    for p in paths_set:
+        for pat in (_ENV_FILE_RE, _OVERLAY_RE, _HELM_VALUES_RE):
+            m = pat.search(p)
+            if m:
+                name = m.group("name").lower()
+                if name not in _NON_ENV_NAMES:
+                    env_names.add(name)
+
+    # Promotion = a CD pipeline exists AND there's more than one target to
+    # promote between. Best-effort: a deploy/release/promote/cd workflow
+    # plus ≥2 distinct environments. ``cd`` covers GitOps repos that name
+    # the pipeline ``cd.yml`` rather than ``deploy.yml``.
+    has_deploy_wf = _any(
+        paths_set,
+        lambda p: p.startswith(".github/workflows/")
+        and any(
+            k in _base(p).lower()
+            for k in ("deploy", "release", "promote", "cd")
+        ),
+    )
+    has_promotion = has_deploy_wf and len(env_names) >= 2
+
+    return {
+        # Bump when flags are added/renamed so the BS1 readiness assessor
+        # can tell a partial old-row blob from a current one.
+        "schema_version": 1,
+        "has_unit_tests": has_unit_tests,
+        "has_e2e": has_e2e,
+        "has_dockerfile": has_dockerfile,
+        "has_compose": has_compose,
+        "has_ci": has_ci,
+        "env_count": len(env_names),
+        "env_names": sorted(env_names),
+        "has_promotion": has_promotion,
+    }
+
+
+def _any(paths_set: set[str], pred: Callable[[str], bool]) -> bool:
+    return any(pred(p) for p in paths_set)
+
+
+def _looks_like_unit_test(path: str) -> bool:
+    base = path.rsplit("/", 1)[-1]
+    lowered = path.lower()
+    if "/e2e/" in lowered or lowered.startswith("e2e/"):
+        return False  # counted as e2e, not unit
+    if any(seg in lowered for seg in ("/test/", "/tests/", "/__tests__/")):
+        return True
+    return bool(
+        base.startswith("test_")
+        and base.endswith(".py")
+        or base.endswith("_test.py")
+        or base.endswith("_test.go")
+        or base.endswith(".test.ts")
+        or base.endswith(".test.tsx")
+        or base.endswith(".test.js")
+        or base.endswith(".spec.ts")
+        or base.endswith(".spec.tsx")
+        or base.endswith(".spec.js")
+        or base.endswith("_spec.rb")
+    )
+
+
+def _looks_like_e2e(path: str) -> bool:
+    base = path.rsplit("/", 1)[-1].lower()
+    lowered = path.lower()
+    if base.startswith("playwright.config.") or base.startswith("cypress.config."):
+        return True
+    if base.endswith((".cy.ts", ".cy.tsx", ".cy.js")):
+        return True
+    return any(
+        seg in lowered for seg in ("/e2e/", "cypress/", "/playwright/")
+    ) or lowered.startswith("e2e/")
 
 
 # ---------------------------------------------------------------------------

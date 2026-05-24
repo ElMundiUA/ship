@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
-from sqlalchemy import inspect, select, text
+from sqlalchemy import select, text
 
 from backend.app.db.models.agent_memory import (
     BucketArticle,
@@ -224,6 +224,8 @@ async def test_migration_creates_table(db_session) -> None:
     assert "structure" in columns
     assert "commit_style" in columns
     assert "visual_tokens" in columns
+    assert "project_type" in columns
+    assert "sdlc_maturity" in columns
     assert "harvested_at" in columns
     assert "harvested_by" in columns
     assert "harvest_duration_ms" in columns
@@ -828,3 +830,298 @@ async def test_enqueue_harvest_uses_redis_pool_when_provided() -> None:
     assert args[3] == "wizard"
     assert "_job_id" in kwargs
     assert kwargs["_job_id"].startswith(f"harvest:{repo_id}:")
+
+
+# ---------------------------------------------------------------------------
+# 12. Project-type classification (BS0.2) — pure function matrix
+# ---------------------------------------------------------------------------
+
+
+def _classify(frameworks, *, entry_points=None, paths=None):
+    return svc._classify_project(
+        frameworks=frameworks,
+        entry_points=entry_points or [],
+        paths=paths or [],
+    )
+
+
+def test_classify_web_from_framework() -> None:
+    ptype, conf, signals = _classify(
+        ["next.js", "react", "tailwindcss"],
+        entry_points=[{"path": "app/page.tsx", "kind": "page"}],
+    )
+    assert ptype == "web"
+    assert conf == "high"
+    assert "framework:next.js" in signals
+    assert "entry:page" in signals
+
+
+def test_classify_mobile_react_native_beats_react() -> None:
+    # react-native always ships alongside react; mobile must win.
+    ptype, conf, _ = _classify(["react", "react-native"])
+    assert ptype == "mobile"
+    assert conf == "high"
+
+
+def test_classify_mobile_expo() -> None:
+    ptype, conf, _ = _classify(["react", "expo"])
+    assert ptype == "mobile"
+    assert conf == "high"
+
+
+def test_classify_mobile_flutter_from_path() -> None:
+    ptype, conf, signals = _classify([], paths=["pubspec.yaml", "lib/main.dart"])
+    assert ptype == "mobile"
+    assert conf == "medium"
+    assert "path:pubspec.yaml" in signals
+
+
+def test_classify_mobile_native_dir_pair() -> None:
+    ptype, conf, signals = _classify(
+        [], paths=["ios/Podfile", "android/build.gradle", "README.md"]
+    )
+    assert ptype == "mobile"
+    assert conf == "medium"
+    assert "dirs:ios+android" in signals
+
+
+def test_classify_desktop_electron() -> None:
+    ptype, conf, _ = _classify(["react", "electron"])
+    assert ptype == "desktop"
+    assert conf == "high"
+
+
+def test_classify_desktop_tauri_from_path() -> None:
+    ptype, conf, signals = _classify(
+        [], paths=["src-tauri/tauri.conf.json", "src-tauri/Cargo.toml"]
+    )
+    assert ptype == "desktop"
+    assert conf == "medium"
+    assert "path:src-tauri" in signals
+
+
+def test_classify_backend_fastapi() -> None:
+    ptype, conf, _ = _classify(["fastapi"])
+    assert ptype == "backend"
+    assert conf == "high"
+
+
+def test_classify_backend_express_not_web() -> None:
+    # express is a server framework, not a browser UI — must be backend.
+    ptype, _, _ = _classify(["express"])
+    assert ptype == "backend"
+
+
+def test_classify_web_wins_over_backend_in_fullstack() -> None:
+    # next.js (web) + express (backend) monorepo: it has a UI → web.
+    ptype, _, _ = _classify(["next.js", "express"])
+    assert ptype == "web"
+
+
+def test_classify_library_fallback() -> None:
+    ptype, conf, signals = _classify(
+        [],
+        entry_points=[{"path": "src/index.ts", "kind": "module"}],
+        paths=["package.json", "src/index.ts"],
+    )
+    assert ptype == "library"
+    assert conf == "low"
+    assert "entry:module" in signals
+
+
+def test_classify_unknown_when_no_signal() -> None:
+    ptype, conf, signals = _classify([], paths=["README.md", "LICENSE"])
+    assert ptype == "unknown"
+    assert conf == "unknown"
+    assert signals == []
+
+
+# ---------------------------------------------------------------------------
+# 13. SDLC-maturity assessment (BS0.2) — pure function
+# ---------------------------------------------------------------------------
+
+
+def _maturity(paths):
+    return svc._assess_sdlc_maturity(paths=paths)
+
+
+def test_maturity_full_stack_promotable() -> None:
+    m = _maturity(
+        [
+            "Dockerfile",
+            "docker-compose.yml",
+            ".github/workflows/ci.yml",
+            ".github/workflows/deploy.yml",
+            "tests/test_app.py",
+            "e2e/login.spec.ts",
+            ".env.dev",
+            ".env.prod",
+            "src/main.py",
+        ]
+    )
+    assert m["has_dockerfile"] is True
+    assert m["has_compose"] is True
+    assert m["has_ci"] is True
+    assert m["has_unit_tests"] is True
+    assert m["has_e2e"] is True
+    assert m["env_count"] == 2
+    assert m["env_names"] == ["dev", "prod"]
+    assert m["has_promotion"] is True
+
+
+def test_maturity_bare_repo_all_false() -> None:
+    m = _maturity(["README.md", "main.py"])
+    assert m["has_dockerfile"] is False
+    assert m["has_compose"] is False
+    assert m["has_ci"] is False
+    assert m["has_unit_tests"] is False
+    assert m["has_e2e"] is False
+    assert m["env_count"] == 0
+    assert m["env_names"] == []
+    assert m["has_promotion"] is False
+
+
+def test_maturity_env_example_is_not_a_deploy_target() -> None:
+    m = _maturity([".env.example", ".env.local", ".env.template"])
+    assert m["env_count"] == 0
+
+
+def test_maturity_promotion_requires_two_envs() -> None:
+    # A deploy workflow with a single environment isn't a promotion path.
+    m = _maturity([".github/workflows/deploy.yml", ".env.prod"])
+    assert m["has_promotion"] is False
+    assert m["env_count"] == 1
+
+
+def test_maturity_playwright_config_is_e2e() -> None:
+    m = _maturity(["playwright.config.ts", "src/index.ts"])
+    assert m["has_e2e"] is True
+
+
+def test_maturity_dockerfile_variant_name() -> None:
+    m = _maturity(["Dockerfile.prod"])
+    assert m["has_dockerfile"] is True
+
+
+# ---------------------------------------------------------------------------
+# 14. End-to-end: harvest persists project_type + sdlc_maturity
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_harvest_persists_project_type_and_maturity(
+    db_session, seed_activated_repo
+) -> None:
+    workspace, repo, _ = seed_activated_repo
+    gw = FakeCodeHost(
+        files={
+            "package.json": _FakeFile(
+                path="package.json",
+                content=(
+                    '{"dependencies": {"next": "14.0.0", "react": "18.2.0", '
+                    '"tailwindcss": "3.4.0"}}'
+                ),
+            ),
+            "app/page.tsx": _FakeFile(
+                path="app/page.tsx", content="export default function Page(){}"
+            ),
+            "Dockerfile": _FakeFile(path="Dockerfile", content="FROM node:20"),
+            ".github/workflows/ci.yml": _FakeFile(
+                path=".github/workflows/ci.yml", content="on: push"
+            ),
+            "tests/home.test.tsx": _FakeFile(
+                path="tests/home.test.tsx", content="test('x', () => {})"
+            ),
+        }
+    )
+
+    report = await harvest_repo_intel(
+        session=db_session,
+        workspace_id=workspace.id,
+        repo_id=repo.id,
+        gateway=gw,
+        commit_fetcher=_no_commits,
+    )
+
+    assert report.project_type == "web"
+
+    row = await db_session.get(RepoIntel, report.intel_id)
+    assert row is not None
+    assert row.project_type == "web"
+    assert row.harvest_error is None
+    assert row.sdlc_maturity["has_dockerfile"] is True
+    assert row.sdlc_maturity["has_ci"] is True
+    assert row.sdlc_maturity["has_unit_tests"] is True
+    assert row.sdlc_maturity["project_type_confidence"] == "high"
+    assert "framework:next.js" in row.sdlc_maturity["project_type_signals"]
+
+
+# ---------------------------------------------------------------------------
+# 15. BS0.2 review nits — vite disambiguation, GitOps promotion, env regexes
+# ---------------------------------------------------------------------------
+
+
+def test_classify_vite_app_is_web_medium() -> None:
+    # vite + a root index.html (the classic Vite app entry) → web, but
+    # only medium confidence because vite is a build tool, not a UI fw.
+    ptype, conf, signals = _classify(
+        ["vite"], paths=["index.html", "src/main.ts", "package.json"]
+    )
+    assert ptype == "web"
+    assert conf == "medium"
+    assert "framework:vite" in signals
+
+
+def test_classify_vite_lib_is_library_not_web() -> None:
+    # vite with no app indicator (no page, no index.html) but a module
+    # entry + manifest → library, not web.
+    ptype, conf, _ = _classify(
+        ["vite"],
+        entry_points=[{"path": "src/index.ts", "kind": "module"}],
+        paths=["package.json", "src/index.ts", "vite.config.ts"],
+    )
+    assert ptype == "library"
+    assert conf == "low"
+
+
+def test_maturity_promotion_via_cd_workflow() -> None:
+    # GitOps repos commonly name the pipeline cd.yml, not deploy.yml.
+    m = _maturity([".github/workflows/cd.yml", ".env.dev", ".env.prod"])
+    assert m["has_promotion"] is True
+
+
+def test_maturity_env_from_kustomize_overlays() -> None:
+    m = _maturity(
+        [
+            "overlays/staging/kustomization.yaml",
+            "overlays/production/kustomization.yaml",
+            "base/deployment.yaml",
+        ]
+    )
+    assert m["env_count"] == 2
+    assert m["env_names"] == ["production", "staging"]
+
+
+def test_maturity_env_from_helm_values() -> None:
+    m = _maturity(["chart/values-dev.yaml", "chart/values-prod.yaml"])
+    assert m["env_count"] == 2
+    assert m["env_names"] == ["dev", "prod"]
+
+
+def test_maturity_env_dotlocal_resolves_to_base_name() -> None:
+    # .env.production.local is a production target override, not a
+    # separate env; the base name must still be captured.
+    m = _maturity([".env.production.local", ".env.dev"])
+    assert "production" in m["env_names"]
+    assert "dev" in m["env_names"]
+    assert m["env_count"] == 2
+
+
+def test_maturity_cypress_component_spec_is_e2e() -> None:
+    m = _maturity(["src/components/Button.cy.ts", "src/index.ts"])
+    assert m["has_e2e"] is True
+
+
+def test_maturity_blob_carries_schema_version() -> None:
+    m = _maturity(["README.md"])
+    assert m["schema_version"] == 1

@@ -155,6 +155,25 @@ class RepoIntel(Base):
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
 
+    # --- Classification (BS0.2) ------------------------------------------
+    # One of ``web`` / ``mobile`` / ``desktop`` / ``backend`` /
+    # ``library`` / ``unknown``. Denormalised into its own column (not the
+    # JSONB blob) so the bootstrap surface can filter — "every web repo
+    # with no Dockerfile". NULL for rows harvested before BS0.2.
+    project_type: Mapped[str | None] = mapped_column(
+        String(32), nullable=True
+    )
+    # SDLC delivery maturity, derived from the file listing + manifests:
+    # ``{"has_unit_tests": bool, "has_e2e": bool, "has_dockerfile": bool,
+    # "has_compose": bool, "has_ci": bool, "env_count": int,
+    # "env_names": [...], "has_promotion": bool,
+    # "project_type_confidence": "high"|"medium"|"low",
+    # "project_type_signals": [...]}``. Best-effort heuristic that feeds
+    # the bootstrap readiness assessor (BS1); empty dict ≠ failure.
+    sdlc_maturity: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+
     # --- Lifecycle -------------------------------------------------------
     harvested_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
