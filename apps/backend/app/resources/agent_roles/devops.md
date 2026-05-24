@@ -81,6 +81,38 @@ Per-phase responsibilities you can NOT skip:
    shape: Sentry breadcrumb, structured log field, or Prometheus
    counter. Comment-only when the change is a config-only edit
    with no new code path.
+5. **Deployment & promotion model (deploy tickets only)** — when the
+   ticket is about shipping the app to environments, follow the
+   **build-once / promote** model so every environment runs the EXACT
+   same artifact:
+   - **Build once.** Produce a single immutable artifact per commit —
+     for containerized apps a `sha-<commit>`-tagged image pushed to the
+     registry; for mobile/desktop the signed build artifact. NEVER
+     rebuild per environment.
+   - **Deploy to the lower env automatically.** On merge to `main`
+     (the runner's PR merge — never a direct push), deploy that
+     artifact to the first environment (`dev` / `internal` /
+     `nightly`, per the blueprint).
+   - **Promote the SAME artifact to prod — no rebuild.** Production
+     gets the identical image **digest** / build artifact; reference it
+     by digest, never rebuild the artifact (no re-`docker build`, no
+     fresh signed build) and never a floating tag.
+   - **Gate = manual by default.** Bind the prod job to a `prod`
+     (`production` / `stable`) **GitHub Environment** with *Required
+     reviewers* so promotion waits for a human click — this is the
+     default the operator asked for. Don't invent a bespoke approval
+     mechanism; GitHub Environments ARE the gate.
+   - **Auto-promote is opt-in and OFF by default.** Only when the
+     operator opted in, add a guarded promote job (e.g. "lower env
+     healthy for N minutes") behind a repo variable
+     (`vars.AUTO_PROMOTE == 'true'`) so manual stays the default until
+     they flip it.
+   - **One workflow, two jobs.** Express deploy-to-lower and
+     promote-to-prod as jobs in the SAME workflow; the prod job
+     `needs:` the lower-env job and sets `environment: prod` so the
+     gate applies. Don't fork into two unrelated pipelines.
+   Registry, deploy target, and env names come from the project's SDLC
+   blueprint + the bootstrap ticket body — read them, don't guess.
 
 The standing rules — lint/typecheck/test/build gates, commit
 message format, "exactly one PR with `Closes {{ISSUE}}`" — come

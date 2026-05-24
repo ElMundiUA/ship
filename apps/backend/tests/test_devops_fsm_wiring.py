@@ -108,3 +108,32 @@ def test_devops_in_default_bundle() -> None:
 
     assert "devops" in DEFAULT_BUNDLE
     assert "devops" in DEFAULT_BUNDLE_REASONS
+
+
+def test_devops_prompt_carries_build_once_promotion_model() -> None:
+    """BS4 — the deploy/promotion model is agent-authored: the DevOps
+    prompt must spell out build-once → lower-env → promote-the-same-
+    artifact-to-prod behind a GitHub Environment gate (manual default,
+    auto-promote opt-in)."""
+    from backend.app.services.agent_roles import get_default
+
+    devops = get_default("devops")
+    assert devops is not None
+    # Normalise whitespace so multi-word phrases match across markdown
+    # line wraps (e.g. "Required\n     reviewers").
+    prompt = " ".join(devops.prompt.lower().split())
+    # Build-once / promote-same-artifact.
+    assert "build once" in prompt
+    assert "digest" in prompt
+    assert "promote" in prompt
+    # Gate via GitHub Environment, manual by default.
+    assert "github environment" in prompt
+    assert "required reviewers" in prompt
+    # Auto-promote is opt-in (off by default).
+    assert "auto_promote" in prompt or "auto-promote" in prompt
+    assert "off by default" in prompt
+    assert "opt-in" in prompt
+    # The anti-patterns the model exists to prevent — highest-value
+    # lines, lock them so a future edit can't silently drop them.
+    assert "never rebuild" in prompt
+    assert "floating tag" in prompt
