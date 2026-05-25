@@ -198,6 +198,38 @@ async def test_client_search_scopes_by_workspace_header(monkeypatch):
     assert hits == [{"node_id": "n1", "summary": "# A\nb"}]
 
 
+# ---- corpus (K7) ------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_client_corpus_stats_and_sources(monkeypatch):
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        if request.url.path == "/v1/corpus/stats":
+            assert request.headers.get("x-workspace") == "ws-1"
+            return httpx.Response(
+                200, json={"total_chunks": 7, "total_sources": 2, "last_ingest_at": "2026-05-26T00:00:00Z"}
+            )
+        return httpx.Response(
+            200,
+            json=[{"source": "repo-intel", "chunk_count": 5, "recipes": ["workspace-s3"], "last_ingest_at": None}],
+        )
+
+    orig = httpx.AsyncClient
+    monkeypatch.setattr(
+        "backend.app.integrations.lighthouse.client.httpx.AsyncClient",
+        lambda **kw: orig(transport=httpx.MockTransport(handler), **kw),
+    )
+    client = LighthouseClient(base_url="https://lh.example")
+    stats = await client.corpus_stats(workspace_id="ws-1")
+    sources = await client.corpus_sources(workspace_id="ws-1")
+    assert stats["total_chunks"] == 7
+    assert sources[0]["source"] == "repo-intel"
+    assert seen == ["/v1/corpus/stats", "/v1/corpus/sources"]
+
+
 # ---- provisioning (best-effort) ---------------------------------------
 
 

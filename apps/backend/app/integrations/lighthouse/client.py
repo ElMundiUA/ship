@@ -54,6 +54,36 @@ class LighthouseClient:
             resp.raise_for_status()
             return list(resp.json().get("hits", []))
 
+    async def corpus_stats(
+        self, *, workspace_id: uuid.UUID | str
+    ) -> dict[str, Any]:
+        """Return ``/v1/corpus/stats`` for the workspace (chunk/source
+        counts, last ingest)."""
+        headers = {"X-Workspace": str(workspace_id)}
+        async with httpx.AsyncClient(
+            base_url=self._base_url, timeout=_TIMEOUT
+        ) as client:
+            resp = await client.get("/v1/corpus/stats", headers=headers)
+            resp.raise_for_status()
+            return dict(resp.json())
+
+    async def corpus_sources(
+        self, *, workspace_id: uuid.UUID | str, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        """Return ``/v1/corpus/sources`` for the workspace (per-source
+        roll-up: chunk count, recipes, last ingest)."""
+        headers = {"X-Workspace": str(workspace_id)}
+        async with httpx.AsyncClient(
+            base_url=self._base_url, timeout=_TIMEOUT
+        ) as client:
+            resp = await client.get(
+                "/v1/corpus/sources",
+                params={"limit": limit, "order": "recent"},
+                headers=headers,
+            )
+            resp.raise_for_status()
+            return list(resp.json())
+
     async def provision_s3_importer(
         self, *, workspace_id: uuid.UUID | str
     ) -> dict[str, Any]:

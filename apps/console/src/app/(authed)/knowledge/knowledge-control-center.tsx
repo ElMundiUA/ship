@@ -31,6 +31,7 @@ import { useState, useTransition } from "react";
 import { cn } from "@/lib/cn";
 import type {
   ApiActivatedRepo,
+  ApiKnowledgeCorpus,
   ApiKnowledgeSearchHit,
   ApiKnowledgeSearchResponse,
 } from "@/lib/api/client";
@@ -64,6 +65,7 @@ type Props = {
   sources: KnowledgeSourceRow[];
   repos: ApiActivatedRepo[];
   integrations: ApiIntegration[];
+  corpus: ApiKnowledgeCorpus | null;
 };
 
 
@@ -73,6 +75,7 @@ export function KnowledgeControlCenter({
   sources,
   repos,
   integrations,
+  corpus,
 }: Props) {
   const [query, setQuery] = useState("");
   const [searchHits, setSearchHits] = useState<ApiKnowledgeSearchHit[] | null>(null);
@@ -142,6 +145,8 @@ export function KnowledgeControlCenter({
         workspaceId={workspace.id}
       />
 
+      <CorpusSummary corpus={corpus} />
+
       {pending && <p className="text-xs text-white/45">Searching…</p>}
       {searchError && <p className="text-sm text-coral">{searchError}</p>}
 
@@ -162,6 +167,49 @@ export function KnowledgeControlCenter({
         <EditorialLayout topicViews={topicViews} sources={sources} />
       )}
     </div>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// Lighthouse corpus summary (K7) — what the per-workspace engine holds
+// ---------------------------------------------------------------------------
+
+
+function CorpusSummary({ corpus }: { corpus: ApiKnowledgeCorpus | null }) {
+  // Render nothing until Lighthouse is wired + has content — the
+  // editorial canon view below stays the primary surface meanwhile.
+  if (!corpus || !corpus.configured || corpus.total_chunks === 0) return null;
+  const top = corpus.sources.slice(0, 8);
+  const ingested = corpus.last_ingest_at?.slice(0, 10) ?? null;
+  return (
+    <section className="rounded-lg border border-white/10 bg-white/[0.02] p-4">
+      <div className="flex items-baseline justify-between gap-3">
+        <p className="text-xs uppercase tracking-wide text-aqua/80">
+          Lighthouse corpus
+        </p>
+        <p className="text-xs text-white/45">
+          {corpus.total_chunks} chunk{corpus.total_chunks === 1 ? "" : "s"} ·{" "}
+          {corpus.total_sources} source{corpus.total_sources === 1 ? "" : "s"}
+          {ingested ? ` · last ingest ${ingested}` : ""}
+        </p>
+      </div>
+      {top.length > 0 && (
+        <ul className="mt-3 divide-y divide-white/5 text-sm">
+          {top.map((s) => (
+            <li
+              key={s.source}
+              className="flex items-center justify-between gap-3 py-1.5"
+            >
+              <span className="truncate text-white/70">{s.source}</span>
+              <span className="shrink-0 text-xs text-white/40">
+                {s.chunk_count}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 

@@ -5,7 +5,9 @@ import { PageBody, PageHeader } from "@/components/app-shell";
 import { ScopePill } from "@/components/scope-pill";
 import {
   type ApiActivatedRepo,
+  type ApiKnowledgeCorpus,
   ApiHttpError,
+  getWorkspaceCorpus,
   listActivatedRepos,
   listIntegrations,
   listKnowledgeImportSources,
@@ -37,6 +39,7 @@ type LiveData = {
   sources: KnowledgeSourceRow[];
   repos: ApiActivatedRepo[];
   integrations: ApiIntegration[];
+  corpus: ApiKnowledgeCorpus | null;
   me: Awaited<ReturnType<typeof getCachedMe>>;
 };
 
@@ -68,7 +71,7 @@ async function load(
     // silently broken). If the canon is empty, the page should look
     // empty — that's the signal that something upstream needs
     // attention.
-    const [repos, integrations, me, rawTopicViews, importSources] =
+    const [repos, integrations, me, rawTopicViews, importSources, corpus] =
       await Promise.all([
         listActivatedRepos(workspace.id, token).catch(() => [] as ApiActivatedRepo[]),
         listIntegrations(workspace.id, token).catch(() => [] as ApiIntegration[]),
@@ -76,6 +79,11 @@ async function load(
         listTopicViews(workspace.id, { limit: 200 }, token),
         listKnowledgeImportSources(workspace.id, token).catch(
           () => [] as ApiKnowledgeImportSource[],
+        ),
+        // Lighthouse corpus roll-up. Best-effort — the page renders the
+        // legacy canon view too, so a missing engine just hides the panel.
+        getWorkspaceCorpus(workspace.id, token).catch(
+          () => null as ApiKnowledgeCorpus | null,
         ),
       ]);
 
@@ -94,6 +102,7 @@ async function load(
         sources,
         repos,
         integrations,
+        corpus,
         me,
       },
     };
@@ -126,7 +135,7 @@ export default async function KnowledgeIndexPage({
     );
   }
 
-  const { workspace, topicViews, sources, repos, integrations, me } =
+  const { workspace, topicViews, sources, repos, integrations, corpus, me } =
     result.data;
 
   const scopePill = (
@@ -158,6 +167,7 @@ export default async function KnowledgeIndexPage({
           sources={sources}
           repos={repos}
           integrations={integrations}
+          corpus={corpus}
         />
       </PageBody>
     </>
