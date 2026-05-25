@@ -226,9 +226,11 @@ async function resumeStep(
         (r) => r.installed_bundle_version !== null,
       );
       if (anySeeded) return "hub";
-      // Activated repos but none seeded yet → tunnel them through
-      // confirm so they finish bootstrapping.
-      return "confirm";
+      // Activated repos but none seeded yet → resume at Roles (step 4),
+      // not Confirm. Landing on Confirm skipped the Roles step entirely
+      // for anyone auto-resumed; Roles → Confirm is one click for users
+      // who already configured it.
+      return "roles";
     }
   } catch {
     /* fall through — treat as unknown */
