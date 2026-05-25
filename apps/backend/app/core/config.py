@@ -283,6 +283,16 @@ class Settings(BaseSettings):
     s3_secret_key: str | None = Field(default=None, alias="S3_SECRET_KEY")
     s3_region: str = Field(default="us-east-1", alias="S3_REGION")
 
+    # --- Lighthouse (per-workspace knowledge engine, whafr) ---
+    # When unset, the knowledge-search path stays on Ship's internal
+    # index. Set the base URL to route reads at the per-workspace
+    # Lighthouse instance (the engine scopes by the X-Workspace header).
+    # The admin token gates importer provisioning; retrieval is open.
+    lighthouse_base_url: str | None = Field(default=None, alias="LIGHTHOUSE_BASE_URL")
+    lighthouse_admin_token: str | None = Field(
+        default=None, alias="LIGHTHOUSE_ADMIN_TOKEN"
+    )
+
     # --- Auth / secrets ---
     jwt_secret: str = Field(default="dev-only-not-for-prod-change-me", alias="JWT_SECRET")
     jwt_algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")

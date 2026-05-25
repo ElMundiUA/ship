@@ -36,6 +36,7 @@ Removed in the bucket-consolidation cleanup (KB-5+):
 
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Any
 
@@ -54,8 +55,10 @@ from backend.app.db.models.agent_memory import (
     KnowledgeTopicView,
 )
 from backend.app.db.models.integrations import WorkspaceRepo
+from backend.app.integrations.lighthouse import build_lighthouse_client
 from backend.app.services.agent.embedding import embed_text
 
+logger = logging.getLogger(__name__)
 
 _SNIPPET_MAX_CHARS = 400
 
@@ -333,7 +336,112 @@ def _claim_hit(claim: KnowledgeClaim, score: float) -> KnowledgeSearchHit:
     )
 
 
+def _map_lighthouse_hit(
+    raw: dict[str, Any], *, rank: int, total: int
+) -> KnowledgeSearchHit:
+    """Adapter — one Lighthouse ``/v1/search`` hit → KnowledgeSearchHit.
+
+    The engine returns ``summary`` as ``# <name>\\n<snippet>``; split it
+    back into title + snippet. ``/v1/search`` doesn't expose a score, so
+    we synthesise a descending rank score (the engine already returned
+    hits best-first). ``node_id`` is the chunk uuid.
+    """
+    summary = str(raw.get("summary") or "")
+    title: str | None = None
+    snippet = summary
+    if summary.startswith("# "):
+        nl = summary.find("\n")
+        if nl == -1:
+            title, snippet = summary[2:].strip(), ""
+        else:
+            title, snippet = summary[2:nl].strip(), summary[nl + 1 :].strip()
+    if len(snippet) > _SNIPPET_MAX_CHARS:
+        snippet = snippet[: _SNIPPET_MAX_CHARS - 1].rstrip() + "…"
+
+    node_id = str(raw.get("node_id") or "")
+    try:
+        hit_id = uuid.UUID(node_id)
+    except (ValueError, TypeError):
+        hit_id = uuid.uuid5(uuid.NAMESPACE_URL, f"lighthouse:{node_id}")
+
+    return KnowledgeSearchHit(
+        id=hit_id,
+        source="lighthouse",
+        bucket_slug=None,
+        bucket_id=None,
+        repo_id=None,
+        scope_kind="lighthouse",
+        score=round(1.0 - (rank / max(total, 1)), 4),
+        rank_bucket="canon",
+        snippet=snippet,
+        title=title or None,
+        repo_full_name=None,
+    )
+
+
 async def search_workspace_knowledge(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    query: str,
+    repo_id: uuid.UUID | None = None,
+    bucket_slug: str | None = None,
+    limit: int = 20,
+    settings: Settings | None = None,
+) -> list[KnowledgeSearchHit]:
+    """Workspace knowledge search — Lighthouse-first, internal fallback.
+
+    The per-workspace Lighthouse engine is the target backend. We query
+    it first (scoped by ``workspace_id``); on any failure or an empty
+    result we fall back to Ship's internal index, which still holds
+    everything until the K6 write cutover populates Lighthouse. So the
+    surface degrades gracefully whether or not Lighthouse is wired or
+    populated yet.
+
+    Lighthouse is skipped when it isn't configured (``LIGHTHOUSE_BASE_URL``
+    unset) or when ``bucket_slug`` pins a specific legacy bucket — the
+    flat corpus has no bucket concept, so that filter only the internal
+    index can honour.
+    """
+    safe_query = (query or "").strip()
+    if not safe_query:
+        return []
+    safe_limit = max(1, min(int(limit), 100))
+
+    if bucket_slug is None:
+        client = build_lighthouse_client(settings or get_settings())
+        if client is not None:
+            try:
+                raw_hits = await client.search(
+                    workspace_id=workspace_id,
+                    query=safe_query,
+                    top_k=safe_limit,
+                )
+            except Exception:
+                logger.warning(
+                    "lighthouse search failed — falling back to internal index",
+                    exc_info=True,
+                )
+                raw_hits = []
+            if raw_hits:
+                total = len(raw_hits)
+                return [
+                    _map_lighthouse_hit(h, rank=i, total=total)
+                    for i, h in enumerate(raw_hits)
+                ][:safe_limit]
+
+    return await _search_internal(
+        session,
+        workspace_id=workspace_id,
+        query=query,
+        repo_id=repo_id,
+        bucket_slug=bucket_slug,
+        limit=limit,
+        settings=settings,
+    )
+
+
+async def _search_internal(
     session: AsyncSession,
     *,
     workspace_id: uuid.UUID,
@@ -343,7 +451,7 @@ async def search_workspace_knowledge(
     limit: int = 20,
     settings: Settings | None = None,
 ) -> list[KnowledgeSearchHit]:
-    """Run the workspace-wide knowledge search and return ranked hits.
+    """Ship's internal knowledge index (the pre-Lighthouse path).
 
     Returns an empty list for blank queries. ``repo_id`` is accepted
     for wire compatibility but no longer participates in ranking now
