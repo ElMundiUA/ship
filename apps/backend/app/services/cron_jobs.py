@@ -518,6 +518,38 @@ async def _linear_token_refresh_tick() -> None:
         )
 
 
+@cron_with_lock(lock=CronLockId.SEED_AUTO_MERGE, name="seed_auto_merge")
+async def _seed_auto_merge_tick() -> None:
+    """Merge stuck current-version wizard-seed PRs + stamp the version.
+
+    Backstop for the wizard's inline auto-merge: a deferred merge
+    (branch protection / pending check) otherwise leaves the seed PR
+    open and the bundle version unstamped forever. See
+    :mod:`seed_auto_merge`.
+    """
+    from backend.app.services.seed_auto_merge import reconcile_seed_merges
+
+    settings = get_settings()
+    sm = get_sessionmaker()
+    async with sm() as session:
+        try:
+            report = await reconcile_seed_merges(session, settings=settings)
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            log.exception("seed_auto_merge tick failed")
+            return
+
+    if report.merged or report.stamped_already_merged or report.deferred:
+        log.info(
+            "seed_auto_merge tick: scanned=%d merged=%d already=%d deferred=%d",
+            report.repos_scanned,
+            report.merged,
+            report.stamped_already_merged,
+            report.deferred,
+        )
+
+
 def register_all() -> None:
     """Wire every cron defined in this module into the scheduler.
 
@@ -688,6 +720,11 @@ def register_all() -> None:
         fn=_pr_cache_reconcile_tick,
         cron_expr="*/30 * * * *",
         job_id="pr_cache_reconcile",
+    )
+    register_cron(
+        fn=_seed_auto_merge_tick,
+        cron_expr="*/15 * * * *",  # every 15 min — drains deferred seed merges fast
+        job_id="seed_auto_merge",
     )
 
 

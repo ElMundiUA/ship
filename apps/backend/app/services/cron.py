@@ -148,6 +148,14 @@ class CronLockId(IntEnum):
     # for the merge-webhook fast path, which can miss on Linear replica
     # lag. See :mod:`project_completion`.
     PROJECT_COMPLETION_SWEEP = 1021
+    # Seed auto-merge reconciler (2026-05-25). Backstop for the wizard's
+    # inline seed-PR auto-merge: when a merge is deferred (branch
+    # protection / pending check) the seed PR stays open and
+    # ``installed_bundle_version`` stays unstamped. Once per tick this
+    # merges any still-open CURRENT-version ``Ship: wizard seed`` PR and
+    # stamps the version on a confirmed merge. Never touches a stale
+    # (older-bundle) seed PR. See :mod:`seed_auto_merge`.
+    SEED_AUTO_MERGE = 1022
 
 
 # ---------------------------------------------------------------------------
