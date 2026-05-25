@@ -558,78 +558,18 @@ def register_all() -> None:
     application means the registrations are testable in isolation —
     a unit test can call ``register_all`` against a mock scheduler.
     """
-    register_cron(
-        fn=_knowledge_harvest_tick,
-        cron_expr="20 * * * *",  # every hour at :20
-        job_id="knowledge_harvest",
-    )
-    # Routing runs ten minutes after harvest so the cron-tick chain is
-    # harvest → route → (KB-3 synthesise at :40 once it lands). One
-    # workspace's tick rarely takes more than a few seconds, but the
-    # offset gives breathing room.
-    register_cron(
-        fn=_knowledge_route_tick,
-        cron_expr="30 * * * *",  # every hour at :30
-        job_id="knowledge_route",
-    )
-    register_cron(
-        fn=_knowledge_synth_tick,
-        cron_expr="40 * * * *",  # every hour at :40
-        job_id="knowledge_synth",
-    )
-    # External-source pull runs every 15 min so a connector that
-    # advertises ``sync_interval_minutes=60`` actually re-syncs
-    # within ~15 min of becoming due, instead of waiting for
-    # the next operator visit to the sources page.
-    register_cron(
-        fn=_knowledge_sources_sync_tick,
-        cron_expr="*/15 * * * *",
-        job_id="knowledge_sources_sync",
-    )
-    # Claim extractor runs every 20 min — fast enough that an
-    # operator who pushed a doc edit sees claims appear within minutes,
-    # bounded enough that a full backfill of an existing workspace
-    # paces itself without saturating the LLM API. The reconciler
-    # offsets by +5 so freshly-inserted claims land before the
-    # cosine-nearest sweep looks for neighbours.
-    register_cron(
-        fn=_knowledge_claim_extract_tick,
-        cron_expr="*/20 * * * *",
-        job_id="knowledge_claim_extract",
-    )
-    register_cron(
-        fn=_knowledge_claim_reconcile_tick,
-        cron_expr="5,25,45 * * * *",
-        job_id="knowledge_claim_reconcile",
-    )
-    # Topic-view render runs every 30 min, offset by 10 from the
-    # reconciler so a freshly-superseded claim flips out of any
-    # affected view's claim_set_sha before the next render. Cache
-    # hits make this cheap on workspaces with stable canon.
-    register_cron(
-        fn=_knowledge_topic_render_tick,
-        cron_expr="15,45 * * * *",
-        job_id="knowledge_topic_render",
-    )
-    # GC runs once daily. Cheap query (filtered DELETE by archived_at)
-    # so an off-peak slot is fine; pick 03:15 UTC to avoid the on-the-
-    # hour pile-ups from the harvest/route/synth chain.
-    register_cron(
-        fn=_knowledge_decay_tick,
-        cron_expr="15 3 * * *",  # daily at 03:15 UTC
-        job_id="knowledge_decay",
-    )
-    # Claim decay also runs once a day, offset 15 min from the
-    # bucket-article GC so log lines don't interleave during the
-    # 03:00-04:00 quiet window. The bulk-UPDATE shape keeps even
-    # large-canon workspaces cheap; running daily is a deliberate
-    # de-noise — operator-visible status flips shouldn't churn at
-    # cron-tick cadence.
-    register_cron(
-        fn=_knowledge_claim_decay_tick,
-        cron_expr="30 3 * * *",  # daily at 03:30 UTC
-        job_id="knowledge_claim_decay",
-    )
+    # KNOWLEDGE PROCESSING PIPELINE RETIRED (K6c, 2026-05-26).
+    # The internal harvest → route → synth → claim-extract/reconcile →
+    # topic-render → decay chain and the external-source sync are no
+    # longer scheduled: the per-workspace Lighthouse engine (whafr) now
+    # does chunking / embedding / retrieval from the raw documents Ship
+    # ships to S3 (repo intel, resolved clarifications, inbox comments).
+    # The tick functions above + the producer service modules
+    # (knowledge_synth / _claim_extractor / _topic_renderer / _harvest /
+    # _router / _reconciler / _decay / _claim_decay / _ingestion) are now
+    # dead; they get deleted in K8 along with the internal knowledge
+    # tables and the K5 dual-read fallback. Reads keep working in the
+    # meantime via that fallback over the (now-frozen) internal index.
     # Linear token rotation runs every hour at :05; the per-install
     # check inside ``refresh_all_due_linear_tokens`` looks at
     # ``last_rotated_at`` against ``LINEAR_TOKEN_REFRESH_HOURS`` (default
