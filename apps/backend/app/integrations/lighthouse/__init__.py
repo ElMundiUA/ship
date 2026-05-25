@@ -16,6 +16,7 @@ from backend.app.integrations.lighthouse.provisioning import (
 from backend.app.integrations.lighthouse.s3_writer import (
     KnowledgeS3Writer,
     build_knowledge_s3_writer,
+    emit_knowledge_document,
 )
 
 __all__ = [
@@ -23,5 +24,6 @@ __all__ = [
     "LighthouseClient",
     "build_knowledge_s3_writer",
     "build_lighthouse_client",
+    "emit_knowledge_document",
     "provision_workspace_knowledge",
 ]

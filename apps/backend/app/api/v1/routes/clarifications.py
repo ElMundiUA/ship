@@ -45,6 +45,7 @@ from backend.app.db.models.agent_surface import Clarification
 from backend.app.db.models.lanes import RoutineRun
 from backend.app.db.models.tenancy import AuditLog, User
 from backend.app.db.session import get_session
+from backend.app.integrations.lighthouse import emit_knowledge_document
 from backend.app.services import clarifications_sync
 from backend.app.services.inbox.dual_write import (
     mirror_clarification_create,
@@ -125,6 +126,20 @@ def _to_out(row: Clarification, answered_by_email: str | None) -> ClarificationO
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
+
+
+def _clarification_document(row: Clarification) -> str:
+    """Render an answered clarification as a markdown knowledge document
+    (Q&A + provenance) for Lighthouse ingestion."""
+    lines = ["# Clarification", ""]
+    if row.ticket_ref:
+        lines.append(f"- Ticket: {row.ticket_ref}")
+    if row.tracker_issue_url:
+        lines.append(f"- Issue: {row.tracker_issue_url}")
+    if row.answered_at is not None:
+        lines.append(f"- Answered at: {row.answered_at.isoformat()}")
+    lines += ["", "## Question", "", row.question or "", "", "## Answer", "", row.answer or ""]
+    return "\n".join(lines).strip() + "\n"
 
 
 async def _enrich(
@@ -335,6 +350,17 @@ async def update_clarification(
             clarification=row,
             actor_user_id=auth.user.id,
             actor_kind="user",
+        )
+    # K6: ship an answered clarification to Lighthouse as a knowledge
+    # document (best-effort; no-op until S3 is configured). Skipped
+    # clarifications carry no answer, so there's nothing to ingest.
+    if new_status == "answered" and (row.answer or "").strip():
+        await emit_knowledge_document(
+            workspace_id=row.workspace_id,
+            source="clarifications",
+            name=str(row.id),
+            markdown=_clarification_document(row),
+            settings=settings,
         )
     email: str | None = None
     if row.answered_by_user_id:

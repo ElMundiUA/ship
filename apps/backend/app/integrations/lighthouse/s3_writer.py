@@ -78,6 +78,40 @@ class KnowledgeS3Writer:
         return key
 
 
+async def emit_knowledge_document(
+    *,
+    workspace_id,
+    source: str,
+    name: str,
+    markdown: str,
+    settings: "Settings",
+) -> bool:
+    """Best-effort: write one knowledge document to S3 for Lighthouse.
+
+    Returns ``True`` when written, ``False`` when S3 isn't configured or
+    the write failed (logged). Never raises — emitting a knowledge
+    document must not fail the operation that produced it (a resolved
+    clarification, an inbox comment, …).
+    """
+    writer = build_knowledge_s3_writer(settings)
+    if writer is None:
+        return False
+    try:
+        await writer.write_document(
+            workspace_id=workspace_id, source=source, name=name, markdown=markdown
+        )
+        return True
+    except Exception:
+        logger.warning(
+            "lighthouse knowledge emit failed (source=%s name=%s) — "
+            "will retry on next change",
+            source,
+            name,
+            exc_info=True,
+        )
+        return False
+
+
 def build_knowledge_s3_writer(settings: "Settings") -> KnowledgeS3Writer | None:
     """Construct the writer when S3 (DO Spaces) credentials are configured.
 
