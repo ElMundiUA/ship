@@ -39,8 +39,9 @@ class LighthouseClient:
     ) -> list[dict[str, Any]]:
         """Return raw ``/v1/search`` hits (dicts) for the workspace.
 
-        Raises ``httpx.HTTPError`` on transport / non-2xx — callers in
-        the dual-read path treat any failure as "fall back to internal".
+        Raises ``httpx.HTTPError`` on transport / non-2xx — the search
+        wrapper degrades any failure to an empty result (K8: reads are
+        Lighthouse-only, so an outage means "no knowledge", not fallback).
         """
         headers = {"X-Workspace": str(workspace_id)}
         async with httpx.AsyncClient(

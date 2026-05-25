@@ -28,16 +28,8 @@ from sqlalchemy import select, text
 
 from backend.app.db.models.agent_memory import (
     BucketArticle,
-    BucketArticleSource,
-    BucketArticleStatus,
-    BucketScope,
-    BucketSource,
-    KnowledgeBucket,
     KnowledgeImportSource,
     KnowledgeImportSourceKind,
-    KnowledgeIngestionRun,
-    KnowledgeIngestionStatus,
-    KnowledgeSourceItem,
 )
 from backend.app.db.models.integrations import (
     GitHubInstallation,
@@ -534,15 +526,24 @@ async def test_commit_style_freeform_when_unmatched(
 
 
 # ---------------------------------------------------------------------------
-# 10. Knowledge-bucket projection
+# 10. Lighthouse emit (K8) — repo intel ships to Lighthouse only; the
+# internal knowledge-bucket projection is retired.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_writes_repo_intel_md_to_workspace_import_source(
-    db_session, seed_activated_repo
+async def test_emits_repo_intel_to_lighthouse_without_internal_projection(
+    db_session, seed_activated_repo, monkeypatch
 ) -> None:
     workspace, repo, _ = seed_activated_repo
+
+    emitted: list[tuple] = []
+
+    async def _capture_emit(*, repo, intel):
+        emitted.append((repo.id, intel.id))
+
+    monkeypatch.setattr(svc, "_emit_intel_to_lighthouse", _capture_emit)
+
     gw = FakeCodeHost(
         files={
             "main.py": _FakeFile(path="main.py", content="x"),
@@ -560,19 +561,21 @@ async def test_writes_repo_intel_md_to_workspace_import_source(
         gateway=gw,
         commit_fetcher=_no_commits,
     )
-    assert report.knowledge_articles_written == 6
 
-    repo_bucket = (
+    # K8: shipped to Lighthouse once; no internal articles written.
+    assert report.knowledge_articles_written == 0
+    assert emitted == [(repo.id, report.intel_id)]
+
+    # No internal bucket projection / import source / ingestion run.
+    articles = (
         await db_session.execute(
-            select(KnowledgeBucket).where(
-                KnowledgeBucket.workspace_id == workspace.id,
-                KnowledgeBucket.repo_id == repo.id,
-                KnowledgeBucket.scope_kind == BucketScope.REPO,
-                KnowledgeBucket.source_kind == BucketSource.REPO_CONTEXT,
+            select(BucketArticle)
+            .where(
+                BucketArticle.provenance["repo_id"].astext == str(repo.id),
             )
         )
-    ).scalars().first()
-    assert repo_bucket is None
+    ).scalars().all()
+    assert articles == []
 
     source = (
         await db_session.execute(
@@ -582,66 +585,8 @@ async def test_writes_repo_intel_md_to_workspace_import_source(
                 KnowledgeImportSource.kind == KnowledgeImportSourceKind.DOCS_REPO,
             )
         )
-    ).scalars().one()
-    assert source.config["harvester"] == "repo_intel"
-    assert source.content_fingerprint
-
-    articles = (
-        await db_session.execute(
-            select(BucketArticle, KnowledgeBucket)
-            .join(KnowledgeBucket, KnowledgeBucket.id == BucketArticle.bucket_id)
-            .where(
-                KnowledgeBucket.workspace_id == workspace.id,
-                KnowledgeBucket.scope_kind == BucketScope.WORKSPACE,
-                BucketArticle.status == BucketArticleStatus.PUBLISHED,
-                BucketArticle.provenance["repo_id"].astext == str(repo.id),
-            )
-        )
-    ).all()
-    repo_slug = repo.full_name.replace("/", "-")
-    assert {article.slug for article, _ in articles} == {
-        f"{repo_slug}-{slug}"
-        for slug in {
-            "architecture",
-            "dev-environment",
-            "overview",
-            "rules",
-            "visual-style",
-            "workflow",
-        }
-    }
-    assert {bucket.scope_kind for _, bucket in articles} == {BucketScope.WORKSPACE}
-    overview = next(
-        article
-        for article, _ in articles
-        if article.slug == f"{repo_slug}-overview"
-    )
-    assert "# Repository overview" in overview.body_md
-    assert "next.js" in overview.body_md
-    assert overview.provenance.get("source") == "repo_context"
-
-    items = (
-        await db_session.execute(
-            select(KnowledgeSourceItem).where(
-                KnowledgeSourceItem.source_id == source.id,
-            )
-        )
-    ).scalars().all()
-    assert len(items) == 6
-    run = (
-        await db_session.execute(
-            select(KnowledgeIngestionRun).where(
-                KnowledgeIngestionRun.source_id == source.id
-            )
-        )
-    ).scalars().one()
-    assert run.status == KnowledgeIngestionStatus.DONE
-    links = (
-        await db_session.execute(
-            select(BucketArticleSource).where(BucketArticleSource.run_id == run.id)
-        )
-    ).scalars().all()
-    assert len(links) == 6
+    ).scalars().first()
+    assert source is None
 
 
 # ---------------------------------------------------------------------------

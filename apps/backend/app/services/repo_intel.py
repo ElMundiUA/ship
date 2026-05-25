@@ -418,14 +418,10 @@ async def harvest_repo_intel(
 
     articles_written = 0
     if error_text is None:
-        articles_written = await _write_intel_markdown(
-            session,
-            repo=repo,
-            intel=row,
-        )
-        # K6: also ship the repo intel as one document to Lighthouse (S3).
-        # Best-effort + dual-write — the internal projection above stays
-        # as the K5 read-fallback until Lighthouse has ingested.
+        # K8: ship the repo intel to Lighthouse only. The internal
+        # bucket projection (_write_intel_markdown) is retired now that
+        # reads are Lighthouse-only; it's removed with the internal
+        # knowledge tables in the K8 purge.
         await _emit_intel_to_lighthouse(repo=repo, intel=row)
 
     await session.flush()

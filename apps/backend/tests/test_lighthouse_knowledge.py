@@ -1,9 +1,9 @@
-"""K5 — Lighthouse read cutover.
+"""K8 — Lighthouse-only knowledge reads.
 
-Covers the dual-read wrapper (Lighthouse-first, internal fallback), the
-hit mapper, and the HTTP client's workspace scoping. All offline: the
-dual-read tests monkeypatch the client + internal path so no DB is
-needed, and the client test uses an httpx MockTransport.
+Covers the search wrapper (Lighthouse only — the K5 internal dual-read
+fallback is retired), the hit mapper, and the HTTP client's workspace
+scoping. All offline: the search tests monkeypatch the client so no DB
+is needed, and the client test uses an httpx MockTransport.
 """
 
 from __future__ import annotations
@@ -17,17 +17,7 @@ import backend.app.services.knowledge_search as ks
 from backend.app.integrations.lighthouse import provisioning as lh_prov
 from backend.app.integrations.lighthouse.client import LighthouseClient
 from backend.app.services.knowledge_search import (
-    KnowledgeSearchHit,
     _map_lighthouse_hit,
-)
-
-_INTERNAL_SENTINEL = KnowledgeSearchHit(
-    id=uuid.uuid4(),
-    source="internal-sentinel",
-    scope_kind="workspace",
-    score=0.0,
-    rank_bucket="workspace",
-    snippet="from internal index",
 )
 
 
@@ -42,17 +32,6 @@ class _FakeClient:
         if self._exc is not None:
             raise self._exc
         return self._hits
-
-
-@pytest.fixture
-def _patch_internal(monkeypatch):
-    """Replace the internal index path with a sentinel so fallback is
-    observable without seeding Postgres."""
-
-    async def _fake_internal(session, **kwargs):
-        return [_INTERNAL_SENTINEL]
-
-    monkeypatch.setattr(ks, "_search_internal", _fake_internal)
 
 
 def _use_client(monkeypatch, client) -> None:
@@ -89,11 +68,11 @@ def test_map_lighthouse_hit_handles_plain_summary() -> None:
     assert isinstance(hit.id, uuid.UUID)
 
 
-# ---- dual-read --------------------------------------------------------
+# ---- search (Lighthouse only) -----------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_dual_read_returns_mapped_lighthouse_hits(monkeypatch, _patch_internal):
+async def test_search_returns_mapped_lighthouse_hits(monkeypatch):
     ws = uuid.uuid4()
     node = str(uuid.uuid4())
     client = _FakeClient(hits=[{"node_id": node, "summary": "# T\nbody"}])
@@ -107,38 +86,38 @@ async def test_dual_read_returns_mapped_lighthouse_hits(monkeypatch, _patch_inte
 
 
 @pytest.mark.asyncio
-async def test_dual_read_falls_back_when_lighthouse_empty(monkeypatch, _patch_internal):
+async def test_search_empty_when_lighthouse_empty(monkeypatch):
+    # No internal fallback (K8): empty engine → empty result.
     _use_client(monkeypatch, _FakeClient(hits=[]))
     hits = await ks.search_workspace_knowledge(
         None, workspace_id=uuid.uuid4(), query="auth", settings=object()
     )
-    assert hits == [_INTERNAL_SENTINEL]
+    assert hits == []
 
 
 @pytest.mark.asyncio
-async def test_dual_read_falls_back_on_error(monkeypatch, _patch_internal):
+async def test_search_empty_on_error(monkeypatch):
+    # Engine outage degrades to empty, never raises.
     _use_client(monkeypatch, _FakeClient(exc=httpx.ConnectError("down")))
     hits = await ks.search_workspace_knowledge(
         None, workspace_id=uuid.uuid4(), query="auth", settings=object()
     )
-    assert hits == [_INTERNAL_SENTINEL]
+    assert hits == []
 
 
 @pytest.mark.asyncio
-async def test_dual_read_uses_internal_when_lighthouse_disabled(
-    monkeypatch, _patch_internal
-):
+async def test_search_empty_when_lighthouse_disabled(monkeypatch):
     _use_client(monkeypatch, None)  # build_lighthouse_client → None
     hits = await ks.search_workspace_knowledge(
         None, workspace_id=uuid.uuid4(), query="auth", settings=object()
     )
-    assert hits == [_INTERNAL_SENTINEL]
+    assert hits == []
 
 
 @pytest.mark.asyncio
-async def test_dual_read_skips_lighthouse_when_bucket_slug_pinned(
-    monkeypatch, _patch_internal
-):
+async def test_search_ignores_bucket_slug_and_still_queries_lighthouse(monkeypatch):
+    # bucket_slug is accepted for wire-compat but no longer routes to an
+    # internal index — Lighthouse is still queried (flat corpus has no buckets).
     client = _FakeClient(hits=[{"node_id": str(uuid.uuid4()), "summary": "x"}])
     _use_client(monkeypatch, client)
     hits = await ks.search_workspace_knowledge(
@@ -148,13 +127,12 @@ async def test_dual_read_skips_lighthouse_when_bucket_slug_pinned(
         bucket_slug="runbooks",
         settings=object(),
     )
-    # A pinned bucket only the internal index can honour → Lighthouse skipped.
-    assert hits == [_INTERNAL_SENTINEL]
-    assert client.calls == []
+    assert [h.source for h in hits] == ["lighthouse"]
+    assert len(client.calls) == 1
 
 
 @pytest.mark.asyncio
-async def test_dual_read_blank_query_returns_empty(monkeypatch, _patch_internal):
+async def test_search_blank_query_returns_empty(monkeypatch):
     _use_client(monkeypatch, _FakeClient(hits=[{"node_id": "x", "summary": "y"}]))
     hits = await ks.search_workspace_knowledge(
         None, workspace_id=uuid.uuid4(), query="   ", settings=object()

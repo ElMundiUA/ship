@@ -389,56 +389,37 @@ async def search_workspace_knowledge(
     limit: int = 20,
     settings: Settings | None = None,
 ) -> list[KnowledgeSearchHit]:
-    """Workspace knowledge search — Lighthouse-first, internal fallback.
+    """Workspace knowledge search — Lighthouse only (K8).
 
-    The per-workspace Lighthouse engine is the target backend. We query
-    it first (scoped by ``workspace_id``); on any failure or an empty
-    result we fall back to Ship's internal index, which still holds
-    everything until the K6 write cutover populates Lighthouse. So the
-    surface degrades gracefully whether or not Lighthouse is wired or
-    populated yet.
-
-    Lighthouse is skipped when it isn't configured (``LIGHTHOUSE_BASE_URL``
-    unset) or when ``bucket_slug`` pins a specific legacy bucket — the
-    flat corpus has no bucket concept, so that filter only the internal
-    index can honour.
+    The internal index + the K5 dual-read fallback are retired: reads
+    come solely from the per-workspace Lighthouse engine. Returns ``[]``
+    when Lighthouse is unconfigured (``LIGHTHOUSE_BASE_URL`` unset) or has
+    nothing for the workspace yet. ``session`` / ``repo_id`` /
+    ``bucket_slug`` are accepted for wire compatibility but unused (the
+    flat corpus has no buckets; scoping is by ``workspace_id``).
     """
     safe_query = (query or "").strip()
     if not safe_query:
         return []
     safe_limit = max(1, min(int(limit), 100))
 
-    if bucket_slug is None:
-        client = build_lighthouse_client(settings or get_settings())
-        if client is not None:
-            try:
-                raw_hits = await client.search(
-                    workspace_id=workspace_id,
-                    query=safe_query,
-                    top_k=safe_limit,
-                )
-            except Exception:
-                logger.warning(
-                    "lighthouse search failed — falling back to internal index",
-                    exc_info=True,
-                )
-                raw_hits = []
-            if raw_hits:
-                total = len(raw_hits)
-                return [
-                    _map_lighthouse_hit(h, rank=i, total=total)
-                    for i, h in enumerate(raw_hits)
-                ][:safe_limit]
-
-    return await _search_internal(
-        session,
-        workspace_id=workspace_id,
-        query=query,
-        repo_id=repo_id,
-        bucket_slug=bucket_slug,
-        limit=limit,
-        settings=settings,
-    )
+    client = build_lighthouse_client(settings or get_settings())
+    if client is None:
+        return []
+    try:
+        raw_hits = await client.search(
+            workspace_id=workspace_id,
+            query=safe_query,
+            top_k=safe_limit,
+        )
+    except Exception:
+        logger.warning("lighthouse search failed", exc_info=True)
+        return []
+    total = len(raw_hits)
+    return [
+        _map_lighthouse_hit(h, rank=i, total=total)
+        for i, h in enumerate(raw_hits)
+    ][:safe_limit]
 
 
 async def _search_internal(
