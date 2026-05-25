@@ -24,6 +24,7 @@ from backend.app.api.v1.schemas import (
     WorkspaceOut,
     WorkspaceUpdate,
 )
+from backend.app.core.config import get_settings
 from backend.app.db.models.tenancy import (
     AuditLog,
     Org,
@@ -32,6 +33,7 @@ from backend.app.db.models.tenancy import (
     WorkspaceMember,
 )
 from backend.app.db.session import get_session
+from backend.app.integrations.lighthouse import provision_workspace_knowledge
 from backend.app.services.policies_seed import seed_default_policies
 from backend.app.services.seed_bundle import seed_default_knowledge
 
@@ -292,6 +294,9 @@ async def create_workspace(
         session=session,
         workspace_id=workspace.id,
     )
+    # Best-effort: stand up the workspace's S3 source on Lighthouse.
+    # No-op until LIGHTHOUSE_BASE_URL is configured; never fails setup.
+    await provision_workspace_knowledge(workspace.id, settings=get_settings())
     return WorkspaceOut.model_validate(workspace)
 
 
