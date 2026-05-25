@@ -138,12 +138,14 @@ function forward(
   wsId: string,
   extra?: Record<string, string>,
 ) {
-  // Wave-8c: after the workspace-level tracker OAuth, drop the user
-  // into the per-repo Confirm bootstrap step. That's where they
-  // review the canonical Plays bundle, bind a tracker / push agent
-  // secrets per repo and open the unified seed PR.
+  // After the workspace-level tracker OAuth, advance to the Roles step
+  // (step 4). It used to jump straight to Confirm — a Wave-8c leftover
+  // from before the Roles step existed, which orphaned step 4 (reachable
+  // only by clicking the stepper). Roles → Confirm is wired in
+  // roles-step.tsx, so the natural flow now walks
+  // github → repos → tracker → roles → confirm.
   const url = new URL("/onboarding", origin);
-  url.searchParams.set("step", "confirm");
+  url.searchParams.set("step", "roles");
   url.searchParams.set("ws", wsId);
   for (const [key, value] of Object.entries(extra ?? {})) {
     url.searchParams.set(key, value);
