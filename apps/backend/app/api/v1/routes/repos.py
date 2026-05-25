@@ -982,6 +982,7 @@ async def wizard_seed(
     from backend.app.integrations.github.workflows import (
         WorkflowDispatchError,
         commit_bundle_pr,
+        merge_pull_request,
     )
     from backend.app.services.lane_recipes import DEFAULT_BUNDLE
     from backend.app.services.repo_tokens import (
@@ -1389,9 +1390,42 @@ async def wizard_seed(
             },
         ) from exc
 
-    # Stamp the bundle version so the dashboard can tell "up to date"
-    # from "upgrade available" next render.
-    repo_row.installed_bundle_version = _BUNDLE_VERSION
+    # Auto-merge the seed PR so the operator never has to touch GitHub —
+    # they just see "Ship updated". The version stamp is the load-bearing
+    # signal both the dashboard ("up to date" vs "update available") and
+    # the dispatcher (which workflow_dispatch inputs are safe to send)
+    # read, so we ONLY stamp AFTER the merge actually lands.
+    #
+    # Stamping on PR *creation* (the old behaviour) was a latent bug: an
+    # unmerged seed PR made the repo look "up to date", which (a) tripped
+    # the idempotency gate above so the operator could never re-seed, and
+    # (b) made the dispatcher send version-gated inputs (`ship_run_id`,
+    # `file_overlap_warnings`) the still-old workflow file didn't declare
+    # → GitHub 422 on every dispatch → self-heal re-fire storm.
+    seed_merged = False
+    try:
+        await merge_pull_request(
+            repo_row,
+            install_row,
+            pr_number=result.pr_number,
+            settings=settings,
+            commit_title=f"Ship: wizard seed (#{result.pr_number})",
+            merge_method="squash",
+        )
+        seed_merged = True
+        repo_row.installed_bundle_version = _BUNDLE_VERSION
+    except WorkflowDispatchError as exc:
+        # Branch protection or a required check still pending. Leave the PR
+        # open and the version UNstamped (truthful "update available").
+        # The seed_auto_merge reconciler retries it on the next tick, and
+        # a later wizard click returns this same open PR and re-attempts
+        # the merge — either way the stamp only lands once the merge does.
+        logger.warning(
+            "wizard seed PR #%s opened but auto-merge deferred (%s): %s",
+            result.pr_number,
+            exc.status_code,
+            exc.message[:200],
+        )
 
     session.add(
         AuditLog(
@@ -1417,6 +1451,7 @@ async def wizard_seed(
                 "run_token_prefix": repo_row.run_token_prefix,
                 "bundle_version": _BUNDLE_VERSION,
                 "bundle_hash": bundle.bundle_hash,
+                "seed_merged": seed_merged,
             },
         )
     )
@@ -1430,6 +1465,7 @@ async def wizard_seed(
         tracker_kind=tracker_kind,
         run_token_prefix=repo_row.run_token_prefix,
         run_token_rotated=rotated,
+        merged=seed_merged,
     )
 
 
