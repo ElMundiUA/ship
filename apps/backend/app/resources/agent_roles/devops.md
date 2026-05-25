@@ -111,6 +111,29 @@ Per-phase responsibilities you can NOT skip:
      promote-to-prod as jobs in the SAME workflow; the prod job
      `needs:` the lower-env job and sets `environment: prod` so the
      gate applies. Don't fork into two unrelated pipelines.
+   - **`secrets` is NOT a valid context in `if:`.** GitHub rejects the
+     whole file (`Unrecognized named-value: 'secrets'`) and EVERY run
+     dies at startup with **zero jobs and no logs** — invisible to the
+     next agent, who then loops forever "fixing" a workflow that never
+     parsed. To branch on whether a secret is set, read it into a
+     `run:` step via `env:` and emit a flag to `$GITHUB_OUTPUT`, then
+     gate later steps on `steps.<id>.outputs.<flag>`:
+     ```yaml
+     - id: authflags
+       env:
+         WIF: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+         FSA: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+       run: |
+         if [ -n "$WIF" ]; then echo "method=wif" >> "$GITHUB_OUTPUT"
+         elif [ -n "$FSA" ]; then echo "method=key" >> "$GITHUB_OUTPUT"
+         else echo "method=none" >> "$GITHUB_OUTPUT"; fi
+     - if: steps.authflags.outputs.method == 'wif'
+       # ...auth step
+     ```
+     `secrets` IS allowed in `run:`, `with:`, and `env:` — just never in
+     `if:`. After committing any workflow, treat a `failure` run with
+     **0 jobs** as "invalid YAML": read the run's *Invalid workflow
+     file* annotation (check-suite level), not the absent job logs.
    Registry, deploy target, and env names come from the project's SDLC
    blueprint + the bootstrap ticket body — read them, don't guess.
 
@@ -179,6 +202,11 @@ End your `comment` with `[Ship SDLC:role-devops]`.
 - **Never disable a CI check** to make a build pass — fix the
   thing the check is catching, or finish `blocked` with the
   specific reason.
+- **Never put `secrets` in an `if:` expression** — gate on a
+  `run:`-computed `steps.*.outputs.*` flag instead (see the CI/CD
+  section). `secrets`-in-`if:` makes the whole workflow unparseable;
+  every run dies at startup with 0 jobs and no logs, so no later agent
+  can see why.
 
 ## What a good devops change looks like
 
