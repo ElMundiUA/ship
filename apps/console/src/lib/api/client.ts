@@ -3145,6 +3145,31 @@ export async function listTopicViews(
   return Array.isArray(payload) ? payload : [];
 }
 
+export type ApiKnowledgeCorpusSource = {
+  source: string;
+  chunk_count: number;
+  recipes: string[];
+  last_ingest_at: string | null;
+};
+
+export type ApiKnowledgeCorpus = {
+  configured: boolean;
+  total_chunks: number;
+  total_sources: number;
+  last_ingest_at: string | null;
+  sources: ApiKnowledgeCorpusSource[];
+};
+
+export async function getWorkspaceCorpus(
+  workspaceId: string,
+  token?: string,
+): Promise<ApiKnowledgeCorpus> {
+  return apiFetch<ApiKnowledgeCorpus>(
+    `/v1/workspaces/${workspaceId}/knowledge/corpus`,
+    { token },
+  );
+}
+
 export type ApiClaimSourceLink = {
   source_item_id: string | null;
   external_url: string | null;

@@ -25,6 +25,7 @@ from backend.app.db.models.agent_memory import (
 from backend.app.db.models.integrations import GitHubInstallation, WorkspaceRepo
 from backend.app.db.models.tenancy import Workspace
 from backend.app.db.session import get_session
+from backend.app.integrations.lighthouse import build_lighthouse_client
 from backend.app.services.knowledge_search import (
     EmbeddingsUnavailable,
     KnowledgeSearchHit,
@@ -200,6 +201,72 @@ async def search_workspace_knowledge(
         ) from exc
 
     return KnowledgeSearchResponse(query=payload.query, hits=hits)
+
+
+# ---------------------------------------------------------------------------
+# Lighthouse corpus overview (K7) — what the per-workspace engine actually
+# holds, for the knowledge dashboard. Kept above /{slug} so "corpus" isn't
+# captured as a slug.
+# ---------------------------------------------------------------------------
+
+
+class KnowledgeCorpusSourceOut(BaseModel):
+    source: str
+    chunk_count: int
+    recipes: list[str] = Field(default_factory=list)
+    last_ingest_at: str | None = None
+
+
+class KnowledgeCorpusOut(BaseModel):
+    """Lighthouse corpus roll-up for the workspace. ``configured`` is
+    False when Lighthouse isn't wired (``LIGHTHOUSE_BASE_URL`` unset) or
+    unreachable — the dashboard then shows an "engine not connected"
+    state instead of erroring."""
+
+    configured: bool
+    total_chunks: int = 0
+    total_sources: int = 0
+    last_ingest_at: str | None = None
+    sources: list[KnowledgeCorpusSourceOut] = Field(default_factory=list)
+
+
+@router.get("/corpus", response_model=KnowledgeCorpusOut)
+async def get_workspace_corpus(
+    workspace_id: uuid.UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> KnowledgeCorpusOut:
+    """Lighthouse corpus stats + per-source roll-up for the workspace."""
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
+
+    client = build_lighthouse_client(get_settings())
+    if client is None:
+        return KnowledgeCorpusOut(configured=False)
+    try:
+        stats = await client.corpus_stats(workspace_id=workspace_id)
+        raw_sources = await client.corpus_sources(workspace_id=workspace_id)
+    except Exception:
+        logger.warning(
+            "lighthouse corpus fetch failed for ws=%s", workspace_id,
+            exc_info=True,
+        )
+        return KnowledgeCorpusOut(configured=False)
+
+    return KnowledgeCorpusOut(
+        configured=True,
+        total_chunks=int(stats.get("total_chunks") or 0),
+        total_sources=int(stats.get("total_sources") or 0),
+        last_ingest_at=stats.get("last_ingest_at"),
+        sources=[
+            KnowledgeCorpusSourceOut(
+                source=str(s.get("source") or ""),
+                chunk_count=int(s.get("chunk_count") or 0),
+                recipes=list(s.get("recipes") or []),
+                last_ingest_at=s.get("last_ingest_at"),
+            )
+            for s in raw_sources
+        ],
+    )
 
 
 # ---------------------------------------------------------------------------
