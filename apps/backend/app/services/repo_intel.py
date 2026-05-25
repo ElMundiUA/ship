@@ -423,6 +423,10 @@ async def harvest_repo_intel(
             repo=repo,
             intel=row,
         )
+        # K6: also ship the repo intel as one document to Lighthouse (S3).
+        # Best-effort + dual-write — the internal projection above stays
+        # as the K5 read-fallback until Lighthouse has ingested.
+        await _emit_intel_to_lighthouse(repo=repo, intel=row)
 
     await session.flush()
 
@@ -1717,6 +1721,47 @@ def _render_repo_context_articles(
         ("visual-style", "Visual style", _render_visual_style_article(intel=intel, repo=repo)),
         ("rules", "Rules", _render_rules_article(intel=intel, repo=repo)),
     ]
+
+
+def _consolidate_intel_document(
+    *, repo: WorkspaceRepo, articles: list[tuple[str, str, str]]
+) -> str:
+    """Join the rendered repo-context sections into ONE markdown document
+    for Lighthouse (one document per repo, not N bucket articles)."""
+    sections = [body for _, _, body in articles if body.strip()]
+    return "\n\n".join(sections).strip() + "\n"
+
+
+async def _emit_intel_to_lighthouse(
+    *, repo: WorkspaceRepo, intel: RepoIntel
+) -> None:
+    """Best-effort: ship the repo intel as one markdown document to S3 so
+    the per-workspace Lighthouse importer ingests it. No-op when S3 isn't
+    configured; never raises — the harvest must not fail because the
+    knowledge engine / object store is unreachable."""
+    from backend.app.core.config import get_settings
+    from backend.app.integrations.lighthouse import build_knowledge_s3_writer
+
+    writer = build_knowledge_s3_writer(get_settings())
+    if writer is None:
+        return
+    document = _consolidate_intel_document(
+        repo=repo,
+        articles=_render_repo_context_articles(intel=intel, repo=repo),
+    )
+    try:
+        await writer.write_document(
+            workspace_id=repo.workspace_id,
+            source="repo-intel",
+            name=_slugify_repo(repo.full_name),
+            markdown=document,
+        )
+    except Exception:
+        logger.warning(
+            "lighthouse S3 emit failed for repo=%s — will retry next harvest",
+            repo.id,
+            exc_info=True,
+        )
 
 
 def _article_header(title: str, *, intel: RepoIntel, repo: WorkspaceRepo) -> list[str]:
