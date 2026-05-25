@@ -263,6 +263,43 @@ class StarterWorkflowPR:
     branch: str
 
 
+async def _bootstrap_empty_repo(
+    owner: str,
+    name: str,
+    branch: str,
+    *,
+    token: str,
+    client: httpx.AsyncClient | None,
+) -> None:
+    """Create an initial commit on ``branch`` for a zero-commit repo.
+
+    GitHub's Contents API (``PUT /contents/{path}``) creates the branch
+    AND the first commit in one call when the repo is empty — the Git
+    Data tree/commit endpoints 409 on a repo with no commits, so this is
+    the one path that works. Called by the seed-PR flows when the
+    default-branch ref read comes back 404/409 so a freshly-created repo
+    can still be bootstrapped instead of dead-ending the wizard.
+    """
+    readme = (
+        f"# {name}\n\n"
+        "Initialized by Ship so the workspace can be bootstrapped. "
+        "Replace this with your project's README.\n"
+    )
+    content_b64 = base64.b64encode(readme.encode("utf-8")).decode("ascii")
+    resp = await _request(
+        "PUT",
+        f"/repos/{owner}/{name}/contents/README.md",
+        token=token,
+        client=client,
+        json={
+            "message": "chore: initialize repository (Ship)",
+            "content": content_b64,
+            "branch": branch,
+        },
+    )
+    _raise_for(resp)
+
+
 async def commit_starter_workflow(
     repo: WorkspaceRepo,
     install: GitHubInstallation,
@@ -302,6 +339,21 @@ async def commit_starter_workflow(
         token=token,
         client=client,
     )
+    if head_resp.status_code in (404, 409):
+        # Empty repo — zero commits, so there's no default-branch ref to
+        # branch from. GitHub returns 409 "Git Repository is empty" (or
+        # 404) here. Bootstrap an initial commit on the default branch,
+        # then re-read the ref. Without this the wizard seed 502s on a
+        # freshly-created repo (hit on askslayer/baltic-nine).
+        await _bootstrap_empty_repo(
+            owner, name, base_ref, token=token, client=client
+        )
+        head_resp = await _request(
+            "GET",
+            f"/repos/{owner}/{name}/git/ref/heads/{base_ref}",
+            token=token,
+            client=client,
+        )
     _raise_for(head_resp)
     base_sha = head_resp.json()["object"]["sha"]
 
@@ -427,6 +479,21 @@ async def commit_bundle_pr(
         token=token,
         client=client,
     )
+    if head_resp.status_code in (404, 409):
+        # Empty repo — zero commits, so there's no default-branch ref to
+        # branch from. GitHub returns 409 "Git Repository is empty" (or
+        # 404) here. Bootstrap an initial commit on the default branch,
+        # then re-read the ref. Without this the wizard seed 502s on a
+        # freshly-created repo (hit on askslayer/baltic-nine).
+        await _bootstrap_empty_repo(
+            owner, name, base_ref, token=token, client=client
+        )
+        head_resp = await _request(
+            "GET",
+            f"/repos/{owner}/{name}/git/ref/heads/{base_ref}",
+            token=token,
+            client=client,
+        )
     _raise_for(head_resp)
     base_sha = head_resp.json()["object"]["sha"]
 
