@@ -62,6 +62,7 @@ from backend.app.api.v1.routes.workspaces import (
     ROLES_READ,
     _require_membership,
 )
+from backend.app.core.config import get_settings
 from backend.app.db.models.agent_surface import ChatMessage, ChatThread
 from backend.app.db.models.inbox import (
     InboxItem,
@@ -70,6 +71,7 @@ from backend.app.db.models.inbox import (
 from backend.app.db.models.lanes import RoutineRun
 from backend.app.db.models.tenancy import AuditLog, User, WorkspaceMember
 from backend.app.db.session import get_session
+from backend.app.integrations.lighthouse import emit_knowledge_document
 from backend.app.services.inbox.classification import (
     ACTIONABLE_CATEGORIES,
     derive_lane,
@@ -446,6 +448,16 @@ async def _project_items_out(
         lane = derive_lane(item, run=run)
         out.append(_to_item_out(item, owner, lane=lane))
     return out
+
+
+def _inbox_comment_document(item: InboxItem, body_text: str) -> str:
+    """Render an inbox comment as a markdown knowledge document for
+    Lighthouse ingestion."""
+    lines = ["# Inbox comment", "", f"- Item: {item.id}"]
+    if getattr(item, "title", None):
+        lines.append(f"- Title: {item.title}")
+    lines += ["", body_text or ""]
+    return "\n".join(lines).strip() + "\n"
 
 
 def _to_event_out(event: InboxItemEvent) -> InboxItemEventOut:
@@ -2154,6 +2166,16 @@ async def append_event(
     session.add(event)
     await session.flush()
     await session.refresh(event)
+    # K6: ship the comment to Lighthouse as a knowledge document
+    # (best-effort; no-op until S3 is configured).
+    if (body.body or "").strip():
+        await emit_knowledge_document(
+            workspace_id=workspace_id,
+            source="inbox-comments",
+            name=str(event.id),
+            markdown=_inbox_comment_document(item, body.body),
+            settings=get_settings(),
+        )
     return _to_event_out(event)
 
 
