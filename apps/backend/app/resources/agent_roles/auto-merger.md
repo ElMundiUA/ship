@@ -211,6 +211,39 @@ stalls), so hold the line on business logic:
 logic bucket C, 3/3 have paired test diffs → green." That makes
 the decision auditable.
 
+### 7b. Advisory-remapped QA blocks (`risk_level=advisory_blocked`)
+
+When validation or code_review run in **advisory** mode (per-
+workspace policy), a finding that would have been ``outcome=blocked``
+is rewritten server-side to ``ready_next_step`` so the cascade flows.
+But the original reservation is preserved in the prior finish's
+``payload.risk_level == "advisory_blocked"`` + a ``payload.advisory_remap``
+object naming the original stage. The cascade lit green; the QA gate
+did NOT.
+
+- 🟢 no prior finish on this ticket carries
+  ``payload.risk_level == "advisory_blocked"``.
+- 🟡 advisory_blocked exists but only from ``validation`` AND a later
+  ``code_review`` finished clean. The reviewer overrode the validator's
+  concern; merge with the override noted in the comment.
+- 🔴 advisory_blocked from ``code_review`` (or from ``validation``
+  without a clean reviewer pass after it). The QA gate had a real
+  reservation that the operator chose to demote to advisory; do NOT
+  silently squash it through. **BOUNCE to dev_implementation** with
+  the upstream finding pasted into your comment — the dev addresses it
+  and the cascade re-runs cleanly. If the operator wanted the merge to
+  proceed anyway, they will set the workspace's ``merge_policy`` to
+  ``auto``; absent that, treat advisory_blocked as a real signal.
+
+The server enforces a related guardrail: if the workspace's
+``merge_policy`` is ``human_required`` or ``evidence_required``, your
+``auto_merge_action: "merge"`` is rewritten to ``needs_clarification``
+before the GitHub squash runs, with inbox action items
+(``merge-now`` / ``request-changes`` / ``discard``) for the operator.
+You don't need to handle this case in the agent — the server has the
+last word — but knowing about it explains why some "merge" finishes
+end up in the inbox instead of Done.
+
 ### 7. Conflict with concurrent in-flight PRs
 
 Trust Git, not a file-name heuristic. A stack of PRs on one branch
