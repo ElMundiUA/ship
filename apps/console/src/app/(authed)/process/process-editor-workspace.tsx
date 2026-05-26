@@ -259,64 +259,6 @@ export function ProcessEditorWorkspace({
     setSelectedTransitionId(null);
   }
 
-  function addState(template: NodeTemplate = NODE_TEMPLATES[0]) {
-    const baseId = template.baseId;
-    const nextId = uniqueStateId(baseId, states);
-    const selectedIndex = Math.max(
-      states.findIndex((state) => state.id === selectedState?.id),
-      0,
-    );
-    const anchor = selectedState ?? states[states.length - 1];
-    const defaultSpecialist = specialistOptions[0] ?? {
-      id: "owner",
-      name: "Owner",
-      role: "Responsible owner for this state.",
-    };
-    const templateSpecialist =
-      specialistOptions.find((option) => option.id === template.specialistId) ??
-      defaultSpecialist;
-    const nextState: ApiProcessState = {
-      id: nextId,
-      name: template.name,
-      specialist_id: templateSpecialist.id,
-      specialist_name: templateSpecialist.name,
-      specialist_agent_profile: "main",
-      instructions: templateSpecialist.role,
-      // New stages default to the planning bucket; operator can drag
-      // them to the right swim-lane on the canvas to change.
-      state: "planning",
-      layout: {
-        x: (anchor?.layout?.x ?? 72) + 266,
-        y: anchor?.layout?.y ?? 170,
-      },
-      triggers: defaultSdlcStateTriggers(),
-      exit_conditions: [],
-      block_conditions: [],
-      runtime: {
-        task_count: 0,
-        blocked_count: 0,
-        last_execution_time: null,
-        health: "ok",
-      },
-    } as ApiProcessState;
-    setStates((current) => [
-      ...current.slice(0, selectedIndex + 1),
-      nextState,
-      ...current.slice(selectedIndex + 1),
-    ]);
-    if (selectedState) {
-      const nextTransition = {
-        id: transitionId(selectedState.id, nextState.id, transitions.length),
-        from_state_id: selectedState.id,
-        to_state_id: nextState.id,
-        conditions: [{ expression: "exit_conditions_met == true" }],
-      };
-      setTransitions((current) => [...current, nextTransition]);
-    }
-    setActiveStateId(nextState.id);
-    setSelectedTransitionId(null);
-  }
-
   function deleteState(stateId: string) {
     if (states.length <= 1) return;
     const index = states.findIndex((state) => state.id === stateId);
@@ -404,7 +346,6 @@ export function ProcessEditorWorkspace({
             selectedTransitionId={selectedTransitionId}
             onSelectState={selectStateId}
             onSelectTransition={selectTransitionId}
-            onAddState={() => addState()}
             onAddStageInLane={addStageInLane}
             onPositionsChange={updatePositions}
             onStageStateChange={updateStageState}
@@ -488,29 +429,6 @@ function buildSpecialistOptions(
   }
   return Array.from(options.values());
 }
-
-type NodeTemplate = {
-  id: string;
-  name: string;
-  description: string;
-  baseId: string;
-  specialistId: string;
-};
-
-// NodePalette + NODE_TEMPLATES were RF-era leftovers — drag-templates
-// onto a canvas. With H3's "+ Add stage" buttons in each lane header
-// and the global toolbar button, the operator has two cleaner ways to
-// create stages in the new model. The 230 px aside it lived in is
-// now reclaimed for the canvas.
-const NODE_TEMPLATES: NodeTemplate[] = [
-  {
-    id: "specialist_work",
-    name: "Specialist work",
-    description: "A generic ticket-driven process stage.",
-    baseId: "stage",
-    specialistId: "business_analyst",
-  },
-];
 
 function initialActiveStateId(
   states: ApiProcessState[],
@@ -621,8 +539,4 @@ function uniqueStateId(baseId: string, states: ApiProcessState[]) {
     if (!existing.has(candidate)) return candidate;
   }
   return `${baseId}_${Date.now()}`;
-}
-
-function transitionId(fromStateId: string, toStateId: string, index: number) {
-  return `${fromStateId}_to_${toStateId}_${index + 1}`;
 }
