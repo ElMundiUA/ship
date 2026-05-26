@@ -342,7 +342,15 @@ async def linear_install_callback(
         )
         row.last_health_error = f"fsm_provisioning_failed: {exc!s}"[:500]
 
-    scopes = sorted({scope.strip() for scope in token.scope.split(",") if scope.strip()})
+    # Linear returns OAuth scopes space-separated per RFC 6749;
+    # accept comma too for historical Ship-side compatibility.
+    scopes = sorted(
+        {
+            scope.strip()
+            for scope in token.scope.replace(",", " ").split()
+            if scope.strip()
+        }
+    )
     native_stmt = select(NativeIntegrationInstallation).where(
         NativeIntegrationInstallation.workspace_id == workspace_id,
         NativeIntegrationInstallation.provider == NativeIntegrationProvider.LINEAR,
@@ -714,7 +722,15 @@ async def linear_webhook_provision(
     token_scope = ""
     if scope_row and isinstance(scope_row.config, dict):
         token_scope = str(scope_row.config.get("scope") or "")
-    granted = {s.strip() for s in token_scope.split(",") if s.strip()}
+    # Linear's OAuth ``scope`` field is space-separated per RFC 6749,
+    # but some Ship-side code paths historically stored it comma-
+    # separated. Normalise both delimiters so the check works
+    # regardless of which writer touched the row last.
+    granted = {
+        s.strip()
+        for s in token_scope.replace(",", " ").split()
+        if s.strip()
+    }
     if "admin" not in granted:
         raise HTTPException(
             status_code=412,
