@@ -1259,7 +1259,7 @@ function WorkspacesPanel({
         )}
       </Card>
 
-      <Card>
+      <Card id="create-workspace">
         <CardHeader
           title="Create a new workspace"
           subtitle="Spins up an independent tenant in your personal org: empty knowledge bucket, default policies, you as owner. No data shared with this workspace."

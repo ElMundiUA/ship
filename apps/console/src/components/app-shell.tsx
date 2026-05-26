@@ -2,7 +2,13 @@
 
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
-import { type ReactNode, Suspense, useEffect, useState } from "react";
+import {
+  type ReactNode,
+  Suspense,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { cn } from "@/lib/cn";
 import { EnvSeparationWarningModal } from "@/components/env-separation-warning-modal";
 import { NavigatorLauncher } from "@/components/navigator-launcher";
@@ -280,18 +286,30 @@ export function AppShellChrome({
   const pathname = usePathname();
   const [wsOpen, setWsOpen] = useState(false);
   const defaultWs = { name: "Workspace", org: "Organization" };
-  const wsLabel = workspace?.name ?? defaultWs.name;
-  const wsKicker = workspace?.slug ?? defaultWs.org;
+  // The layout passes ``workspace`` based on the SSR cookie, but
+  // middleware can't update the cookie *for the same request* — so
+  // right after a ``?ws=`` switch the layout still sees the previous
+  // workspace. To keep the sidebar in sync we prefer the URL's
+  // ``?ws=`` (resolved against ``allWorkspaces``) over the prop.
+  const urlWsId =
+    useSearchParams()?.get("ws")?.trim() || null;
+  const urlWs =
+    urlWsId && allWorkspaces
+      ? allWorkspaces.find((w) => w.id === urlWsId) ?? null
+      : null;
+  const effectiveWorkspace = urlWs ?? workspace;
+  const wsLabel = effectiveWorkspace?.name ?? defaultWs.name;
+  const wsKicker = effectiveWorkspace?.slug ?? defaultWs.org;
   const multiWorkspace =
-    Boolean(workspace?.id) &&
+    Boolean(effectiveWorkspace?.id) &&
     Array.isArray(allWorkspaces) &&
     allWorkspaces.length > 1;
   const withWorkspaceHref = (href: string) => {
-    if (!multiWorkspace || !workspace?.id) {
+    if (!multiWorkspace || !effectiveWorkspace?.id) {
       return href;
     }
     const u = new URL(href, "http://local.workspace");
-    u.searchParams.set("ws", workspace.id);
+    u.searchParams.set("ws", effectiveWorkspace.id);
     return u.pathname + u.search;
   };
   // Pages that haven't threaded ``me`` down from server-side fall back
@@ -369,34 +387,17 @@ export function AppShellChrome({
             </Link>
           </div>
 
-          <div className="relative border-b border-white/10 px-3 py-3">
-            <WorkspaceChip
-              label={wsLabel}
-              kicker={wsKicker}
-              open={wsOpen}
-              onToggle={() => setWsOpen((s) => !s)}
-              className="w-full justify-start rounded-xl px-3 py-2"
-            />
-            {wsOpen && (
-              <Suspense
-                fallback={
-                  <div className="absolute left-3 right-3 top-[60px] z-50 overflow-hidden rounded-xl border border-white/10 bg-black/60 px-4 py-3 text-[11px] text-white/45">
-                    Loading…
-                  </div>
-                }
-              >
-                <WorkspaceSwitcherMenu
-                  pathname={pathname}
-                  wsLabel={wsLabel}
-                  workspace={workspace}
-                  allWorkspaces={allWorkspaces}
-                  multiWorkspace={multiWorkspace}
-                  withWorkspaceHref={withWorkspaceHref}
-                  onPick={() => setWsOpen(false)}
-                />
-              </Suspense>
-            )}
-          </div>
+          <WorkspaceSwitcherBlock
+            wsLabel={wsLabel}
+            wsKicker={wsKicker}
+            wsOpen={wsOpen}
+            setWsOpen={setWsOpen}
+            pathname={pathname}
+            workspace={effectiveWorkspace}
+            allWorkspaces={allWorkspaces}
+            multiWorkspace={multiWorkspace}
+            withWorkspaceHref={withWorkspaceHref}
+          />
 
           {repoChip && (
             <div className="border-b border-white/10 px-3 py-3">
@@ -519,8 +520,8 @@ export function AppShellChrome({
           <main className="flex flex-col">{children}</main>
         </div>
       </div>
-      {workspace?.id ? (
-        <EnvSeparationWarningModal workspaceId={workspace.id} />
+      {effectiveWorkspace?.id ? (
+        <EnvSeparationWarningModal workspaceId={effectiveWorkspace.id} />
       ) : null}
     </div>
   );
@@ -583,6 +584,86 @@ export function PageBody({
   return (
     <div className={cn("px-6 pb-16 pt-6 lg:px-8 lg:pb-20 lg:pt-8", className)}>
       {children}
+    </div>
+  );
+}
+
+/**
+ * Sidebar block that hosts the workspace chip + the popover with the
+ * switcher list. Owns its own outside-click / Escape handling and
+ * isolates ``useSearchParams`` inside the menu for Next prerender.
+ */
+function WorkspaceSwitcherBlock({
+  wsLabel,
+  wsKicker,
+  wsOpen,
+  setWsOpen,
+  pathname,
+  workspace,
+  allWorkspaces,
+  multiWorkspace,
+  withWorkspaceHref,
+}: {
+  wsLabel: string;
+  wsKicker: string;
+  wsOpen: boolean;
+  setWsOpen: (next: boolean | ((prev: boolean) => boolean)) => void;
+  pathname: string | null;
+  workspace?: AppShellWorkspace;
+  allWorkspaces?: AppShellWorkspace[];
+  multiWorkspace: boolean;
+  withWorkspaceHref: (href: string) => string;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!wsOpen) return;
+    const onPointerDown = (event: MouseEvent | TouchEvent) => {
+      const node = ref.current;
+      if (!node) return;
+      const target = event.target as Node | null;
+      if (target && node.contains(target)) return;
+      setWsOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setWsOpen(false);
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("touchstart", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("touchstart", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [wsOpen, setWsOpen]);
+  return (
+    <div ref={ref} className="relative border-b border-white/10 px-3 py-3">
+      <WorkspaceChip
+        label={wsLabel}
+        kicker={wsKicker}
+        open={wsOpen}
+        onToggle={() => setWsOpen((s) => !s)}
+        className="w-full justify-start rounded-xl px-3 py-2"
+      />
+      {wsOpen && (
+        <Suspense
+          fallback={
+            <div className="absolute left-3 right-3 top-[60px] z-50 overflow-hidden rounded-xl border border-white/10 bg-black/60 px-4 py-3 text-[11px] text-white/45">
+              Loading…
+            </div>
+          }
+        >
+          <WorkspaceSwitcherMenu
+            pathname={pathname}
+            wsLabel={wsLabel}
+            workspace={workspace}
+            allWorkspaces={allWorkspaces}
+            multiWorkspace={multiWorkspace}
+            withWorkspaceHref={withWorkspaceHref}
+            onPick={() => setWsOpen(false)}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }
@@ -653,15 +734,26 @@ function WorkspaceSwitcherMenu({
         </div>
       )}
       <Link
-        href={withWorkspaceHref("/settings/workspaces")}
+        href={withWorkspaceHref("/settings/workspaces#create-workspace")}
         onClick={onPick}
         className="flex items-center justify-between gap-2 border-t border-white/10 bg-white/[0.02] px-4 py-2.5 text-[11px] font-semibold text-aqua hover:bg-aqua/[0.04]"
       >
-        <span>{multiWorkspace ? "Manage workspaces" : "Create new workspace"}</span>
-        <span aria-hidden>+</span>
+        <span>Create new workspace</span>
+        <span aria-hidden className="text-base leading-none">+</span>
       </Link>
+      {multiWorkspace && (
+        <Link
+          href={withWorkspaceHref("/settings/workspaces")}
+          onClick={onPick}
+          className="flex items-center justify-between gap-2 border-t border-white/10 bg-white/[0.02] px-4 py-2.5 text-[11px] font-semibold text-white/70 hover:bg-white/[0.04] hover:text-white"
+        >
+          <span>Manage workspaces</span>
+          <span aria-hidden>→</span>
+        </Link>
+      )}
       <Link
         href={withWorkspaceHref("/settings")}
+        onClick={onPick}
         className="block border-t border-white/10 bg-white/[0.02] px-4 py-2.5 text-center text-[11px] font-semibold text-aqua hover:underline"
       >
         Workspace settings →
@@ -707,7 +799,21 @@ function WorkspaceChip({
       <span className="text-[8px] tracking-wider text-white/40 group-hover:text-white/70">
         {kicker}
       </span>
-      <span className="ml-0.5 text-white/40">⌄</span>
+      <svg
+        aria-hidden
+        viewBox="0 0 10 6"
+        className={cn(
+          "ml-auto h-[6px] w-[10px] shrink-0 text-white/40 transition-transform",
+          open && "rotate-180 text-aqua/70",
+        )}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <polyline points="1,1 5,5 9,1" />
+      </svg>
     </button>
   );
 }

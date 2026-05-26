@@ -12,6 +12,12 @@ export async function POST(request: Request) {
   const origin = resolveOrigin(request);
   const form = await request.formData();
   const wsId = (form.get("ws") ?? "").toString();
+  // Where to bounce back after Linear consent. Default keeps the
+  // operator on /integrations (the page they clicked Reconnect
+  // from); an explicit ``return_to`` form field — used by the
+  // sub-pages under workspace settings — wins so deeply-nested
+  // settings panels land back on themselves.
+  const returnTo = (form.get("return_to") ?? "/integrations").toString();
 
   if (!wsId) {
     return redirectWithError(origin, "missing_workspace");
@@ -21,7 +27,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const start = await startLinearInstall(wsId);
+    const start = await startLinearInstall(wsId, undefined, returnTo);
     return NextResponse.redirect(start.install_url, 303);
   } catch (err) {
     if (err instanceof ApiUnavailableError) {

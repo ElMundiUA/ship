@@ -112,6 +112,16 @@ async def linear_install_start(
     workspace_id: uuid.UUID = Query(
         ..., description="Workspace to attach the Linear connection to"
     ),
+    return_to: str | None = Query(
+        default=None,
+        description=(
+            "Console-side path to bounce the browser back to after a "
+            "successful OAuth callback. Must start with '/'. Used by "
+            "the workspace-settings 'Reconnect Linear' flow so the "
+            "operator lands on /integrations instead of /onboarding. "
+            "Validated against the console origin before redirect."
+        ),
+    ),
     auth: AuthContext = Depends(get_current_auth),
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
@@ -128,7 +138,24 @@ async def linear_install_start(
             detail="Linear OAuth is not configured on this deployment",
         )
     await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
-    state = build_oauth_state(workspace_id, settings=settings)
+    # Sanity-check the return_to before signing it into the state — a
+    # malformed value would lock the operator out of the flow after
+    # consent. Path-only (starts with /) keeps us inside the console
+    # origin; an absolute URL would be an open-redirect surface.
+    safe_return_to: str | None = None
+    if return_to:
+        if not return_to.startswith("/") or return_to.startswith("//"):
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "invalid_return_to",
+                    "message": "return_to must be a console-relative path starting with '/'",
+                },
+            )
+        safe_return_to = return_to
+    state = build_oauth_state(
+        workspace_id, settings=settings, return_to=safe_return_to
+    )
     return InstallStartResponse(
         install_url=build_authorize_url(
             state, settings=settings, redirect_uri=_redirect_uri(settings)
@@ -458,6 +485,19 @@ async def linear_install_callback(
         )
     )
     await session.flush()
+
+    # Reconnect-from-settings flow: when the caller passed
+    # ``return_to`` to /install/start, bounce back to that console
+    # path (already validated path-only). Wizard-driven flows leave
+    # ``return_to`` empty and land on ``/onboarding`` as before.
+    if decoded.return_to:
+        base = settings.console_url.rstrip("/")
+        target = f"{base}{decoded.return_to}"
+        sep = "&" if "?" in decoded.return_to else "?"
+        return RedirectResponse(
+            url=f"{target}{sep}ws={workspace_id}&linear=connected",
+            status_code=303,
+        )
 
     return RedirectResponse(
         url=_console_onboarding_url(
