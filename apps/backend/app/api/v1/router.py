@@ -40,6 +40,7 @@ from backend.app.api.v1.routes import (
     knowledge_canon,
     knowledge_import_sources,
     linear_oauth,
+    linear_webhook,
     local_tracker,
     members,
     metrics_file_overlap,
@@ -111,6 +112,11 @@ api_router.include_router(github_app.router)
 # Linear OAuth (pilot Day 2 — tracker WOW flow). Callback is public so
 # the browser redirect from Linear can hit it without a session.
 api_router.include_router(linear_oauth.router)
+# Linear webhook ingestion (E16/Lever-4). Replaces the 5-min
+# tracker_poller for workspaces that wired their Linear app to fire
+# deliveries at our public endpoint. Poller stays as a fallback so a
+# webhook miss doesn't strand the workspace.
+api_router.include_router(linear_webhook.router)
 # Notion OAuth (pilot Day 2 — tracker WOW flow). Same shape as Linear.
 api_router.include_router(notion_oauth.router)
 # Telegram bot adapter (group ↔ workspace bridge). Console-facing
