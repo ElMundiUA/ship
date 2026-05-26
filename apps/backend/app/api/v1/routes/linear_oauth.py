@@ -53,7 +53,7 @@ from backend.app.integrations.linear.oauth import (
     exchange_code_for_token,
     verify_oauth_state,
 )
-from backend.app.security.encryption import encrypt
+from backend.app.security.encryption import encrypt, safe_decrypt
 
 
 logger = logging.getLogger(__name__)
@@ -464,6 +464,310 @@ async def linear_install_callback(
             settings, workspace_id=workspace_id, success="connected"
         ),
         status_code=303,
+    )
+
+
+# ── Webhook provisioning ──────────────────────────────────────────
+
+
+_LINEAR_WEBHOOK_RESOURCE_TYPES: tuple[str, ...] = ("Issue",)
+
+
+class LinearWebhookProvisionOut(BaseModel):
+    """Result of ``POST /integrations/linear/webhook/provision``."""
+
+    provisioned: bool
+    webhook_id: str
+    url: str
+    resource_types: list[str]
+    # ``True`` when this call replaced an earlier registration (e.g.
+    # operator re-ran provisioning after a backend URL change), so the
+    # operator can see at a glance whether they need to remove the old
+    # entry from Linear's webhook list. We make a best-effort delete
+    # of the old one too, but Linear sometimes rejects the delete on
+    # an orphaned webhook from a deleted OAuth app — log + continue.
+    replaced_previous: bool
+
+
+def _linear_webhook_url(settings: Settings) -> str:
+    """Public URL Linear will POST deliveries to. Matches the route
+    mounted in :mod:`linear_webhook` (``POST /v1/webhooks/linear``)."""
+    base = settings.public_url.rstrip("/")
+    return f"{base}/v1/webhooks/linear"
+
+
+async def _fetch_live_linear_token(
+    session: AsyncSession, *, workspace_id: uuid.UUID
+) -> tuple[NativeIntegrationInstallation, str]:
+    """Return (install, plaintext access_token) for the workspace's
+    Linear connection. 404 / 412 if the workspace hasn't connected
+    Linear yet or the credential is missing / decrypts to empty.
+    """
+    install = (
+        await session.execute(
+            select(NativeIntegrationInstallation).where(
+                NativeIntegrationInstallation.workspace_id == workspace_id,
+                NativeIntegrationInstallation.provider
+                == NativeIntegrationProvider.LINEAR,
+                NativeIntegrationInstallation.external_account_id == "default",
+            )
+        )
+    ).scalar_one_or_none()
+    if install is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "linear_not_connected",
+                "message": (
+                    "Connect Linear (OAuth) before provisioning the webhook."
+                ),
+            },
+        )
+    cred = (
+        await session.execute(
+            select(NativeIntegrationCredential)
+            .where(
+                NativeIntegrationCredential.installation_id == install.id,
+                NativeIntegrationCredential.kind == "access_token",
+                NativeIntegrationCredential.revoked_at.is_(None),
+            )
+            .order_by(NativeIntegrationCredential.updated_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if cred is None:
+        raise HTTPException(
+            status_code=412,
+            detail={
+                "code": "linear_token_missing",
+                "message": (
+                    "Linear access_token is not on file; "
+                    "re-run the OAuth flow."
+                ),
+            },
+        )
+    token = safe_decrypt(cred.secret_ciphertext)
+    if not token:
+        raise HTTPException(
+            status_code=412,
+            detail={
+                "code": "linear_token_unreadable",
+                "message": (
+                    "Linear access_token decrypted to empty; "
+                    "re-run the OAuth flow."
+                ),
+            },
+        )
+    return install, token
+
+
+async def _linear_team_id_for_workspace(
+    session: AsyncSession, *, workspace_id: uuid.UUID
+) -> str | None:
+    """Pull the canonical ``team_id`` saved at OAuth time. ``None``
+    means provisioning never set one — caller decides whether to
+    register an org-scoped (no team filter) webhook or 422."""
+    legacy = (
+        await session.execute(
+            select(Integration)
+            .where(
+                Integration.workspace_id == workspace_id,
+                Integration.kind == "linear",
+            )
+            .order_by(Integration.updated_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if legacy and legacy.config:
+        return legacy.config.get("team_id")
+    return None
+
+
+async def _call_linear_graphql(
+    *, token: str, query: str, variables: dict
+) -> dict:
+    """Single Linear GraphQL request. Raises HTTPException on
+    transport / GraphQL errors so the FastAPI handler returns a
+    sensible status to the operator instead of a 500."""
+    async with httpx.AsyncClient(timeout=httpx.Timeout(15.0)) as client:
+        resp = await client.post(
+            "https://api.linear.app/graphql",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            json={"query": query, "variables": variables},
+        )
+    if resp.status_code >= 500:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Linear upstream {resp.status_code}: {resp.text[:200]}",
+        )
+    body = resp.json()
+    if body.get("errors"):
+        raise HTTPException(
+            status_code=502,
+            detail=f"Linear GraphQL error: {body['errors'][:1]}",
+        )
+    return body.get("data") or {}
+
+
+@router.post(
+    "/workspaces/{workspace_id}/integrations/linear/webhook/provision",
+    response_model=LinearWebhookProvisionOut,
+)
+async def linear_webhook_provision(
+    workspace_id: uuid.UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> LinearWebhookProvisionOut:
+    """Register a Linear webhook against this workspace's installation.
+
+    Idempotent: if the workspace already has a ``webhook_id`` in its
+    Integration config, we delete that one and create a fresh one
+    (covers backend URL changes + secret rotations). The new id +
+    url + resourceTypes are saved back to ``Integration.config``.
+
+    Requires:
+    - Workspace has completed Linear OAuth (an access token on file).
+    - ``LINEAR_WEBHOOK_SECRET`` is configured on the backend.
+    """
+    await _require_membership(
+        session, workspace_id, auth.user.id, ROLES_ADMIN
+    )
+    if not settings.linear_webhook_secret:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "linear_webhook_secret_missing",
+                "message": (
+                    "LINEAR_WEBHOOK_SECRET is not configured on this "
+                    "deployment — set it before provisioning webhooks."
+                ),
+            },
+        )
+
+    _install, token = await _fetch_live_linear_token(
+        session, workspace_id=workspace_id
+    )
+    team_id = await _linear_team_id_for_workspace(
+        session, workspace_id=workspace_id
+    )
+
+    legacy = (
+        await session.execute(
+            select(Integration)
+            .where(
+                Integration.workspace_id == workspace_id,
+                Integration.kind == "linear",
+            )
+            .order_by(Integration.updated_at.desc())
+            .limit(1)
+        )
+    ).scalar_one()  # OAuth flow always inserts one; missing → 500 is fine
+
+    existing_webhook_id: str | None = None
+    if isinstance(legacy.config, dict):
+        existing_webhook_id = legacy.config.get("webhook_id")
+
+    # Best-effort delete of any prior webhook. Re-provisioning is
+    # almost always after a backend URL or secret change, so leaving
+    # the previous registration in place would mean duplicate
+    # deliveries from Linear.
+    replaced = False
+    if existing_webhook_id:
+        try:
+            await _call_linear_graphql(
+                token=token,
+                query="""mutation($id: String!) {
+                  webhookDelete(id: $id) { success }
+                }""",
+                variables={"id": existing_webhook_id},
+            )
+            replaced = True
+        except HTTPException as exc:
+            # Don't block re-provisioning when Linear rejects the
+            # delete of an orphaned webhook — log + keep going.
+            logger.warning(
+                "linear webhook: delete of previous id=%s failed: %s",
+                existing_webhook_id, exc.detail,
+            )
+
+    public_url = _linear_webhook_url(settings)
+    create_input: dict = {
+        "url": public_url,
+        "secret": settings.linear_webhook_secret,
+        "resourceTypes": list(_LINEAR_WEBHOOK_RESOURCE_TYPES),
+        "label": "Ship dispatcher",
+    }
+    if team_id:
+        # Team-scoped webhook so Linear only delivers events from
+        # this workspace's team. Avoids cross-workspace leakage if
+        # the OAuth app is later attached to additional teams.
+        create_input["teamId"] = team_id
+
+    data = await _call_linear_graphql(
+        token=token,
+        query="""mutation($input: WebhookCreateInput!) {
+          webhookCreate(input: $input) {
+            success
+            webhook { id url resourceTypes }
+          }
+        }""",
+        variables={"input": create_input},
+    )
+    payload = (data.get("webhookCreate") or {})
+    if not payload.get("success"):
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                f"Linear webhookCreate returned success=false: "
+                f"{payload}"
+            ),
+        )
+    webhook = payload.get("webhook") or {}
+    webhook_id = str(webhook.get("id") or "")
+    if not webhook_id:
+        raise HTTPException(
+            status_code=502,
+            detail="Linear webhookCreate did not return an id",
+        )
+
+    # Persist alongside the existing OAuth config so future
+    # re-provisioning can find it.
+    new_config = dict(legacy.config or {})
+    new_config["webhook_id"] = webhook_id
+    new_config["webhook_url"] = public_url
+    new_config["webhook_resource_types"] = list(_LINEAR_WEBHOOK_RESOURCE_TYPES)
+    legacy.config = new_config
+    session.add(legacy)
+
+    session.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=auth.user.id,
+            actor_token_id=auth.token.id if auth.token else None,
+            action="linear.webhook.provision",
+            target_kind="integration",
+            target_id=str(legacy.id),
+            payload={
+                "webhook_id": webhook_id,
+                "url": public_url,
+                "resource_types": list(_LINEAR_WEBHOOK_RESOURCE_TYPES),
+                "team_scoped": bool(team_id),
+                "replaced_previous": replaced,
+            },
+        )
+    )
+    await session.flush()
+
+    return LinearWebhookProvisionOut(
+        provisioned=True,
+        webhook_id=webhook_id,
+        url=public_url,
+        resource_types=list(_LINEAR_WEBHOOK_RESOURCE_TYPES),
+        replaced_previous=replaced,
     )
 
 
