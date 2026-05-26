@@ -747,7 +747,7 @@ export function RepoCard({
               // them merge it themselves on github.com.
               setPendingSeed(body.result);
             }}
-            className="rounded-md bg-aqua/15 px-3 py-1.5 text-sm font-semibold text-aqua transition hover:bg-aqua/25 disabled:cursor-default disabled:opacity-40"
+            className="inline-flex items-center justify-center gap-1.5 rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-5 py-2 text-sm font-semibold text-ink shadow-glow transition hover:brightness-110 active:scale-[0.99] disabled:cursor-default disabled:bg-none disabled:bg-white/[0.05] disabled:text-white/45 disabled:shadow-none"
           >
             {seedSaving
               ? "Opening PR..."
@@ -769,7 +769,7 @@ export function RepoCard({
                   setSeedError(null);
                   seedButtonRef.current?.click();
                 }}
-                className="rounded-md bg-aqua/15 px-2.5 py-1 text-xs font-semibold text-aqua hover:bg-aqua/25"
+                className="inline-flex items-center justify-center gap-1.5 rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-3 py-1 text-xs font-bold text-ink shadow-glow transition hover:brightness-110 active:scale-[0.99]"
               >
                 Retry seed PR
               </button>
@@ -1092,7 +1092,7 @@ function ActivationModal({
             onClick={onActivate}
             disabled={activating || blockedMessage !== null}
             data-testid="onboarding-activate-confirm"
-            className="rounded-md bg-aqua/15 px-3 py-1.5 text-sm font-semibold text-aqua transition hover:bg-aqua/25 disabled:cursor-default disabled:opacity-40"
+            className="inline-flex items-center justify-center gap-1.5 rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-5 py-2 text-sm font-semibold text-ink shadow-glow transition hover:brightness-110 active:scale-[0.99] disabled:cursor-default disabled:bg-none disabled:bg-white/[0.05] disabled:text-white/45 disabled:shadow-none"
           >
             {activating ? "Activating…" : "Activate Ship now →"}
           </button>

@@ -1060,7 +1060,7 @@ function ReposStep({
             <button
               type="submit"
               data-testid="onboarding-wire-repos"
-              className="rounded-md bg-aqua/15 px-3 py-1.5 text-sm font-semibold text-aqua transition hover:bg-aqua/25"
+              className="btn-primary"
             >
               Wire selected repos &rarr;
             </button>
@@ -1320,7 +1320,7 @@ function TrackerStep({
             <button
               type="submit"
               disabled={connected || tile.id === "github"}
-              className="mt-4 rounded-md bg-aqua/15 px-3 py-1.5 text-sm font-semibold text-aqua transition hover:bg-aqua/25 disabled:cursor-default disabled:bg-aqua/10 disabled:text-aqua/60"
+              className="mt-4 inline-flex items-center justify-center gap-1.5 rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-5 py-2 text-sm font-semibold text-ink shadow-glow transition hover:brightness-110 active:scale-[0.99] disabled:cursor-default disabled:bg-none disabled:bg-white/[0.05] disabled:text-white/45 disabled:shadow-none"
             >
               {connected
                 ? tile.id === "github"
