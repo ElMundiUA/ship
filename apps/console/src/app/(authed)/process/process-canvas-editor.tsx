@@ -113,7 +113,6 @@ export function ProcessCanvasEditor({
   process,
   selectedStateId,
   onSelectState,
-  onAddState,
   onAddStageInLane,
   onPositionsChange: _onPositionsChange,
   onStageStateChange,
@@ -125,11 +124,7 @@ export function ProcessCanvasEditor({
   selectedTransitionId?: string | null;
   onSelectState: (stateId: string) => void;
   onSelectTransition?: (transitionId: string) => void;
-  onAddState: () => void;
-  /** Inline "+ Add stage to <lane>" — appends a generic stage in the
-   *  given lane. The header button uses this; the global toolbar
-   *  button keeps using onAddState for the legacy default-position
-   *  flow. */
+  /** Inline "+ Add" in each lane header — appends a stage in that lane. */
   onAddStageInLane?: (lane: CanonicalState) => void;
   /** Kept for backward compatibility — unused by the grid editor. */
   onPositionsChange?: (positions: Record<string, Position>) => void;
@@ -253,15 +248,6 @@ export function ProcessCanvasEditor({
         }
       }}
     >
-      <div className="pointer-events-none absolute right-3 top-3 z-30">
-        <button
-          type="button"
-          onClick={onAddState}
-          className="pointer-events-auto rounded-full border border-aqua/35 bg-aqua/15 px-3 py-1.5 text-xs font-semibold text-aqua shadow-lg shadow-aqua/5 transition hover:bg-aqua/25"
-        >
-          + Add stage
-        </button>
-      </div>
       <div className="h-full overflow-auto px-4 pb-6 pt-4">
         <div
           className="grid gap-2"
@@ -375,10 +361,10 @@ function LaneColumn({
               onAddStageInLane(lane);
             }}
             title={`Add stage to ${LANE_LABEL[lane]}`}
-            className="ml-auto h-4 w-4 shrink-0 rounded text-[12px] font-bold leading-[14px] text-white/30 opacity-0 transition group-hover/lane:opacity-100 hover:bg-aqua/20 hover:text-aqua focus:opacity-100 focus:outline-none focus-visible:ring-1 focus-visible:ring-aqua/60"
+            className="ml-auto shrink-0 rounded border border-white/10 px-1.5 py-0.5 text-[10px] font-semibold text-white/50 transition hover:border-aqua/30 hover:bg-aqua/15 hover:text-aqua focus:outline-none focus-visible:ring-1 focus-visible:ring-aqua/60"
             aria-label={`Add stage to ${LANE_LABEL[lane]}`}
           >
-            +
+            + Add
           </button>
         )}
       </div>
