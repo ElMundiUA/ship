@@ -2073,11 +2073,26 @@ async def _apply_review_policy_remap(
         return payload
     forwarded = _ADVISORY_FORWARD.get(stage) or "auto_merge"
     new_comment = (payload.comment or "") + _ADVISORY_REMAP_BANNER
+    # Preserve the "this would have been blocked" signal in payload so
+    # the downstream auto-merger can see that a QA gate had reservations
+    # even though the cascade went through. Without this marker the
+    # remap silently launders a reviewer "blocked" into a green auto-
+    # merge, exactly the opposite of what advisory mode promises. The
+    # auto-merger update in the next PR will read this and decide
+    # bounce / stall / merge with the workspace's ``merge_policy``.
+    new_payload = dict(payload.payload or {})
+    new_payload["advisory_remap"] = {
+        "from_outcome": "blocked",
+        "from_stage": stage,
+        "original_stage_next": payload.stage_next,
+    }
+    new_payload.setdefault("risk_level", "advisory_blocked")
     return payload.model_copy(
         update={
             "outcome": "ready_next_step",
             "stage_next": payload.stage_next or forwarded,
             "comment": new_comment,
+            "payload": new_payload,
         }
     )
 

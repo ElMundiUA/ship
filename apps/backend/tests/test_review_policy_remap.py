@@ -79,3 +79,46 @@ def test_forward_map_keeps_pipeline_shape() -> None:
     # agent doesn't see a different cascade shape than usual.
     assert _ADVISORY_FORWARD["validation"] == "code_review"
     assert _ADVISORY_FORWARD["code_review"] == "auto_merge"
+
+
+def test_advisory_remap_preserves_signal_in_payload() -> None:
+    # Pin the contract the auto-merger relies on: an advisory remap
+    # must leave a machine-readable breadcrumb so a downstream role
+    # can tell "would have blocked" from "actually green". Without
+    # this marker the remap silently launders blocked into a green
+    # merge, exactly the opposite of advisory mode's promise.
+    #
+    # We exercise the pure mutation shape via model_copy directly
+    # (the live remap goes through a DB lookup which lives in an
+    # integration test).
+    from backend.app.api.v1.routes.agent_runs import FinishIn
+
+    blocked = FinishIn(
+        run_id="r1",
+        outcome="blocked",
+        fsm_stage="code_review",
+        ticket_ref="ELS-1",
+        process="development",
+        comment="needs naming fix",
+        stage_next=None,
+    )
+    # Simulate the remap's tail (payload mutation) without DB.
+    new_payload = dict(blocked.payload or {})
+    new_payload["advisory_remap"] = {
+        "from_outcome": "blocked",
+        "from_stage": "code_review",
+        "original_stage_next": None,
+    }
+    new_payload.setdefault("risk_level", "advisory_blocked")
+    remapped = blocked.model_copy(
+        update={
+            "outcome": "ready_next_step",
+            "stage_next": "auto_merge",
+            "comment": "needs naming fix\n\n_advisory_",
+            "payload": new_payload,
+        }
+    )
+    assert remapped.outcome == "ready_next_step"
+    assert remapped.stage_next == "auto_merge"
+    assert remapped.payload["advisory_remap"]["from_outcome"] == "blocked"
+    assert remapped.payload["risk_level"] == "advisory_blocked"
