@@ -175,7 +175,7 @@ export function KnowledgeImportWizard({
             <span className="ml-2">{selected?.hint} Articles are auto-published into buckets with provenance and fingerprint-based skip logic.</span>
           </div>
           <Field label="Source name">
-            <input value={name} onChange={(event) => setName(event.target.value)} className="w-full rounded border border-white/15 bg-black/30 px-3 py-2 text-sm text-white/90" />
+            <input value={name} onChange={(event) => setName(event.target.value)} className="input-ship input-ship-wizard" />
           </Field>
           {kind === "website" && (
             <Field label="Website URL">
@@ -189,7 +189,7 @@ export function KnowledgeImportWizard({
           {kind === "notion" && (
             <>
               <Field label="Notion integration">
-                <select value={selectedIntegrationId} onChange={(event) => setIntegrationId(event.target.value)} className="w-full rounded border border-white/15 bg-black/30 px-3 py-2 text-sm text-white/90">
+                <select value={selectedIntegrationId} onChange={(event) => setIntegrationId(event.target.value)} className="input-ship input-ship-wizard">
                   {matchingIntegrations.length === 0 ? <option value="">No integration connected</option> : matchingIntegrations.map((integration) => <option key={integration.id} value={integration.id}>{integration.kind} - {integration.status}</option>)}
                 </select>
               </Field>
@@ -214,7 +214,7 @@ export function KnowledgeImportWizard({
           {kind === "confluence" && (
             <>
               <Field label="Confluence integration">
-                <select value={selectedIntegrationId} onChange={(event) => setIntegrationId(event.target.value)} className="w-full rounded border border-white/15 bg-black/30 px-3 py-2 text-sm text-white/90">
+                <select value={selectedIntegrationId} onChange={(event) => setIntegrationId(event.target.value)} className="input-ship input-ship-wizard">
                   {matchingIntegrations.length === 0 ? <option value="">No integration connected</option> : matchingIntegrations.map((integration) => <option key={integration.id} value={integration.id}>{integration.kind} - {integration.status}</option>)}
                 </select>
               </Field>
@@ -239,7 +239,7 @@ export function KnowledgeImportWizard({
           {kind === "docs_repo" && (
             <>
               <Field label="Repository">
-                <select value={repoId} onChange={(event) => setRepoId(event.target.value)} className="w-full rounded border border-white/15 bg-black/30 px-3 py-2 text-sm text-white/90">
+                <select value={repoId} onChange={(event) => setRepoId(event.target.value)} className="input-ship input-ship-wizard">
                   {repos.length === 0 ? <option value="">No activated repos</option> : repos.map((repo) => <option key={repo.id} value={repo.id}>{repo.full_name}</option>)}
                 </select>
               </Field>

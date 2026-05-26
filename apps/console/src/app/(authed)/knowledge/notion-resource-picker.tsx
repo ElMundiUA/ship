@@ -161,7 +161,7 @@ export function NotionResourcePicker({
         value={query}
         onChange={(event) => setQuery(event.target.value)}
         placeholder="Search Notion pages and databases your integration can see…"
-        className="w-full rounded border border-white/15 bg-black/30 px-3 py-2 text-sm text-white/90 placeholder:text-white/35"
+        className="input-ship input-ship-wizard"
         aria-label="Search Notion pages and databases"
       />
 
