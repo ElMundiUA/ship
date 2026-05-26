@@ -2773,9 +2773,18 @@ export interface ApiTrackerInstallStart {
 export function startLinearInstall(
   workspaceId: string,
   token?: string,
+  // Optional console-relative path to bounce back to after the
+  // OAuth callback. The wizard flow leaves this empty and lands on
+  // ``/onboarding?step=tracker`` as before; reconnects from the
+  // workspace-settings integrations page pass the current path so
+  // operators don't get teleported back into the wizard. Must
+  // start with ``/`` and not ``//`` — the backend validates.
+  returnTo?: string,
 ): Promise<ApiTrackerInstallStart> {
+  const params = new URLSearchParams({ workspace_id: workspaceId });
+  if (returnTo) params.set("return_to", returnTo);
   return apiFetch<ApiTrackerInstallStart>(
-    `/v1/integrations/linear/install/start?workspace_id=${encodeURIComponent(workspaceId)}`,
+    `/v1/integrations/linear/install/start?${params.toString()}`,
     { method: "POST", token },
   );
 }

@@ -51,6 +51,14 @@ class LinearTokenExchangeFailed(RuntimeError):
 class LinearOAuthState:
     workspace_id: uuid.UUID
     nonce: str
+    # Optional console path to bounce the browser back to after a
+    # successful OAuth callback. Used by the workspace-settings
+    # "Reconnect Linear" flow so reconnecting from /integrations
+    # lands back on /integrations instead of /onboarding (which is
+    # what the wizard-driven path wants). Validated against the
+    # console origin before redirect; ``None`` falls back to the
+    # onboarding URL the wizard expects.
+    return_to: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,8 +94,19 @@ def _require_credentials(settings: Settings) -> tuple[str, str]:
     return settings.linear_client_id, settings.linear_client_secret
 
 
-def build_oauth_state(workspace_id: uuid.UUID, *, settings: Settings) -> str:
-    """Sign a JWT carrying ``workspace_id`` + a CSRF nonce."""
+def build_oauth_state(
+    workspace_id: uuid.UUID,
+    *,
+    settings: Settings,
+    return_to: str | None = None,
+) -> str:
+    """Sign a JWT carrying ``workspace_id`` + a CSRF nonce.
+
+    ``return_to`` is an optional console path the callback uses to
+    bounce the browser back to. Signed alongside the workspace id so
+    a tampered query parameter can't redirect the browser somewhere
+    other than the page that started the flow.
+    """
     issued_at = int(time.time())
     claims = {
         "sub": _STATE_SUBJECT,
@@ -96,6 +115,8 @@ def build_oauth_state(workspace_id: uuid.UUID, *, settings: Settings) -> str:
         "iat": issued_at,
         "exp": issued_at + _STATE_TTL_SECONDS,
     }
+    if return_to:
+        claims["rt"] = return_to
     return jwt.encode(claims, _state_secret(settings), algorithm="HS256")
 
 
@@ -119,7 +140,13 @@ def verify_oauth_state(state: str, *, settings: Settings) -> LinearOAuthState:
         workspace_id = uuid.UUID(str(raw_wid))
     except ValueError as exc:
         raise InvalidLinearState("state token has malformed wid") from exc
-    return LinearOAuthState(workspace_id=workspace_id, nonce=str(raw_nonce))
+    raw_return_to = claims.get("rt")
+    return_to = str(raw_return_to) if isinstance(raw_return_to, str) else None
+    return LinearOAuthState(
+        workspace_id=workspace_id,
+        nonce=str(raw_nonce),
+        return_to=return_to,
+    )
 
 
 def build_authorize_url(
