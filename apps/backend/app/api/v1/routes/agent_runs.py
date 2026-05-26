@@ -48,7 +48,7 @@ import re
 import struct
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -74,6 +74,7 @@ from backend.app.services.inbox.sweep import sweep_auto_resolvable
 from backend.app.services.dispatcher import (
     ENV_SEPARATION_ACK_KEY,
     ENV_SEPARATION_PENDING_KEY,
+    _STAGE_TO_ROUTINE,
     env_separation_handle,
     normalize_routine_id,
 )
@@ -1182,6 +1183,21 @@ async def get_next_task(
             file_coordination_warning = overlap.warning_markdown
 
     body = pick.get("body") if isinstance(pick.get("body"), str) else None
+    # Self-aware preamble — surface this role's recent finish outcomes on
+    # this ticket so the agent can detect "I already did this, just need
+    # to transition" before re-doing work. Pairs with system.md's
+    # "Read before working" decision rule. Best-effort: a DB hiccup
+    # degrades silently, the ticket-body fallback still carries the brief.
+    if ticket_ref:
+        prior = await _fetch_prior_finishes_section(
+            session,
+            workspace_id=workspace_id,
+            ticket_ref=ticket_ref,
+            current_role=_STAGE_TO_ROUTINE.get(state) or state,
+        )
+        if prior:
+            body = f"{body}\n\n{prior}" if body else prior
+
     # Conversation context for EVERY role (not just the dev): the recent
     # SDLC verdict thread + operator hints. The dev gets it framed as
     # "feedback to address" (the dev_not_converging fix); reviewer /
@@ -1944,6 +1960,103 @@ def _extract_project_sections(
 
 _OPERATOR_HINT_MARKERS: tuple[str, ...] = ("[Operator hint", "[Operator]")
 _REVIEWER_FEEDBACK_CAP_BYTES = 6 * 1024
+
+# How many previous finishes we surface in the self-aware preamble.
+# Three is "your last few attempts on this ticket" — enough context
+# to spot a retry-loop or an orphan-finish without dumping the full
+# audit. Older runs are still in the verdict thread via
+# ``_fetch_reviewer_feedback_section``; this block is the agent's own
+# log, not the cross-role conversation.
+_PRIOR_FINISHES_LIMIT: Final[int] = 3
+_PRIOR_FINISH_DESCRIPTION_CAP: Final[int] = 400
+
+
+async def _fetch_prior_finishes_section(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    ticket_ref: str,
+    current_role: str,
+) -> str | None:
+    """Markdown block listing this role's recent ``agent_run.finish``
+    rows on this ticket, or ``None`` when there are none.
+
+    Pairs with ``system.md``'s "Read before working" preamble: the
+    decision rule there tells the agent to detect "I already did this,
+    just need to transition forward" before re-doing work, and this
+    block is the data feed that lets it do so. Cross-role conversation
+    is still in :func:`_fetch_reviewer_feedback_section` — this is
+    *your own* log, role-scoped to keep the signal sharp.
+
+    Best-effort: a DB hiccup degrades to ``None`` (the agent still has
+    the verdict thread from the reviewer-feedback section to work
+    from); the call is one indexed audit_log query so it's cheap.
+    """
+    from sqlalchemy import desc as _sa_desc
+    try:
+        rows = (
+            await session.execute(
+                select(AuditLog)
+                .where(
+                    AuditLog.workspace_id == workspace_id,
+                    AuditLog.action == "agent_run.finish",
+                    AuditLog.payload["ticket_ref"].astext == ticket_ref,
+                )
+                .order_by(_sa_desc(AuditLog.created_at))
+                .limit(_PRIOR_FINISHES_LIMIT * 4)  # over-fetch, filter by role
+            )
+        ).scalars().all()
+    except Exception as exc:  # noqa: BLE001 — best-effort
+        logger.debug(
+            "prior_finishes: query failed ws=%s ticket=%s err=%s",
+            workspace_id, ticket_ref, exc,
+        )
+        return None
+
+    # Filter to this role's own finishes — keeps the block focused on
+    # "what I did" vs the verdict thread that already shows what other
+    # roles thought. We match by stage→routine mapping so a workspace
+    # using legacy stage names (qa_manual, pr_review) still groups
+    # correctly under the canonical routine bucket.
+    mine: list[tuple[AuditLog, str, str, str | None]] = []
+    for row in rows:
+        payload = row.payload or {}
+        stage = str(payload.get("fsm_stage") or "") or None
+        routine = _STAGE_TO_ROUTINE.get(stage or "") if stage else None
+        if (routine or stage) != current_role:
+            continue
+        outcome = str(payload.get("outcome") or "noop")
+        description = payload.get("description")
+        desc = (
+            str(description).strip()[:_PRIOR_FINISH_DESCRIPTION_CAP]
+            if isinstance(description, str) and description.strip()
+            else None
+        )
+        mine.append((row, outcome, stage or "", desc))
+        if len(mine) >= _PRIOR_FINISHES_LIMIT:
+            break
+
+    if not mine:
+        return None
+
+    lines: list[str] = [
+        "## Your prior runs on this ticket",
+        "",
+        (
+            "These are the most recent `agent_run.finish` rows from "
+            "your own role on this ticket. Use them to detect "
+            "orphan-finish recovery (work landed but the ticket "
+            "didn't move) before re-doing work. Pair with the open "
+            "PR (search for it) and the verdict thread below."
+        ),
+        "",
+    ]
+    for row, outcome, stage, desc in mine:
+        ts = row.created_at.isoformat() if row.created_at else "?"
+        lines.append(f"- **{ts}** — `outcome={outcome}` stage=`{stage or '?'}`")
+        if desc:
+            lines.append(f"  > {desc}")
+    return "\n".join(lines)
 
 
 async def _fetch_reviewer_feedback_section(
