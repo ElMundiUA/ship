@@ -184,7 +184,7 @@ function renderShell(ctx: RepoContext, bundle: SettingsBundle) {
         <div className="flex flex-wrap items-center gap-3">
           <Link
             href={`/onboarding?step=repos&ws=${encodeURIComponent(workspace.id)}`}
-            className="rounded-full border border-aqua/35 bg-aqua/10 px-3 py-1 text-xs font-bold text-aqua/90 transition hover:bg-aqua/20"
+            className="inline-flex items-center justify-center gap-1.5 rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-3 py-1 text-xs font-bold text-ink shadow-glow transition hover:brightness-110 active:scale-[0.99]"
           >
             + Add repository
           </Link>
