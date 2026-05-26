@@ -2029,6 +2029,150 @@ def _resolve_review_mode(
     return "hard_gate"
 
 
+# Workspace ``merge_policy`` controls when auto-merger's ``merge``
+# decision is allowed to actually squash. The default ``auto`` keeps
+# current behaviour: any 7-signal-green finish merges via the App
+# token. Opt-in modes force human-in-the-loop:
+#
+# * ``human_required`` — every merge attempt is rewritten to
+#   ``needs_clarification`` so the operator sees the PR in the inbox
+#   and clicks Merge / Request changes / Discard.
+# * ``evidence_required`` — same as human_required, but only when the
+#   risk signal upstream is ``advisory_blocked`` (a QA gate had
+#   reservations remapped under advisory mode). Green-on-everything
+#   PRs still auto-merge.
+_MERGE_POLICY_REMAP_BANNER_HUMAN = (
+    "\n\n_Merge policy: workspace requires human approval before merge. "
+    "Auto-merger's verdict is preserved above; pick one of the inbox "
+    "action items below._"
+)
+_MERGE_POLICY_REMAP_BANNER_EVIDENCE = (
+    "\n\n_Merge policy: an upstream QA gate flagged this PR "
+    "(`risk_level=advisory_blocked`); a human must review before merge "
+    "even though the FSM cascade was green._"
+)
+
+
+def _resolve_merge_policy(workspace_settings: dict | None) -> str:
+    """Return ``"auto"`` (default) / ``"human_required"`` / ``"evidence_required"``.
+
+    Reads ``workspace.settings.merge_policy``. Unknown / missing values
+    fall back to ``auto`` so current behaviour is preserved.
+    """
+    if not workspace_settings:
+        return "auto"
+    raw = workspace_settings.get("merge_policy")
+    if isinstance(raw, str):
+        normalised = raw.strip().lower()
+        if normalised in {"auto", "human_required", "evidence_required"}:
+            return normalised
+    return "auto"
+
+
+async def _apply_merge_policy_remap(
+    payload: "FinishIn",
+    workspace_id: uuid.UUID,
+    session: AsyncSession,
+) -> "FinishIn":
+    """Force a STALL when the workspace's ``merge_policy`` demands it.
+
+    Active only when ALL of these hold:
+
+    1. The finish is an auto-merger ``merge`` decision
+       (``fsm_stage == "auto_merge"`` and
+       ``payload.auto_merge_action == "merge"``).
+    2. The workspace's ``merge_policy`` is ``human_required`` (always
+       force) or ``evidence_required`` AND the payload carries
+       ``risk_level == "advisory_blocked"`` (a remapped QA signal).
+
+    Rewrite shape: ``outcome=needs_clarification`` with
+    ``action_items`` for Merge / Request changes / Discard so the
+    operator clicks once in the inbox. The auto-merger's 7-signal
+    breakdown stays in ``payload.signals`` for audit, and a banner is
+    appended to ``comment`` so the operator knows the cascade was
+    re-routed by policy, not because the agent failed.
+    """
+    if payload.fsm_stage != "auto_merge":
+        return payload
+    raw_payload = payload.payload or {}
+    if not isinstance(raw_payload, dict):
+        return payload
+    if raw_payload.get("auto_merge_action") != "merge":
+        return payload
+    try:
+        ws_settings = (
+            await session.execute(
+                sa_select(Workspace.settings).where(
+                    Workspace.id == workspace_id
+                )
+            )
+        ).scalar_one_or_none()
+    except Exception as exc:  # noqa: BLE001 — best-effort, never block finish
+        logger.debug(
+            "merge_policy: workspace settings lookup failed ws=%s err=%s",
+            workspace_id, exc,
+        )
+        return payload
+    mode = _resolve_merge_policy(ws_settings)
+    if mode == "auto":
+        return payload
+    risk_level = str(raw_payload.get("risk_level") or "")
+    if mode == "evidence_required" and risk_level != "advisory_blocked":
+        return payload
+
+    banner = (
+        _MERGE_POLICY_REMAP_BANNER_HUMAN
+        if mode == "human_required"
+        else _MERGE_POLICY_REMAP_BANNER_EVIDENCE
+    )
+    new_payload = dict(raw_payload)
+    new_payload["merge_policy_remap"] = {
+        "mode": mode,
+        "from_action": "merge",
+        "risk_level": risk_level or None,
+    }
+    # Convert the action so the auto-merger hook downstream skips the
+    # GitHub squash call.
+    new_payload["auto_merge_action"] = "stall"
+    # Provide single-choice action items so the inbox renders one-tap
+    # pills (same shape auto-merger's STALL path already uses).
+    existing_items = new_payload.get("action_items")
+    if not isinstance(existing_items, list) or not existing_items:
+        new_payload["action_items"] = [
+            {
+                "id": "merge-now",
+                "kind": "choice",
+                "label": "Merge now",
+                "hint": "Squash via GitHub API and move ticket to Done.",
+            },
+            {
+                "id": "request-changes",
+                "kind": "choice",
+                "label": "Request changes",
+                "hint": (
+                    "Bounce back to dev with your reasoning in the "
+                    "free-form field below."
+                ),
+            },
+            {
+                "id": "discard",
+                "kind": "choice",
+                "label": "Discard PR",
+                "hint": "Close the PR and cancel the ticket.",
+            },
+        ]
+        new_payload.setdefault("resolution_mode", "single_choice")
+
+    return payload.model_copy(
+        update={
+            "outcome": "needs_clarification",
+            "stage_next": None,
+            "comment": (payload.comment or "") + banner,
+            "payload": new_payload,
+        }
+    )
+
+
 async def _apply_review_policy_remap(
     payload: "FinishIn",
     workspace_id: uuid.UUID,
@@ -3815,6 +3959,14 @@ async def finish_agent_run(
     # every existing workspace is ``hard_gate`` — current behaviour —
     # so this is a no-op until an operator opts in.
     payload = await _apply_review_policy_remap(payload, workspace_id, session)
+
+    # Merge policy gate — converts an auto-merger ``merge`` into a
+    # human-in-the-loop ``stall`` for workspaces that explicitly want
+    # human approval before any merge. Runs AFTER the advisory remap so
+    # an upstream ``advisory_blocked`` signal also forces a stall under
+    # ``human_required``. Default for every existing workspace is
+    # ``auto`` — current behaviour — no-op until opt-in.
+    payload = await _apply_merge_policy_remap(payload, workspace_id, session)
 
     # Idempotency: bail out if we've already recorded a finish for this
     # run_id under the same workspace.
