@@ -26,6 +26,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { cn } from "@/lib/cn";
+import { ButtonPrimary } from "@/components/ui";
 import { decideInboxItemClient } from "@/lib/inbox-decide-client";
 import type {
   InboxActionItem,
@@ -254,14 +255,16 @@ export function InboxActionPanel({ workspaceId, item, onResolved }: Props) {
       )}
 
       {mode === "ack_only" && (
-        <button
+        <ButtonPrimary
+          size="sm"
           type="button"
-          disabled={busy || isTerminal}
           onClick={() => submit(items.length ? [items[0].id] : [], "")}
-          className="rounded-md bg-aqua/15 px-3 py-1.5 text-sm font-semibold text-aqua transition hover:bg-aqua/25 disabled:opacity-40"
+          className={cn(
+            (busy || isTerminal) && "pointer-events-none opacity-40",
+          )}
         >
           {busy ? "…" : "Acknowledge"}
-        </button>
+        </ButtonPrimary>
       )}
 
       {mode === "per_item_binary" && (
@@ -490,14 +493,16 @@ function MultiSelectList({
         ))}
       </ul>
       <div className="flex items-center gap-2 pt-1">
-        <button
+        <ButtonPrimary
+          size="sm"
           type="button"
-          disabled={disabled || picked.size === 0}
           onClick={onApply}
-          className="rounded-md bg-aqua/15 px-3 py-1.5 text-sm font-semibold text-aqua transition hover:bg-aqua/25 disabled:opacity-40"
+          className={cn(
+            (disabled || picked.size === 0) && "pointer-events-none opacity-40",
+          )}
         >
           Apply {picked.size > 0 ? `${picked.size} selected` : ""}
-        </button>
+        </ButtonPrimary>
         <span className="text-[11px] text-white/40">
           {picked.size === 0
             ? "Pick one or more, or write your own answer below."
@@ -558,14 +563,17 @@ function FreeformRow({
         placeholder="Type your answer and press Enter…"
         className="min-w-0 flex-1 rounded-md border border-white/10 bg-white/[0.03] px-2.5 py-1.5 text-sm text-white placeholder:text-white/30 focus:border-aqua focus:outline-none disabled:opacity-40"
       />
-      <button
+      <ButtonPrimary
+        size="sm"
         type="button"
         onClick={onSubmit}
-        disabled={disabled || value.trim() === ""}
-        className="rounded-md bg-aqua/15 px-2.5 py-1.5 text-xs font-semibold uppercase tracking-wide text-aqua transition hover:bg-aqua/25 disabled:opacity-40"
+        className={cn(
+          "uppercase tracking-wide",
+          (disabled || value.trim() === "") && "pointer-events-none opacity-40",
+        )}
       >
         Send
-      </button>
+      </ButtonPrimary>
     </div>
   );
 }
