@@ -8,6 +8,7 @@ artifact-repo wiring follow in subsequent slices.
 
 from __future__ import annotations
 
+import copy
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
@@ -48,6 +49,41 @@ ROLES_MAINTAIN = ("owner", "admin", "maintainer")
 ROLES_MEMBER = ("owner", "admin", "maintainer", "member")
 ROLES_READ = ("owner", "admin", "maintainer", "member", "viewer")
 VALID_CATALOG_KEYS = frozenset({"global", "workspace", "project"})
+
+
+# Default FSM policy for **new** workspaces created from now on. Existing
+# workspaces are untouched (their settings stay {} → resolved as
+# ``hard_gate`` / ``auto``, the legacy behaviour). The defaults bake in
+# what we observed makes the cascade fast without losing the safety
+# net:
+#
+# * ``review_policy.validation = advisory`` + ``reviewer = advisory`` —
+#   QA gates report findings into the PR comment chain instead of
+#   bouncing the ticket back to dev for every nit. The advisory remap
+#   stamps ``risk_level=advisory_blocked`` on payload so downstream
+#   stages still see the QA reservation.
+# * ``merge_policy = evidence_required`` — pairs with the advisory
+#   marker above: a truly green PR auto-merges, but one a QA gate had
+#   reservations about is rerouted to the inbox for an operator to
+#   approve (single-click Merge / Request changes / Discard). The
+#   "rubber-stamp human" problem doesn't bite here because the human
+#   only sees PRs that already failed an upstream check.
+#
+# Operators can flip back to legacy behaviour per-workspace by setting
+# ``workspace.settings.review_policy.*`` to ``hard_gate`` or
+# ``workspace.settings.merge_policy`` to ``auto``.
+NEW_WORKSPACE_DEFAULT_SETTINGS: dict = {
+    "review_policy": {
+        # Keys are FSM stage labels (``validation``, ``code_review``).
+        # ``_resolve_review_mode`` also matches legacy aliases that map
+        # to the same routine bucket (``qa_manual`` / ``qa_automation``
+        # → ``validation``; ``pr_review`` → ``code_review``), so this
+        # one entry covers each gate fully.
+        "validation": "advisory",
+        "code_review": "advisory",
+    },
+    "merge_policy": "evidence_required",
+}
 
 
 async def _require_membership(
@@ -191,6 +227,7 @@ async def _ensure_personal_workspace(
         org_id=org.id,
         slug=slug,
         name=f"{display.title()}'s workspace",
+        settings=copy.deepcopy(NEW_WORKSPACE_DEFAULT_SETTINGS),
     )
     session.add(workspace)
     try:
@@ -255,7 +292,12 @@ async def create_workspace(
         if membership is None or membership.role not in ("org_owner", "org_admin"):
             raise HTTPException(status_code=403, detail="cannot create workspace in this org")
 
-    workspace = Workspace(org_id=org.id, slug=payload.slug, name=payload.name)
+    workspace = Workspace(
+        org_id=org.id,
+        slug=payload.slug,
+        name=payload.name,
+        settings=copy.deepcopy(NEW_WORKSPACE_DEFAULT_SETTINGS),
+    )
     session.add(workspace)
     try:
         await session.flush()
