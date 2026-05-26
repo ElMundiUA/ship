@@ -1961,6 +1961,141 @@ def _extract_project_sections(
 _OPERATOR_HINT_MARKERS: tuple[str, ...] = ("[Operator hint", "[Operator]")
 _REVIEWER_FEEDBACK_CAP_BYTES = 6 * 1024
 
+# Stages whose ``blocked`` outcome we remap to ``ready_next_step`` when
+# the workspace marks them ``advisory``. Validation and code_review are
+# the two QA gates that bounce most often (combined ~287 blocks/week
+# 2026-05-19..25); both have a downstream stage that can re-evaluate
+# the same findings, so demoting them to PR comments is safe. Other
+# stages (auto_merge, dev_implementation) stay hard — a blocked merge
+# IS the merge decision, and a blocked dev means the work didn't land.
+_ADVISORY_ELIGIBLE_STAGES: Final[frozenset[str]] = frozenset(
+    {"validation", "qa_manual", "qa_automation", "code_review", "pr_review"}
+)
+# Stage -> ``stage_next`` we forward an advisory remap to. validation
+# was already going to code_review on the happy path; code_review was
+# going to auto_merge. Keeping the same shape means downstream agents
+# see ``findings recorded`` in the comment without us also having to
+# rewrite their pickup heuristics.
+_ADVISORY_FORWARD: Final[dict[str, str]] = {
+    "validation": "code_review",
+    "qa_manual": "code_review",
+    "qa_automation": "code_review",
+    "code_review": "auto_merge",
+    "pr_review": "auto_merge",
+}
+_ADVISORY_REMAP_BANNER = (
+    "\n\n_Advisory review policy: findings above are recorded for the "
+    "downstream role; not blocking the cascade._"
+)
+
+
+def _resolve_review_mode(
+    workspace_settings: dict | None, fsm_stage: str | None
+) -> str:
+    """Return ``"hard_gate"`` (default) or ``"advisory"`` for ``fsm_stage``.
+
+    Reads from ``workspace.settings.review_policy.<stage>``. Unknown /
+    missing keys default to ``hard_gate`` — every existing workspace
+    keeps the current behaviour unless its operator explicitly opts in.
+
+    Resolution order, first match wins:
+
+    1. Exact stage match (``policy["pr_review"]``).
+    2. Match by routine bucket → operator wrote the canonical stage
+       (``policy["code_review"]``) and the caller passes a legacy
+       alias (``pr_review``). We resolve both sides through
+       ``_STAGE_TO_ROUTINE`` so any stage that shares a routine with
+       a configured key picks up the same mode.
+    """
+    if not workspace_settings or not fsm_stage:
+        return "hard_gate"
+    policy = workspace_settings.get("review_policy")
+    if not isinstance(policy, dict):
+        return "hard_gate"
+    raw = policy.get(fsm_stage)
+    if raw is None:
+        # Resolve via routine bucket — find any policy key that maps
+        # to the same routine as the incoming stage. Covers operators
+        # who write ``code_review: advisory`` and a legacy
+        # ``pr_review`` stage hits the endpoint.
+        routine = _STAGE_TO_ROUTINE.get(fsm_stage)
+        if routine:
+            for key, value in policy.items():
+                if _STAGE_TO_ROUTINE.get(str(key)) == routine:
+                    raw = value
+                    break
+    if isinstance(raw, str) and raw.strip().lower() == "advisory":
+        return "advisory"
+    return "hard_gate"
+
+
+async def _apply_review_policy_remap(
+    payload: "FinishIn",
+    workspace_id: uuid.UUID,
+    session: AsyncSession,
+) -> "FinishIn":
+    """Rewrite a ``blocked`` finish to ``ready_next_step`` when the
+    workspace marks the calling stage as ``advisory``.
+
+    No-op unless ALL of the following hold:
+
+    1. ``outcome == "blocked"``.
+    2. ``fsm_stage`` is in :data:`_ADVISORY_ELIGIBLE_STAGES` — only
+       validation / code_review are remappable; auto_merge and the
+       implementation stages stay hard gates.
+    3. The workspace has opted in via
+       ``workspace.settings.review_policy.<stage> = "advisory"``.
+
+    The agent's comment (their findings) is preserved verbatim; a
+    one-line banner is appended so the downstream role knows the
+    cascade is intentional, not a missed block.
+    """
+    if payload.outcome != "blocked":
+        return payload
+    stage = payload.fsm_stage
+    if stage not in _ADVISORY_ELIGIBLE_STAGES:
+        return payload
+    try:
+        ws_settings = (
+            await session.execute(
+                sa_select(Workspace.settings).where(
+                    Workspace.id == workspace_id
+                )
+            )
+        ).scalar_one_or_none()
+    except Exception as exc:  # noqa: BLE001 — best-effort, never block finish
+        logger.debug(
+            "review_policy: workspace settings lookup failed ws=%s err=%s",
+            workspace_id, exc,
+        )
+        return payload
+    if _resolve_review_mode(ws_settings, stage) != "advisory":
+        return payload
+    forwarded = _ADVISORY_FORWARD.get(stage) or "auto_merge"
+    new_comment = (payload.comment or "") + _ADVISORY_REMAP_BANNER
+    # Preserve the "this would have been blocked" signal in payload so
+    # the downstream auto-merger can see that a QA gate had reservations
+    # even though the cascade went through. Without this marker the
+    # remap silently launders a reviewer "blocked" into a green auto-
+    # merge, exactly the opposite of what advisory mode promises. The
+    # auto-merger update in the next PR will read this and decide
+    # bounce / stall / merge with the workspace's ``merge_policy``.
+    new_payload = dict(payload.payload or {})
+    new_payload["advisory_remap"] = {
+        "from_outcome": "blocked",
+        "from_stage": stage,
+        "original_stage_next": payload.stage_next,
+    }
+    new_payload.setdefault("risk_level", "advisory_blocked")
+    return payload.model_copy(
+        update={
+            "outcome": "ready_next_step",
+            "stage_next": payload.stage_next or forwarded,
+            "comment": new_comment,
+            "payload": new_payload,
+        }
+    )
+
 # How many previous finishes we surface in the self-aware preamble.
 # Three is "your last few attempts on this ticket" — enough context
 # to spot a retry-loop or an orphan-finish without dumping the full
@@ -3670,6 +3805,16 @@ async def finish_agent_run(
     the agent) don't double-write.
     """
     await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+
+    # Advisory review policy — when the workspace has marked validation
+    # or code_review as ``advisory`` in its settings, a ``blocked``
+    # outcome from those stages is rewritten to ``ready_next_step``
+    # before any side-effect runs. Findings still land in the agent's
+    # comment (so the next role sees them), but the FSM stops bouncing
+    # the ticket back to dev on every reviewer-level nit. Default for
+    # every existing workspace is ``hard_gate`` — current behaviour —
+    # so this is a no-op until an operator opts in.
+    payload = await _apply_review_policy_remap(payload, workspace_id, session)
 
     # Idempotency: bail out if we've already recorded a finish for this
     # run_id under the same workspace.
