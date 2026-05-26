@@ -268,7 +268,7 @@ export function KnowledgeImportWizard({
             <input type="checkbox" checked={syncNow} onChange={(event) => setSyncNow(event.target.checked)} className="accent-aqua" />
             Sync immediately after creating the source
           </label>
-          <div className="flex justify-end"><button type="button" disabled={pending} onClick={submit} className="rounded-full border border-aqua/50 bg-aqua/15 px-4 py-2 text-sm font-bold text-aqua transition hover:bg-aqua/25 disabled:cursor-not-allowed disabled:opacity-50">{pending ? "Creating..." : "Create source"}</button></div>
+          <div className="flex justify-end"><button type="button" disabled={pending} onClick={submit} className="btn-primary disabled:cursor-not-allowed disabled:opacity-50">{pending ? "Creating..." : "Create source"}</button></div>
           {result && <ResultBox result={result} />}
           <div className="text-[11px] text-white/45">Default scope: {defaultScope}. Sources route into workspace buckets.</div>
         </div>

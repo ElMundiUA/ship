@@ -8,25 +8,51 @@ import { cn } from "@/lib/cn";
  * and copy rather than re-defining badges/cards/empty states inline.
  */
 
+/**
+ * Default card surface — dark translucent glass with a subtle inset blik
+ * so it sits on the radial-gradient body the same way landing's
+ * ``.glass-panel`` does. Pass ``variant="glass"`` for hero-scale panels
+ * that should match the landing site's rounded-3xl chrome exactly.
+ */
 export function Card({
   children,
   className,
   padded = true,
   id,
+  variant = "default",
   "data-testid": dataTestId,
 }: {
   children: ReactNode;
   className?: string;
   padded?: boolean;
   id?: string;
+  /** ``glass`` bumps radius to 3xl + uses the landing's ``.glass-panel``
+   * tokens verbatim. Use sparingly — only for marketing-grade hero
+   * surfaces. The default is the operator-dense ``rounded-2xl``. */
+  variant?: "default" | "glass";
   "data-testid"?: string;
 }) {
+  if (variant === "glass") {
+    return (
+      <div
+        id={id}
+        data-testid={dataTestId}
+        className={cn("glass-panel", padded && "p-6", className)}
+      >
+        {children}
+      </div>
+    );
+  }
   return (
     <div
       id={id}
       data-testid={dataTestId}
       className={cn(
+        // Inset blik (``inset 0 1px 0 rgba(255,255,255,0.06)``) is what
+        // gives the landing's panels their lit top-edge — porting it
+        // here so dashboard cards stop reading as flat against the bg.
         "rounded-2xl border border-white/10 bg-white/[0.04] backdrop-blur-xl shadow-card",
+        "shadow-[0_4px_24px_rgba(0,0,0,0.25),inset_0_1px_0_rgba(255,255,255,0.06)]",
         padded && "p-5",
         className
       )}
@@ -133,23 +159,41 @@ export function ButtonGhost({
   );
 }
 
+/**
+ * Primary CTA — coral→lilac→aqua gradient pill, ``text-ink`` for max
+ * contrast against the warm body radials. Three sizes:
+ *
+ *  - ``sm``  — chip-row affordance (table action button, inline confirm).
+ *  - ``md``  — the default; matches the size landing uses for in-flow
+ *               CTAs like "See how the process works".
+ *  - ``lg``  — hero / wizard primary action; same px-8 py-3.5 as
+ *               landing's ``.btn-primary``.
+ *
+ * ``className`` still wins — pass utilities to override padding /
+ * radius / fonts when a one-off needs it.
+ */
 export function ButtonPrimary({
   children,
   onClick,
   className,
   type = "button",
+  size = "md",
 }: {
   children: ReactNode;
   onClick?: () => void;
   className?: string;
   type?: "button" | "submit";
+  size?: "sm" | "md" | "lg";
 }) {
   return (
     <button
       type={type}
       onClick={onClick}
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-3.5 py-1.5 text-xs font-bold text-ink shadow-glow transition hover:brightness-110",
+        "inline-flex items-center justify-center gap-1.5 rounded-full bg-gradient-to-r from-coral via-lilac to-aqua font-semibold text-ink shadow-glow transition hover:brightness-110 active:scale-[0.99]",
+        size === "sm" && "px-3.5 py-1.5 text-xs font-bold",
+        size === "md" && "px-5 py-2 text-sm",
+        size === "lg" && "px-8 py-3.5 text-sm",
         className
       )}
     >

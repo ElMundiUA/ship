@@ -112,10 +112,7 @@ export async function DoneStep({
       <WhatsNextGrid workspaceId={wsId} />
 
       <footer className="mt-10 flex flex-wrap items-center justify-between gap-3 border-t border-white/[0.08] pt-5">
-        <Link
-          href={dashboardHref}
-          className="rounded-md bg-aqua/15 px-3 py-1.5 text-sm font-semibold text-aqua transition hover:bg-aqua/25"
-        >
+        <Link href={dashboardHref} className="btn-primary">
           Open dashboard →
         </Link>
       </footer>
