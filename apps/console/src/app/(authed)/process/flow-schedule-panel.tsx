@@ -240,7 +240,7 @@ export function FlowSchedulePanel({
             <button
               type="submit"
               disabled={!repoId || !dirty || warnings.length > 0}
-              className="h-9 whitespace-nowrap rounded-full border border-aqua/30 bg-aqua/10 px-4 text-xs font-bold text-aqua transition hover:bg-aqua/15 disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/[0.05] disabled:text-white/35"
+              className="inline-flex h-9 items-center justify-center gap-1.5 whitespace-nowrap rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-4 text-xs font-semibold text-ink shadow-glow transition hover:brightness-110 active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-none disabled:bg-white/[0.05] disabled:text-white/35 disabled:shadow-none"
             >
               Review changes
             </button>
