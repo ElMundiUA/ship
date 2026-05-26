@@ -233,7 +233,7 @@ function PrimaryForm({
       <input type="hidden" name="return_to" value={returnTo} />
       <button
         type="submit"
-        className="inline-flex items-center gap-1.5 rounded-md bg-aqua/15 px-3 py-1.5 text-sm font-semibold text-aqua transition hover:bg-aqua/25"
+        className="inline-flex items-center justify-center gap-1.5 rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-5 py-2 text-sm font-semibold text-ink shadow-glow transition hover:brightness-110 active:scale-[0.99]"
       >
         {label}
       </button>
@@ -307,7 +307,7 @@ function ReplyForm({
       <div className="flex items-center gap-2">
         <button
           type="submit"
-          className="inline-flex items-center gap-1.5 rounded-md bg-aqua/15 px-3 py-1.5 text-sm font-semibold text-aqua transition hover:bg-aqua/25"
+          className="inline-flex items-center justify-center gap-1.5 rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-5 py-2 text-sm font-semibold text-ink shadow-glow transition hover:brightness-110 active:scale-[0.99]"
         >
           Send
         </button>
