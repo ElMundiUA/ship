@@ -9,9 +9,6 @@ import {
   ApiHttpError,
   getWorkspaceCorpus,
   listActivatedRepos,
-  listIntegrations,
-  listKnowledgeImportSources,
-  listTopicViews,
 } from "@/lib/api/client";
 import {
   getCachedMe,
@@ -20,25 +17,14 @@ import {
 } from "@/lib/api/session-cache.server";
 import { getResolvedWorkspaceId } from "@/lib/workspace-resolve.server";
 import { pickWorkspace } from "@/lib/workspace-scope";
-import type {
-  ApiIntegration,
-  ApiKnowledgeImportSource,
-} from "@/lib/api/types";
 
-import {
-  KnowledgeControlCenter,
-  type KnowledgeSourceRow,
-  type KnowledgeTopicViewRow,
-} from "./knowledge-control-center";
+import { KnowledgeControlCenter } from "./knowledge-control-center";
 
 export const dynamic = "force-dynamic";
 
 type LiveData = {
   workspace: { id: string; slug: string; name: string };
-  topicViews: KnowledgeTopicViewRow[];
-  sources: KnowledgeSourceRow[];
   repos: ApiActivatedRepo[];
-  integrations: ApiIntegration[];
   corpus: ApiKnowledgeCorpus | null;
   me: Awaited<ReturnType<typeof getCachedMe>>;
 };
@@ -63,32 +49,13 @@ async function load(
   const workspace = pickWorkspace(workspaceRows, resolved);
 
   try {
-    // Knowledge index reads the claim-graph canon directly. Legacy
-    // ``bucket_articles`` are intentionally NOT fetched here: keeping
-    // them on the page masks pipeline failures (operator sees stale
-    // articles from days ago and assumes the system is fine while
-    // the new extractor / reconciler / renderer chain has been
-    // silently broken). If the canon is empty, the page should look
-    // empty — that's the signal that something upstream needs
-    // attention.
-    const [repos, integrations, me, rawTopicViews, importSources, corpus] =
-      await Promise.all([
-        listActivatedRepos(workspace.id, token).catch(() => [] as ApiActivatedRepo[]),
-        listIntegrations(workspace.id, token).catch(() => [] as ApiIntegration[]),
-        getCachedMe(),
-        listTopicViews(workspace.id, { limit: 200 }, token),
-        listKnowledgeImportSources(workspace.id, token).catch(
-          () => [] as ApiKnowledgeImportSource[],
-        ),
-        // Lighthouse corpus roll-up. Best-effort — the page renders the
-        // legacy canon view too, so a missing engine just hides the panel.
-        getWorkspaceCorpus(workspace.id, token).catch(
-          () => null as ApiKnowledgeCorpus | null,
-        ),
-      ]);
-
-    const topicViews: KnowledgeTopicViewRow[] = rawTopicViews.map(toTopicViewRow);
-    const sources: KnowledgeSourceRow[] = importSources.map(toSourceRow);
+    const [repos, me, corpus] = await Promise.all([
+      listActivatedRepos(workspace.id, token).catch(() => [] as ApiActivatedRepo[]),
+      getCachedMe(),
+      getWorkspaceCorpus(workspace.id, token).catch(
+        () => null as ApiKnowledgeCorpus | null,
+      ),
+    ]);
 
     return {
       status: "live",
@@ -98,10 +65,7 @@ async function load(
           slug: workspace.slug,
           name: workspace.name,
         },
-        topicViews,
-        sources,
         repos,
-        integrations,
         corpus,
         me,
       },
@@ -135,8 +99,7 @@ export default async function KnowledgeIndexPage({
     );
   }
 
-  const { workspace, topicViews, sources, repos, integrations, corpus, me } =
-    result.data;
+  const { workspace, repos, corpus, me } = result.data;
 
   const scopePill = (
     <ScopePill
@@ -161,48 +124,8 @@ export default async function KnowledgeIndexPage({
     <>
       <PageHeader title="Knowledge" scopePill={scopePill} />
       <PageBody>
-        <KnowledgeControlCenter
-          workspace={workspace}
-          topicViews={topicViews}
-          sources={sources}
-          repos={repos}
-          integrations={integrations}
-          corpus={corpus}
-        />
+        <KnowledgeControlCenter workspace={workspace} corpus={corpus} />
       </PageBody>
     </>
   );
 }
-
-
-// ---------------------------------------------------------------------------
-// Mappers
-// ---------------------------------------------------------------------------
-
-
-function toTopicViewRow(
-  view: import("@/lib/api/client").ApiTopicViewSummary,
-): KnowledgeTopicViewRow {
-  return {
-    topicTag: view.topic_tag,
-    title: view.title || view.topic_tag,
-    snippet: view.snippet,
-    claimCount: view.claim_count,
-    renderedByModel: view.rendered_by_model,
-    lastRenderedAt: view.last_rendered_at,
-  };
-}
-
-
-function toSourceRow(source: ApiKnowledgeImportSource): KnowledgeSourceRow {
-  return {
-    id: source.id,
-    name: source.name,
-    kind: source.kind,
-    status: source.status,
-    lastSyncedAt: source.last_synced_at,
-    lastError: source.last_error,
-  };
-}
-
-
