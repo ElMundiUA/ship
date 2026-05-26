@@ -319,8 +319,15 @@ def _resolve_from_legacy_row(
         if token is None:
             return None
         scope_raw = (row.config or {}).get("scope")
+        # Linear returns OAuth ``scope`` space-separated per RFC 6749;
+        # accept comma too because some Ship-side code paths historically
+        # stored it comma-separated. Mirrors the normaliser in
+        # ``linear_oauth.linear_install_callback`` so the dashboard's
+        # scope tuple is consistent across both storage shapes (#337).
         scopes = tuple(
-            s.strip() for s in str(scope_raw or "").split(",") if s.strip()
+            s.strip()
+            for s in str(scope_raw or "").replace(",", " ").split()
+            if s.strip()
         )
         return _build_linear_resolved(
             token,

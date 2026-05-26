@@ -284,9 +284,22 @@ async def linear_install_callback(
     row.updated_at = datetime.now(timezone.utc)
 
     # E14 provisioning. Auto-pick team if exactly one (typical solo
-    # operator); leave unset and surface a banner if more — the wizard
-    # then routes the operator to a "pick a team" step before the
-    # integration is actually usable.
+    # operator on a fresh connect); leave unset and surface a banner
+    # when there are multiple — the wizard then routes the operator
+    # to a "pick a team" step before the integration is actually
+    # usable.
+    #
+    # IMPORTANT — reconnect semantics: if the row already carries a
+    # ``team_id`` (a previous connect or a manual repick), do *not*
+    # overwrite it just because the new OAuth session's
+    # ``list_teams`` happens to return a single team. The pilot was
+    # bitten by this when an admin-scope reconnect from a Linear
+    # session that only had Buzz team accessible silently rebound
+    # Ship-on-Ship's workspace from its elship team to Buzz, leaving
+    # the dashboard ``list_projects`` query filtered to a wrong team
+    # (zero projects). The operator's repick is sticky; if the saved
+    # team is no longer in the visible options the wizard's team
+    # picker should be reopened, never auto-overwritten.
     try:
         from backend.app.integrations.linear.tracker_adapter import LinearTracker
         from backend.app.services import linear_provisioner
@@ -298,7 +311,39 @@ async def linear_install_callback(
             {"id": t["id"], "key": t["key"], "name": t["name"]}
             for t in teams
         ]
-        if len(teams) == 1:
+        existing_team_id = merged.get("team_id")
+        existing_in_options = any(
+            t["id"] == existing_team_id for t in teams
+        )
+        if existing_team_id and existing_in_options:
+            # Reconnect on a workspace that already has a valid team
+            # binding — preserve it, just refresh ``team_options`` so
+            # the picker UI stays accurate. fsm_provisioned stays as
+            # whatever the original provision left it.
+            logger.info(
+                "Linear reconnect preserved existing team binding "
+                "for workspace=%s team=%s (%d teams visible)",
+                workspace_id,
+                merged.get("team_key"),
+                len(teams),
+            )
+        elif existing_team_id and not existing_in_options:
+            # Saved team is no longer reachable from the new OAuth
+            # session (operator switched accounts, lost membership,
+            # or the team was deleted). Leave team_id alone so the
+            # admin can still see what the binding was, but mark the
+            # row as needing repick so the dashboard surfaces a
+            # banner instead of silently filtering to a stale team.
+            merged["fsm_provisioned"] = False
+            merged["needs_team_repick"] = True
+            logger.warning(
+                "Linear reconnect: saved team_id=%s for workspace=%s "
+                "is no longer visible (%d teams). Marked needs_team_repick.",
+                existing_team_id,
+                workspace_id,
+                len(teams),
+            )
+        elif len(teams) == 1:
             picked = teams[0]
             result = await linear_provisioner.provision_team(
                 tracker=live, team_key=picked["key"], settings=settings
@@ -315,6 +360,7 @@ async def linear_install_callback(
                     "fsm_provisioned": True,
                 }
             )
+            merged.pop("needs_team_repick", None)
             logger.info(
                 "Linear FSM provisioned for workspace=%s team=%s "
                 "(%d stage labels, %d signal labels, %d states, "
@@ -861,6 +907,178 @@ async def linear_webhook_provision(
         url=public_url,
         resource_types=list(_LINEAR_WEBHOOK_RESOURCE_TYPES),
         replaced_previous=replaced,
+    )
+
+
+class LinearTeamRepickIn(BaseModel):
+    """Body for ``POST .../linear/team`` — admin-driven team rebind."""
+
+    team_key: str
+    """Linear team key (e.g. ``ELS`` / ``BUZ``). Must appear in the
+    workspace's current ``team_options`` snapshot OR be visible to the
+    live OAuth token's ``list_teams`` call."""
+
+
+class LinearTeamRepickOut(BaseModel):
+    team_id: str
+    team_key: str
+    fsm_provisioned: bool
+
+
+@router.post(
+    "/workspaces/{workspace_id}/integrations/linear/team",
+    response_model=LinearTeamRepickOut,
+)
+async def linear_team_repick(
+    workspace_id: uuid.UUID,
+    body: LinearTeamRepickIn,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> LinearTeamRepickOut:
+    """Re-bind a Linear workspace to a different team in the same org.
+
+    Use case: the OAuth callback's "exactly one team visible →
+    auto-pick" path silently overwrote a workspace's legitimate team
+    binding during a reconnect (e.g. admin-scope upgrade ran from a
+    Linear session where only one team was reachable, even though the
+    workspace's real team was a different one in the same org).
+    Operators need a non-destructive way to set it back without
+    reconnecting again.
+
+    Validates:
+    - Caller is admin/owner on the workspace.
+    - Linear OAuth token exists.
+    - ``team_key`` resolves to a real team via the live OAuth's
+      ``list_teams`` (we don't trust the cached ``team_options``
+      because it may be stale).
+
+    On success, re-runs the FSM provisioner for the picked team so
+    ``state_id_by_name`` / ``label_id_by_stage`` / ``signal_label_ids``
+    are accurate for the new team, then persists the updated config.
+    """
+    await _require_membership(
+        session, workspace_id, auth.user.id, ROLES_ADMIN
+    )
+
+    _install, token = await _fetch_live_linear_token(
+        session, workspace_id=workspace_id
+    )
+
+    from backend.app.integrations.linear.tracker_adapter import LinearTracker
+    from backend.app.services import linear_provisioner
+
+    live = LinearTracker(token)
+    try:
+        teams = await linear_provisioner.list_teams(live)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "linear_list_teams_failed",
+                "message": f"Linear list_teams failed: {exc!s}"[:300],
+            },
+        ) from exc
+
+    target = next(
+        (t for t in teams if str(t.get("key") or "") == body.team_key),
+        None,
+    )
+    if target is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "team_not_visible",
+                "message": (
+                    f"Linear OAuth session has no team {body.team_key!r}. "
+                    f"Visible team keys: "
+                    f"{sorted(str(t.get('key') or '') for t in teams)}"
+                ),
+            },
+        )
+
+    try:
+        result = await linear_provisioner.provision_team(
+            tracker=live, team_key=target["key"], settings=settings
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "linear_provision_failed",
+                "message": f"FSM provision failed: {exc!s}"[:300],
+            },
+        ) from exc
+
+    legacy = (
+        await session.execute(
+            select(Integration)
+            .where(
+                Integration.workspace_id == workspace_id,
+                Integration.kind == "linear",
+            )
+            .order_by(Integration.updated_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if legacy is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "linear_integration_missing",
+                "message": (
+                    "No Linear Integration row exists for this workspace "
+                    "yet — finish OAuth before repicking a team."
+                ),
+            },
+        )
+
+    config = dict(legacy.config or {})
+    previous_team_id = config.get("team_id")
+    previous_team_key = config.get("team_key")
+    config.update(
+        {
+            "team_id": result.team_id,
+            "team_key": result.team_key,
+            "team_options": [
+                {"id": t["id"], "key": t["key"], "name": t["name"]}
+                for t in teams
+            ],
+            "state_id_by_name": result.state_id_by_name,
+            "label_id_by_stage": result.label_id_by_stage,
+            "signal_label_ids": result.signal_label_ids,
+            "canonical_to_native": result.canonical_to_native,
+            "canonical_resolution_meta": result.canonical_resolution_meta,
+            "fsm_provisioned": True,
+        }
+    )
+    config.pop("needs_team_repick", None)
+    legacy.config = config
+    legacy.updated_at = datetime.now(timezone.utc)
+    session.add(legacy)
+
+    session.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=auth.user.id,
+            actor_token_id=auth.token.id if auth.token else None,
+            action="linear.team.repick",
+            target_kind="integration",
+            target_id=str(legacy.id),
+            payload={
+                "from_team_id": previous_team_id,
+                "from_team_key": previous_team_key,
+                "to_team_id": result.team_id,
+                "to_team_key": result.team_key,
+            },
+        )
+    )
+    await session.flush()
+
+    return LinearTeamRepickOut(
+        team_id=result.team_id,
+        team_key=result.team_key,
+        fsm_provisioned=True,
     )
 
 
