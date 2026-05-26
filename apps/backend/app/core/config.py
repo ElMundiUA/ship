@@ -411,6 +411,16 @@ class Settings(BaseSettings):
     linear_client_secret: str | None = Field(
         default=None, alias="LINEAR_CLIENT_SECRET"
     )
+    # Shared HMAC-SHA256 secret used to verify Linear webhook deliveries.
+    # One value per backend install (not per workspace) — the webhook
+    # handler maps payload → workspace via the ``data.team.id`` Linear
+    # ships with every event, looking up the matching Integration row.
+    # Operators copy this value into Linear's webhook UI when wiring
+    # the hook (or set it via ``webhookCreate`` GraphQL mutation).
+    # Unset → webhook endpoint fails closed (rejects every delivery).
+    linear_webhook_secret: str | None = Field(
+        default=None, alias="LINEAR_WEBHOOK_SECRET"
+    )
     # Comma-separated OAuth scopes. ``read,write`` is the minimum the
     # pilot adapter needs (list issues + post comments). Leave the
     # defaults unless a tenant explicitly objects.
