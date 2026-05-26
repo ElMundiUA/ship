@@ -686,7 +686,7 @@ function RepositoriesPanel({
       <div className="mt-4">
         <a
           href={`/onboarding?step=repos&ws=${encodeURIComponent(workspaceId)}`}
-          className="inline-flex rounded-full border border-aqua/40 bg-aqua/15 px-4 py-1.5 text-xs font-bold text-aqua transition hover:bg-aqua/25"
+          className="btn-primary"
         >
           + Add another repository
         </a>
@@ -1214,10 +1214,7 @@ function WorkspacesPanel({
             </div>
           </label>
           <div className="flex items-end">
-            <button
-              type="submit"
-              className="rounded-full border border-aqua/40 bg-aqua/15 px-4 py-1.5 text-xs font-bold text-aqua transition hover:bg-aqua/25"
-            >
+            <button type="submit" className="btn-primary">
               Save
             </button>
           </div>
@@ -1300,10 +1297,7 @@ function WorkspacesPanel({
             </div>
           </label>
           <div className="md:col-span-2 flex items-center justify-end">
-            <button
-              type="submit"
-              className="rounded-full border border-aqua/40 bg-aqua/15 px-4 py-1.5 text-xs font-bold text-aqua transition hover:bg-aqua/25"
-            >
+            <button type="submit" className="btn-primary">
               Create workspace
             </button>
           </div>

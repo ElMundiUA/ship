@@ -371,10 +371,15 @@ export function AppShellChrome({
     : null;
 
   return (
-    <div className="min-h-screen bg-ink text-mist">
+    // No ``bg-ink`` here — the body already paints the brand radials
+    // (lilac top-centre, gold top-right, coral mid-left) and an ink fill
+    // on the chrome wrapper would hide them. ``text-mist`` keeps the
+    // default body colour for the operator content.
+    <div className="min-h-screen text-mist">
       <div className="flex w-full gap-0">
-        {/* sidebar */}
-        <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-white/10 bg-black/30 backdrop-blur-xl lg:flex">
+        {/* sidebar — semi-translucent so the body radials still bleed
+            through, with the same inset blik landing's panels use. */}
+        <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-white/10 bg-black/20 shadow-[inset_-1px_0_0_rgba(255,255,255,0.04)] backdrop-blur-xl lg:flex">
           <div className="border-b border-white/10 px-4 py-5">
             <Link
               href={withWorkspaceHref("/")}
@@ -545,7 +550,7 @@ export function PageHeader({
   scopePill?: ReactNode;
 }) {
   return (
-    <header className="sticky top-0 z-40 border-b border-white/10 bg-ink/80 backdrop-blur-xl">
+    <header className="sticky top-0 z-40 border-b border-white/10 bg-ink/60 shadow-[inset_0_-1px_0_rgba(255,255,255,0.04)] backdrop-blur-xl">
       <div className="flex items-center gap-3 px-6 py-4 lg:px-8">
         <div className="relative min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">

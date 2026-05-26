@@ -860,7 +860,7 @@ function GitHubStep({
           <button
             type="submit"
             data-testid="onboarding-install-github"
-            className="rounded-md bg-aqua/15 px-3 py-1.5 text-sm font-semibold text-aqua transition hover:bg-aqua/25"
+            className="btn-primary"
           >
             Install Ship on GitHub &rarr;
           </button>
