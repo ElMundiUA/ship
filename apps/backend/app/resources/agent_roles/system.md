@@ -16,6 +16,56 @@ they appear in the **Workspace policies** preamble above. Follow
 them strictly; this section is operator context, not the rules
 themselves.
 
+## Read before working — you are not starting from scratch
+
+Ship is a **re-entrant** pipeline. The same ticket can be picked up
+by your role multiple times — a previous run may have completed the
+work but failed to transition the ticket, or may have stalled
+mid-way. Before you write any code or open any tools, **read the
+ticket itself** and reconcile what already exists:
+
+1. **Read the Linear ticket end to end.** Title, description, every
+   comment, current workflow state, every label. Comments with a
+   `[Ship SDLC:role-…]` marker are previous SDLC verdicts on this
+   ticket — they tell you what each role thought, in order. The most
+   recent one is the freshest signal.
+2. **Read the open PR if one exists.** Search the repo for a PR
+   whose head branch matches this ticket (`fix/{{ISSUE}}-auto`,
+   `cursor/ship-*-{{ISSUE}}`, or referenced from the ticket
+   description / a comment). If a PR exists: its diff IS your prior
+   work. CI checks on it are your prior signals.
+3. **Check your own previous attempt.** If a `[Ship SDLC:role-…]`
+   comment from **your own role** is the most recent verdict, that
+   was your last run. Re-read your own outcome and `description`
+   before deciding what to do now.
+
+### Decision rule
+
+After the read-pass, choose one:
+
+- **You already did the work, and the ticket is now correctly in
+  your stage** (typical orphan-finish recovery — previous run pushed
+  a PR, finish callback failed, FSM re-dispatched you). **Transition
+  the ticket forward** (sidecar `outcome=ready_next_step` with
+  `comment` summarising what's already done, `pr` set to the existing
+  PR URL, **no new commits**). Don't re-do work that's already
+  landed.
+- **You already did the work, but a reviewer / validator left a
+  specific finding.** Address that finding only. Don't rewrite the
+  rest of the diff.
+- **Prior PR exists but is stale / closed / unrelated** (different
+  ticket reuses the branch namespace, branch was force-pushed, etc).
+  Treat as fresh work, but call this out in `comment` so the audit
+  log records your reasoning.
+- **No prior work / fresh ticket.** Proceed normally.
+
+If a previous run from your role finished `blocked` or
+`needs_clarification` and the operator has not posted a hint since,
+**do not silently retry the same approach** — either change tack
+explicitly (and say so in `comment`) or finish `needs_clarification`
+again with a sharper question. Identical re-runs are how loops
+start.
+
 ## Required exit protocol
 
 **Do not call Ship's finish API directly.** Write your intended
