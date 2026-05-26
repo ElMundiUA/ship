@@ -655,6 +655,43 @@ async def linear_webhook_provision(
         session, workspace_id=workspace_id
     )
 
+    # Linear gates webhookCreate / webhookDelete behind ``admin``
+    # scope on the OAuth token. Existing connections from before
+    # the scope bump (default updated 2026-05-27) won't have it;
+    # surface that as a clear "reconnect Linear" message instead
+    # of letting it through to a confusing 502 from GraphQL.
+    scope_row = (
+        await session.execute(
+            select(Integration)
+            .where(
+                Integration.workspace_id == workspace_id,
+                Integration.kind == "linear",
+            )
+            .order_by(Integration.updated_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    token_scope = ""
+    if scope_row and isinstance(scope_row.config, dict):
+        token_scope = str(scope_row.config.get("scope") or "")
+    granted = {s.strip() for s in token_scope.split(",") if s.strip()}
+    if "admin" not in granted:
+        raise HTTPException(
+            status_code=412,
+            detail={
+                "code": "linear_admin_scope_missing",
+                "message": (
+                    "The current Linear OAuth token doesn't include "
+                    "the 'admin' scope (required for webhook setup). "
+                    "Reconnect Linear from the workspace integrations "
+                    "page so the new scope is granted. The user "
+                    "reconnecting MUST be a Linear-side workspace "
+                    "admin."
+                ),
+                "granted_scopes": sorted(granted),
+            },
+        )
+
     legacy = (
         await session.execute(
             select(Integration)

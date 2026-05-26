@@ -422,10 +422,17 @@ class Settings(BaseSettings):
         default=None, alias="LINEAR_WEBHOOK_SECRET"
     )
     # Comma-separated OAuth scopes. ``read,write`` is the minimum the
-    # pilot adapter needs (list issues + post comments). Leave the
-    # defaults unless a tenant explicitly objects.
+    # pilot adapter needs (list issues + post comments); ``admin`` is
+    # required for ``webhookCreate`` / ``webhookDelete`` mutations
+    # which Linear gates behind workspace-admin even when the OAuth
+    # user is one. Without ``admin`` the programmatic webhook
+    # provisioning endpoint (``POST .../webhook/provision``) returns
+    # ``Linear GraphQL error: Invalid role: admin required``.
+    # Workspaces that connected Linear before this default bump need
+    # to reconnect to pick up the new scope; their existing token
+    # stays read+write-only until they do.
     linear_oauth_scopes: str = Field(
-        default="read,write,issues:create,comments:create",
+        default="read,write,admin,issues:create,comments:create",
         alias="LINEAR_OAUTH_SCOPES",
     )
     # How often the ``linear_token_refresh_tick`` cron rotates each
