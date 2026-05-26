@@ -856,7 +856,7 @@ function NativeRepoBindingForm({
           <div className="mt-2 flex justify-end">
             <button
               type="submit"
-              className="rounded-full bg-aqua/15 px-3 py-1 text-[10px] font-bold text-aqua hover:bg-aqua/25"
+              className="inline-flex items-center justify-center gap-1.5 rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-3 py-1 text-[10px] font-bold text-ink shadow-glow transition hover:brightness-110 active:scale-[0.99]"
             >
               Save repo access
             </button>
