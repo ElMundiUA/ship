@@ -41,10 +41,12 @@ import {
   checkAgentSecrets,
   getRepoTrackerBinding,
   isApiConfigured,
+  listAccessibleInstallations,
   listActivatedRepos,
   listAvailableRepos,
   listIntegrations,
   listWorkspaces,
+  type ApiAccessibleInstallation,
   type ApiActivatedRepo,
   type ApiAgentSecretStatus,
   type ApiAvailableRepo,
@@ -89,6 +91,10 @@ const GITHUB_ERRORS: Record<string, string> = {
     "GitHub App env vars are missing on the backend (GITHUB_APP_ID / GITHUB_APP_PRIVATE_KEY / GITHUB_APP_WEBHOOK_SECRET). Ask ops to wire them up and try again.",
   bad_state:
     "Install link expired or was tampered with. Start the install again from this step.",
+  bad_installation:
+    "That installation is no longer reachable. Pick a different account or install fresh.",
+  installation_not_accessible:
+    "We couldn't reach that GitHub install with your current role — make sure you're admin on the workspace that owns it, or install fresh on another account.",
   unknown: "Couldn't start the install flow. Try again.",
 };
 
@@ -307,6 +313,11 @@ export default async function OnboardingPage({
   // assumption than rendering a stale ✓.
   let githubAppInstalled = false;
   let activatedRepoCount = 0;
+  // Installs the user can already reach via *other* workspaces — drives
+  // the "Use @acme" reuse rows on step-1 so a new workspace doesn't
+  // force them back through the GitHub install picker when they already
+  // have Ship installed somewhere.
+  let accessibleInstalls: ApiAccessibleInstallation[] = [];
   if (wsId && apiConfigured) {
     try {
       const installed = await listAvailableRepos(
@@ -332,6 +343,18 @@ export default async function OnboardingPage({
       // Other errors silently leave the flags at false; the UI then
       // surfaces the standard "not installed" path which is the
       // worst-case-but-safe rendering.
+    }
+    // Always fetch the reusable installs list — cheap DB query, and we
+    // want it even on the "already installed for this ws" path so that
+    // reinstall flows still see siblings. Best-effort: a failure here
+    // just means we won't render the reuse rows.
+    try {
+      accessibleInstalls = await listAccessibleInstallations(
+        wsId,
+        sessionToken ?? undefined,
+      );
+    } catch {
+      accessibleInstalls = [];
     }
   }
 
@@ -594,6 +617,7 @@ export default async function OnboardingPage({
             error={error}
             githubReason={pick(params.github)}
             installed={githubAppInstalled}
+            accessibleInstalls={accessibleInstalls}
           />
         )}
         {step === "repos" && wsId && (
@@ -749,6 +773,7 @@ function GitHubStep({
   error,
   githubReason,
   installed,
+  accessibleInstalls,
 }: {
   wsId: string;
   error?: string;
@@ -760,12 +785,20 @@ function GitHubStep({
    * connected, leaving operators clicking Install on an installed
    * workspace and confusing themselves about state. */
   installed: boolean;
+  /** Installations the operator can reach via *other* workspaces —
+   * surfaced as "Use @acme" rows so a new workspace can attach to an
+   * install they already created instead of going through the GitHub
+   * picker a second time. Empty when nothing's reusable (first-time
+   * users, single-workspace operators) — the cold-start install button
+   * is the only CTA in that case. */
+  accessibleInstalls: ApiAccessibleInstallation[];
 }) {
   const message = error ? GITHUB_ERRORS[error] ?? error : null;
   // Backend redirects to `?step=repos&github=installed` after a
   // successful install; the only `github=` value we ever see on this
   // step is `request` (org-admin approval pending) or nothing at all.
   const requested = githubReason === "request";
+  const showReuse = !installed && accessibleInstalls.length > 0;
 
   return (
     <section>
@@ -773,7 +806,11 @@ function GitHubStep({
         Step 1 of 5 &middot; Connect your code
       </p>
       <h1 className="mt-2 font-display text-2xl font-bold leading-tight">
-        {installed ? "Ship is installed on GitHub." : "Install Ship on GitHub."}
+        {installed
+          ? "Ship is installed on GitHub."
+          : showReuse
+          ? "Reuse an existing GitHub connection."
+          : "Install Ship on GitHub."}
       </h1>
       <p className="mt-3 max-w-2xl text-sm leading-relaxed text-white/70">
         {installed ? (
@@ -782,6 +819,13 @@ function GitHubStep({
             Manage permissions or revoke the App on GitHub any time —
             nothing else on this step needs your attention unless you
             want to add / remove repos.
+          </>
+        ) : showReuse ? (
+          <>
+            You&rsquo;ve already installed Ship on at least one GitHub
+            account. Pick one to attach to this workspace — no second
+            install required — or install fresh on another org / account
+            below.
           </>
         ) : (
           <>
@@ -844,6 +888,36 @@ function GitHubStep({
             Continue to repos →
           </Link>
         </div>
+      ) : showReuse ? (
+        <div className="mt-7 space-y-3">
+          <ul className="space-y-2">
+            {accessibleInstalls.map((inst) => (
+              <li key={inst.installation_id}>
+                <AccessibleInstallRow wsId={wsId} install={inst} />
+              </li>
+            ))}
+          </ul>
+          <form
+            action="/api/onboard/github-install"
+            method="POST"
+            className="flex flex-wrap items-center gap-3 pt-2"
+            suppressHydrationWarning
+          >
+            <input
+              type="hidden"
+              name="ws"
+              value={wsId}
+              suppressHydrationWarning
+            />
+            <button
+              type="submit"
+              data-testid="onboarding-install-github"
+              className="text-xs font-semibold text-white/70 hover:text-white"
+            >
+              Install on another org / account →
+            </button>
+          </form>
+        </div>
       ) : (
         <form
           action="/api/onboard/github-install"
@@ -895,6 +969,83 @@ function GitHubStep({
       )}
     </section>
   );
+}
+
+/**
+ * Single reusable-install row on step-1. Submits a plain `<form>` so the
+ * branch works without any client JS — the BFF route handles the attach
+ * + redirect to the repo picker.
+ */
+function AccessibleInstallRow({
+  wsId,
+  install,
+}: {
+  wsId: string;
+  install: ApiAccessibleInstallation;
+}) {
+  const label = install.account_login?.trim() || `installation ${install.installation_id}`;
+  const accountType = install.account_type?.trim() || "";
+  const installedAgo = formatInstalledAgo(install.installed_at);
+  const siblingSlugs = install.workspace_slugs.filter(Boolean);
+  return (
+    <form
+      action="/api/onboard/github-attach"
+      method="POST"
+      className="flex flex-wrap items-center gap-3 rounded-xl border border-white/[0.08] bg-white/[0.03] px-4 py-3 transition hover:border-aqua/30 hover:bg-white/[0.05]"
+      suppressHydrationWarning
+    >
+      <input type="hidden" name="ws" value={wsId} suppressHydrationWarning />
+      <input
+        type="hidden"
+        name="installation_id"
+        value={String(install.installation_id)}
+        suppressHydrationWarning
+      />
+      <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-lilac via-aqua to-coral text-[11px] font-bold text-ink">
+        {label.slice(0, 2).toUpperCase()}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-sm font-semibold text-white">
+          @{label}
+        </span>
+        <span className="block truncate text-[11px] text-white/55">
+          {accountType ? `${accountType} · ` : ""}
+          {installedAgo ? `installed ${installedAgo}` : "active"}
+          {siblingSlugs.length > 0 && (
+            <>
+              {" · "}also on {siblingSlugs.slice(0, 2).join(" / ")}
+              {siblingSlugs.length > 2 ? ` +${siblingSlugs.length - 2}` : ""}
+            </>
+          )}
+        </span>
+      </span>
+      <button
+        type="submit"
+        data-testid="onboarding-reuse-install"
+        className="rounded-full border border-aqua/40 bg-aqua/[0.08] px-3.5 py-1.5 text-xs font-semibold text-aqua transition hover:bg-aqua/[0.2]"
+      >
+        Use @{label} →
+      </button>
+    </form>
+  );
+}
+
+function formatInstalledAgo(iso: string | null): string {
+  if (!iso) return "";
+  const when = Date.parse(iso);
+  if (!Number.isFinite(when)) return "";
+  const diffMs = Date.now() - when;
+  if (diffMs < 0) return "just now";
+  const minutes = Math.round(diffMs / 60_000);
+  if (minutes < 60) return minutes <= 1 ? "just now" : `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.round(hours / 24);
+  if (days < 30) return `${days}d ago`;
+  const months = Math.round(days / 30);
+  if (months < 12) return `${months}mo ago`;
+  const years = Math.round(months / 12);
+  return `${years}y ago`;
 }
 
 // ---------------------------------------------------------------------------

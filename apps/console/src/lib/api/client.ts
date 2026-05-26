@@ -422,6 +422,63 @@ export function startGitHubAppInstall(
   return apiFetch<ApiGitHubInstallStart>(path, { method: "POST", token });
 }
 
+/**
+ * One row of `GET /v1/integrations/github/installations` — a GitHub App
+ * installation the caller can reach via their workspace memberships.
+ * The wizard shows this list on step-1 so a new workspace can attach to
+ * an install the operator already created under a sibling workspace,
+ * skipping the GitHub install picker entirely.
+ */
+export interface ApiAccessibleInstallation {
+  installation_id: number;
+  account_login: string | null;
+  account_type: string | null;
+  repository_selection: string | null;
+  installed_at: string | null;
+  /** Slugs (≤5) of workspaces already binding this install — UI context. */
+  workspace_slugs: string[];
+}
+
+export function listAccessibleInstallations(
+  excludeWorkspaceId?: string,
+  token?: string,
+): Promise<ApiAccessibleInstallation[]> {
+  const params = excludeWorkspaceId
+    ? `?exclude_workspace_id=${encodeURIComponent(excludeWorkspaceId)}`
+    : "";
+  return apiFetch<ApiAccessibleInstallation[]>(
+    `/v1/integrations/github/installations${params}`,
+    { token },
+  );
+}
+
+export interface ApiAttachedInstallation {
+  workspace_id: string;
+  installation_id: number;
+  account_login: string | null;
+  account_type: string | null;
+  repository_selection: string | null;
+  installed_at: string | null;
+}
+
+export function attachGitHubInstallation(
+  workspaceId: string,
+  installationId: number,
+  token?: string,
+): Promise<ApiAttachedInstallation> {
+  return apiFetch<ApiAttachedInstallation>(
+    "/v1/integrations/github/install/attach",
+    {
+      method: "POST",
+      token,
+      body: {
+        workspace_id: workspaceId,
+        installation_id: installationId,
+      },
+    },
+  );
+}
+
 // --- Workspace repos (Day-2 picker) ----------------------------------------
 
 /**

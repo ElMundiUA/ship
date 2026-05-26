@@ -39,7 +39,7 @@ from backend.app.core.config import Settings, get_settings
 from backend.app.db.models.integrations import GitHubInstallation, WorkspaceRepo
 from backend.app.db.models.lanes import Routine, RoutineRun
 from backend.app.db.models.pipelines import PullRequest, WorkflowRun
-from backend.app.db.models.tenancy import AuditLog
+from backend.app.db.models.tenancy import AuditLog, Workspace, WorkspaceMember
 from backend.app.db.session import get_session
 from backend.app.integrations.github.app_auth import (
     GitHubAppMisconfigured,
@@ -127,6 +127,206 @@ async def install_start(
         install_url=install_url,
         state=state,
     )
+
+
+class AccessibleInstallationOut(BaseModel):
+    """One row of ``GET /integrations/github/installations``.
+
+    Groups by ``installation_id`` — multiple workspaces under the same
+    GitHub App install collapse into a single response row, with
+    ``workspace_slugs`` listing up to a handful of source workspaces so
+    the console can render "already powers @acme · dev / staging" hints.
+    """
+
+    installation_id: int
+    account_login: str | None
+    account_type: str | None
+    repository_selection: str | None
+    installed_at: datetime | None
+    # Slugs (up to 5) of workspaces the caller is a member of that
+    # already bind this install — used for UX context only, never as a
+    # security boundary.
+    workspace_slugs: list[str]
+
+
+@router.get(
+    "/integrations/github/installations",
+    response_model=list[AccessibleInstallationOut],
+)
+async def list_accessible_installations(
+    exclude_workspace_id: uuid.UUID | None = Query(
+        None,
+        description=(
+            "When set, hide installs already bound to this workspace so the "
+            "wizard can show ONLY the candidates worth attaching."
+        ),
+    ),
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> list[AccessibleInstallationOut]:
+    """List GitHub App installations the caller can reach via their
+    workspace memberships, deduped by ``installation_id``.
+
+    Why this endpoint exists: the onboarding wizard step-1 used to send
+    every operator through the GitHub install picker, even when they had
+    already installed Ship on @acme under a different workspace. Multi-
+    workspace per-install is supported (migration 0076) so reusing an
+    existing install is a single DB insert — no GitHub round-trip — but
+    the console needs to know which installs are reachable to even offer
+    that path. This endpoint is the listing primitive; the actual reuse
+    runs through ``POST /integrations/github/install/attach``.
+
+    Member-gated (any workspace role): listing is information the user
+    already has implicitly via their workspace bindings; the admin gate
+    lives on the attach endpoint where the action is destructive.
+    """
+    # All non-suspended installs in workspaces this user is a member of,
+    # joined to the workspace row so we can return the slug for context.
+    stmt = (
+        select(GitHubInstallation, Workspace.slug)
+        .join(Workspace, Workspace.id == GitHubInstallation.workspace_id)
+        .join(
+            WorkspaceMember,
+            WorkspaceMember.workspace_id == GitHubInstallation.workspace_id,
+        )
+        .where(WorkspaceMember.user_id == auth.user.id)
+        .where(GitHubInstallation.suspended_at.is_(None))
+        .order_by(desc(GitHubInstallation.installed_at))
+    )
+    rows = (await session.execute(stmt)).all()
+
+    excluded_ids: set[int] = set()
+    if exclude_workspace_id is not None:
+        excluded_stmt = (
+            select(GitHubInstallation.installation_id)
+            .where(GitHubInstallation.workspace_id == exclude_workspace_id)
+            .where(GitHubInstallation.suspended_at.is_(None))
+        )
+        excluded_ids = {
+            r for r, in (await session.execute(excluded_stmt)).all()
+        }
+
+    # Group by installation_id; first row wins for the descriptive
+    # metadata (most recently installed comes first via ORDER BY above).
+    grouped: dict[int, AccessibleInstallationOut] = {}
+    for install, slug in rows:
+        if install.installation_id in excluded_ids:
+            continue
+        existing = grouped.get(install.installation_id)
+        if existing is None:
+            grouped[install.installation_id] = AccessibleInstallationOut(
+                installation_id=install.installation_id,
+                account_login=install.account_login,
+                account_type=install.account_type,
+                repository_selection=install.repository_selection,
+                installed_at=install.installed_at,
+                workspace_slugs=[slug],
+            )
+        elif len(existing.workspace_slugs) < 5:
+            existing.workspace_slugs.append(slug)
+    return list(grouped.values())
+
+
+class AttachInstallationRequest(BaseModel):
+    workspace_id: uuid.UUID
+    installation_id: int
+
+
+@router.post(
+    "/integrations/github/install/attach",
+    response_model=InstallationOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def attach_installation(
+    body: AttachInstallationRequest,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> InstallationOut:
+    """Bind an existing GitHub App install to a *new* workspace.
+
+    Anti-leak: the caller must be admin/owner of the *target* workspace
+    **and** admin/owner of at least one source workspace already binding
+    this ``installation_id``. The second check proves the caller actually
+    has the install reachable through normal membership (rather than
+    just guessing an installation_id off a webhook URL).
+
+    Idempotent: when the compound unique ``(workspace_id, installation_id)``
+    is already satisfied we return the existing row with a 201 anyway —
+    the console treats it as success and moves the wizard forward.
+    """
+    await _require_membership(
+        session, body.workspace_id, auth.user.id, ROLES_ADMIN
+    )
+
+    # Find a source row to copy metadata from + verify admin elsewhere.
+    source_stmt = (
+        select(GitHubInstallation, WorkspaceMember.role)
+        .join(
+            WorkspaceMember,
+            WorkspaceMember.workspace_id == GitHubInstallation.workspace_id,
+        )
+        .where(GitHubInstallation.installation_id == body.installation_id)
+        .where(GitHubInstallation.suspended_at.is_(None))
+        .where(GitHubInstallation.workspace_id != body.workspace_id)
+        .where(WorkspaceMember.user_id == auth.user.id)
+    )
+    source_rows = (await session.execute(source_stmt)).all()
+    if not source_rows:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="installation_not_accessible",
+        )
+    admin_source = next(
+        ((inst, role) for inst, role in source_rows if role in ROLES_ADMIN),
+        None,
+    )
+    if admin_source is None:
+        # The caller has the install in view (so listing would show it),
+        # but isn't admin anywhere it lives — refuse to escalate them by
+        # routing the install into a new workspace where they ARE admin.
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="not_admin_on_source_workspace",
+        )
+    source_install = admin_source[0]
+
+    # Idempotent — second call collapses to a no-op return.
+    existing_stmt = (
+        select(GitHubInstallation)
+        .where(GitHubInstallation.workspace_id == body.workspace_id)
+        .where(GitHubInstallation.installation_id == body.installation_id)
+    )
+    existing = (await session.execute(existing_stmt)).scalar_one_or_none()
+    if existing is not None:
+        return _row_to_out(existing)
+
+    row = GitHubInstallation(
+        workspace_id=body.workspace_id,
+        installation_id=body.installation_id,
+        account_id=source_install.account_id,
+        account_login=source_install.account_login,
+        account_type=source_install.account_type,
+        repository_selection=source_install.repository_selection,
+        settings=dict(source_install.settings or {}),
+        installed_at=datetime.now(timezone.utc),
+    )
+    session.add(row)
+    session.add(
+        AuditLog(
+            workspace_id=body.workspace_id,
+            actor_user_id=auth.user.id,
+            actor_token_id=(auth.token.id if auth.token is not None else None),
+            action="github.install.share",
+            target_kind="github_installation",
+            target_id=str(body.installation_id),
+            payload={
+                "installation_id": body.installation_id,
+                "source_workspace_id": str(source_install.workspace_id),
+            },
+        )
+    )
+    await session.flush()
+    return _row_to_out(row)
 
 
 @router.get("/integrations/github/install/callback")
