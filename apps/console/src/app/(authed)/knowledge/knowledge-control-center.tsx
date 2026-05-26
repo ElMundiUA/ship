@@ -177,11 +177,13 @@ export function KnowledgeControlCenter({
 
 
 function CorpusSummary({ corpus }: { corpus: ApiKnowledgeCorpus | null }) {
-  // Render nothing until Lighthouse is wired + has content — the
-  // editorial canon view below stays the primary surface meanwhile.
-  if (!corpus || !corpus.configured || corpus.total_chunks === 0) return null;
+  // Render nothing only until Lighthouse is wired. Once configured, we
+  // surface the panel even when empty so the operator can see the new
+  // engine is live (and that the corpus just hasn't been populated yet).
+  if (!corpus || !corpus.configured) return null;
   const top = corpus.sources.slice(0, 8);
   const ingested = corpus.last_ingest_at?.slice(0, 10) ?? null;
+  const empty = corpus.total_chunks === 0;
   return (
     <section className="rounded-lg border border-white/10 bg-white/[0.02] p-4">
       <div className="flex items-baseline justify-between gap-3">
@@ -194,20 +196,29 @@ function CorpusSummary({ corpus }: { corpus: ApiKnowledgeCorpus | null }) {
           {ingested ? ` · last ingest ${ingested}` : ""}
         </p>
       </div>
-      {top.length > 0 && (
-        <ul className="mt-3 divide-y divide-white/5 text-sm">
-          {top.map((s) => (
-            <li
-              key={s.source}
-              className="flex items-center justify-between gap-3 py-1.5"
-            >
-              <span className="truncate text-white/70">{s.source}</span>
-              <span className="shrink-0 text-xs text-white/40">
-                {s.chunk_count}
-              </span>
-            </li>
-          ))}
-        </ul>
+      {empty ? (
+        <p className="mt-3 text-sm text-white/55">
+          Engine connected — no documents have been ingested into this
+          workspace yet. Once Ship emits its first knowledge document
+          (repo intel, resolved clarification, inbox comment), the next
+          importer run picks it up and it shows up here.
+        </p>
+      ) : (
+        top.length > 0 && (
+          <ul className="mt-3 divide-y divide-white/5 text-sm">
+            {top.map((s) => (
+              <li
+                key={s.source}
+                className="flex items-center justify-between gap-3 py-1.5"
+              >
+                <span className="truncate text-white/70">{s.source}</span>
+                <span className="shrink-0 text-xs text-white/40">
+                  {s.chunk_count}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )
       )}
     </section>
   );
