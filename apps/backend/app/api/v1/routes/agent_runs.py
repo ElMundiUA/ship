@@ -833,6 +833,20 @@ async def get_next_task(
             ticket=None, fsm_stage=state, tracker_kind=resolved.kind
         )
     if not rows:
+        # Bug-A fix: when the dispatcher pinned a ticket (ticket_ref
+        # query) but list_tickets returned nothing for it (label drift,
+        # ticket archived, FSM-stage gate stripped) — write a
+        # synthetic finish so fsm_self_heal stops re-firing the dead
+        # pin every tick.
+        if ticket_ref:
+            await _write_synthetic_picker_noop_finish(
+                session,
+                workspace_id=workspace_id,
+                ticket_ref=ticket_ref,
+                fsm_stage=state,
+                reason="picker_no_rows",
+                tracker_kind=resolved.kind,
+            )
         return TaskResponseOut(
             ticket=None, fsm_stage=state, tracker_kind=resolved.kind
         )
@@ -973,6 +987,19 @@ async def get_next_task(
                     resolved=resolved,
                     ticket_ref=ticket_ref,
                     reason=f"picker_{skipped_kind}",
+                )
+                # Bug-A fix (2026-05-27): write a synthetic finish so
+                # fsm_self_heal sees the dispatch's terminal record and
+                # the refire_cap counter can do its job. Without this
+                # the dispatcher fires every hour for the same dead
+                # ticket (askslayer/PAC-21 today: 9d in this loop).
+                await _write_synthetic_picker_noop_finish(
+                    session,
+                    workspace_id=workspace_id,
+                    ticket_ref=ticket_ref,
+                    fsm_stage=state,
+                    reason=f"picker_{skipped_kind}",
+                    tracker_kind=resolved.kind,
                 )
         return TaskResponseOut(
             ticket=None, fsm_stage=state, tracker_kind=resolved.kind
@@ -1118,6 +1145,18 @@ async def get_next_task(
                 resolved=resolved,
                 ticket_ref=ticket_ref,
                 reason="picker_refire_capped",
+            )
+            # Bug-A fix (2026-05-27): see comment on the picker_skipped
+            # path above. Synthetic finish so the loop guard sees a
+            # terminal record and stops re-firing dispatches that the
+            # picker is going to refuse the same way every tick.
+            await _write_synthetic_picker_noop_finish(
+                session,
+                workspace_id=workspace_id,
+                ticket_ref=ticket_ref,
+                fsm_stage=state,
+                reason="picker_refire_capped",
+                tracker_kind=resolved.kind,
             )
             return TaskResponseOut(
                 ticket=None, fsm_stage=state, tracker_kind=resolved.kind
@@ -1266,6 +1305,69 @@ def _collect_project_sections(payload: "FinishIn") -> list["ProjectSectionPatch"
         except Exception:  # noqa: BLE001 — drop malformed silently
             continue
     return out
+
+
+async def _write_synthetic_picker_noop_finish(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    ticket_ref: str,
+    fsm_stage: str,
+    reason: str,
+    tracker_kind: str | None = None,
+) -> None:
+    """Audit a synthetic ``agent_run.finish(outcome=noop)`` when the
+    picker returned null for a dispatcher-pinned ticket.
+
+    Closes the *Bug A* leak from the 2026-05-18 project_lock-leak
+    post-mortem: the dispatcher records ``agent_run.dispatch`` and
+    triggers the runner; the runner asks ``/tracker/next`` for work;
+    the picker returns ``ticket=None`` (orphan / overlay-frozen /
+    priority-skipped / no eligible row / refire-capped); the runner
+    exits without ``/finish``; ``fsm_self_heal`` sees a dispatch with
+    no matching finish and re-fires the same dead route every tick.
+
+    Writing a synthetic finish here gives the loop guard something to
+    count, breaks the re-fire chain at ``refire_cap``, and keeps the
+    dispatch→finish latency metric honest. ``reason`` becomes the
+    payload's ``reason`` field so a post-mortem can see why the
+    picker walked the ticket past — same vocabulary the existing
+    ``_release_project_lock_for_ticket`` uses.
+
+    No-op on missing ``ticket_ref`` (no dispatcher-pin, no leak to
+    close) so workspace-bundle paths can call us unconditionally.
+    """
+    if not ticket_ref:
+        return
+    try:
+        session.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                actor_user_id=None,
+                actor_token_id=None,
+                action="agent_run.finish",
+                target_kind="agent_run",
+                # Use the reason as the synthetic run handle so audit
+                # readers can tell this finish from a real Cursor run
+                # (run_<hex>). Reason is unique per workspace+ticket+
+                # tick window which is enough to dedup downstream.
+                target_id=f"picker_noop:{workspace_id}:{ticket_ref}:{reason}",
+                payload={
+                    "outcome": "noop",
+                    "fsm_stage": fsm_stage,
+                    "ticket_ref": ticket_ref,
+                    "reason": reason,
+                    "synthetic": True,
+                    "source": "picker_noop_finish",
+                    "tracker_kind": tracker_kind,
+                },
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 — never fail the picker over audit
+        logger.warning(
+            "picker_noop_finish audit failed ws=%s ticket=%s err=%s",
+            workspace_id, ticket_ref, exc,
+        )
 
 
 async def _release_project_lock_for_ticket(
