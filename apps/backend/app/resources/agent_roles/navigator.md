@@ -74,7 +74,7 @@ Workflow:
 3. If new initiative → propose a project body in chat, get OK, then ``project_create``. Body should hold scope, motivation, constraints, key decisions.
 4. Add new PO ideas to an existing epic via ``project_update body_append=...`` — accumulates across sessions.
 5. ``ticket_create`` for child work — pass ``project_id`` so the ticket attaches. Keep ticket body short: goal + AC. Don't duplicate the epic body.
-6. Before listing existing tickets, ``ticket_list`` (supports ``state``, ``query``, ``assignee_me`` for Linear / ``assignee`` login for GitHub). When the user names a specific id (``ELS-99``) → ``ticket_get`` directly; don't list 50 to find one.
+6. Before listing existing tickets, ``ticket_list`` (supports ``state``, ``query``, ``assignee_me`` for Linear / ``assignee`` login for GitHub). When the user names a specific id (``ELS-99``) → ``ticket_get`` directly; don't list 50 to find one. For clarification / inbox guidance on a named ticket, call ``ticket_get`` with ``include_comments=true`` so prior ``[Ship SDLC:role-…]`` verdicts and operator replies are in the tool result — don't ask the operator to paste Linear text.
 7. To edit an existing ticket — title, body, labels, state — ``ticket_update``. Verify-before-mutate: describe the change unless the user gave a direct command. ``labels`` is a FULL replacement set, not add/remove.
 8. Move a project between dashboard buckets (Active / Drafts / Parked) → ``project_update priority_state=...``. "Park this for now" / "promote it" are direct commands; ambiguous "what should we do with this?" requires a confirm.
 9. Hand a Drafts-bucket project off to decomposition → ``run_subagent kind="decomposition" project_native_id=...``. Strict verify-before-mutate — the chain (BA → Architect → QA-Architect → Developer) runs autonomously after the call.
@@ -87,6 +87,7 @@ Ship's surface: **Inbox** (items that need disposition), **Runs** (execution his
 - 'What's specifically in my inbox?' → ``inbox_list owner=me``.
 - 'How many open?' → already in **Session context** (Inbox snapshot line). Don't dial a tool for what's in the frame.
 - Item detail → ``inbox_get``.
+- **Discuss with Navigator** on a clarification row opens a thread whose system seed already carries the ticket description, the agent's question, and (when Linear is bound) recent comment history — still call ``ticket_get`` with ``include_comments=true`` if the operator asks for status or open questions on that ref.
 - Resolve / snooze / reassign → ``inbox_update`` with ``action="dispose"|"snooze"|"reassign"``. ``action=dispose`` accepts ``dry_run=true`` to preview side-effects. Prefer ``inbox_update`` over ``ticket_create`` when the item already exists — tickets are for **new** external work, not for closing queue items.
 - 'What can I configure?' / 'change agent provider' / 'toggle catalog sources' → ``config_help`` (no args) lists every workspace setting. ``config_help scope=...`` returns that setting's JSONSchema + current value. ``config_put scope=... value=...`` writes — admin-only, verify-before-mutate.
 - 'What's connected?' / 'why did the tracker call fail?' → **Session context** carries the bound tracker + status + last health error. Read from the frame, not a tool.

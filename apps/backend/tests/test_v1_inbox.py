@@ -1391,3 +1391,94 @@ async def test_decide_redispatches_paused_fsm_stage(
     )
     assert resp2.status_code == 200, resp2.text
     assert len(calls) == 1  # unchanged — no fsm_stage, no re-dispatch
+
+
+# ---------------------------------------------------------------------------
+# discuss with Navigator — comment seed on clarification rows
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_discuss_with_navigator_seeds_linear_comments(
+    v1_client, seed_workspace, db_session, monkeypatch
+) -> None:
+    from datetime import datetime, timezone
+
+    from backend.app.db.models.agent_surface import ChatMessage, ChatThread
+    from backend.app.integrations.gateway.tracker import CommentRef
+    from backend.app.services.tracker_resolver import ResolvedTracker
+
+    user, raw, ws = seed_workspace
+    item = await _make_item(
+        db_session,
+        ws,
+        type="clarification",
+        owner_user_id=user.id,
+        summary="Which auth path should we take?",
+        payload={
+            "ticket_ref": "ELS-189",
+            "source_ticket": {
+                "ticket_ref": "ELS-189",
+                "title": "Navigator access",
+                "description": "Bug report body",
+                "state": "In Progress",
+                "labels": ["Bug"],
+            },
+        },
+    )
+
+    async def _list_comments(_ref):
+        return [
+            CommentRef(
+                id="c1",
+                body="Need a call: OAuth vs team filter?\n\n[Ship SDLC:role-developer]",
+                author="Ship Agent",
+                created_at=datetime(2026, 5, 28, 10, 0, tzinfo=timezone.utc),
+            )
+        ]
+
+    class _StubGateway:
+        list_comments = _list_comments
+
+        async def get_ticket_snapshot(self, _ref):
+            return None
+
+    resolved = ResolvedTracker(
+        kind="linear",
+        gateway=_StubGateway(),  # type: ignore[arg-type]
+        scope_hint=None,
+    )
+
+    async def _fake_resolve(*, session, settings, workspace_id):
+        return resolved
+
+    monkeypatch.setattr(
+        "backend.app.services.tracker_resolver.resolve_for_workspace",
+        _fake_resolve,
+    )
+
+    resp = await v1_client.post(
+        f"/v1/workspaces/{ws.id}/inbox/{item.id}/discuss",
+        headers=_auth(raw),
+    )
+    assert resp.status_code == 200, resp.text
+    thread_id = resp.json()["thread_id"]
+
+    seed = (
+        await db_session.execute(
+            select(ChatMessage).where(
+                ChatMessage.thread_id == uuid.UUID(thread_id),
+                ChatMessage.role == "system",
+            )
+        )
+    ).scalar_one()
+    assert "### Recent Linear comments" in seed.body
+    assert "[Ship SDLC:role-developer]" in seed.body
+    assert "Which auth path should we take?" in seed.body
+
+    thread = (
+        await db_session.execute(
+            select(ChatThread).where(ChatThread.id == uuid.UUID(thread_id))
+        )
+    ).scalar_one()
+    assert thread.status == "active"

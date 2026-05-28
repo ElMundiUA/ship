@@ -2261,6 +2261,37 @@ async def discuss_with_navigator(
         seed_lines.append(f"## Agent's {item.type}")
         seed_lines.append(item.summary)
 
+    if item.type == "clarification" and ref != "(unknown ticket)":
+        from backend.app.services.tracker_resolver import resolve_for_workspace
+        from backend.app.services.tracker_ticket_context import (
+            format_comments_markdown,
+            ticket_ref_from,
+        )
+
+        settings = get_settings()
+        resolved = await resolve_for_workspace(
+            session=session,
+            settings=settings,
+            workspace_id=workspace_id,
+        )
+        if resolved is not None:
+            list_fn = getattr(resolved.gateway, "list_comments", None)
+            if list_fn is not None:
+                try:
+                    tref = ticket_ref_from(resolved.kind, str(ref))
+                    comments = await list_fn(tref)
+                    block = format_comments_markdown(comments or [])
+                    if block:
+                        seed_lines.append("")
+                        seed_lines.append(block)
+                except Exception as exc:  # noqa: BLE001 — best-effort seed
+                    logger.debug(
+                        "discuss_with_navigator: list_comments failed "
+                        "ref=%s err=%s",
+                        ref,
+                        exc,
+                    )
+
     seed_lines.append("")
     seed_lines.append(
         "Help the operator draft a clear answer. When the operator confirms "

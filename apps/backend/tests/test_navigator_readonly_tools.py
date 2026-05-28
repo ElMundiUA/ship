@@ -26,6 +26,8 @@ from datetime import datetime, timedelta, timezone
 import pytest
 import pytest_asyncio
 
+from backend.app.integrations.gateway.tracker import CommentRef
+
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -52,7 +54,7 @@ def toolbox(db_session, seed_workspace):
 
 
 class _StubTrackerWithSnapshot:
-    """Minimal stub for the tracker resolution path in ``_tool_get_ticket``.
+    """Minimal stub for the tracker resolution path in ``_tool_ticket_get``.
 
     The handler calls ``self._resolve_tracker(None, None)`` to get a
     tracker object, then ``tracker.get_ticket_snapshot(ref)``. Since
@@ -62,13 +64,24 @@ class _StubTrackerWithSnapshot:
 
     kind = "linear"
 
-    def __init__(self, snapshot=None) -> None:
+    def __init__(self, snapshot=None, *, comments=None, list_comments=None) -> None:
         self.snapshot = snapshot
+        self.comments = comments
+        self._list_comments = list_comments
         self.calls = []
+        self.comment_calls = []
 
     async def get_ticket_snapshot(self, ref):
         self.calls.append(ref)
         return self.snapshot
+
+    async def list_comments(self, ref):
+        self.comment_calls.append(ref)
+        if self._list_comments is not None:
+            if isinstance(self._list_comments, Exception):
+                raise self._list_comments
+            return self._list_comments
+        return self.comments or []
 
 
 @pytest.mark.asyncio
@@ -92,7 +105,7 @@ async def test_get_ticket_returns_snapshot(toolbox, monkeypatch) -> None:
         type(toolbox), "_resolve_tracker", _stub_resolve, raising=True
     )
 
-    raw = await toolbox._tool_get_ticket({"ticket_ref": "ELS-99"})
+    raw = await toolbox._tool_ticket_get({"ticket_ref": "ELS-99"})
     payload = json.loads(raw)
     assert payload["ticket_ref"] == "ELS-99"
     assert payload["title"] == "Test ticket"
@@ -114,7 +127,7 @@ async def test_get_ticket_returns_not_found_when_missing(
         type(toolbox), "_resolve_tracker", _stub_resolve, raising=True
     )
 
-    raw = await toolbox._tool_get_ticket({"ticket_ref": "ELS-9999"})
+    raw = await toolbox._tool_ticket_get({"ticket_ref": "ELS-9999"})
     payload = json.loads(raw)
     assert payload["error"] == "ticket_not_found"
     assert payload["ticket_ref"] == "ELS-9999"
@@ -125,7 +138,83 @@ async def test_get_ticket_requires_ticket_ref(toolbox) -> None:
     from backend.app.services.agent.tools import ToolInvocationError
 
     with pytest.raises(ToolInvocationError):
-        await toolbox._tool_get_ticket({})
+        await toolbox._tool_ticket_get({})
+
+
+@pytest.mark.asyncio
+async def test_get_ticket_include_comments(toolbox, monkeypatch) -> None:
+    now = datetime.now(timezone.utc)
+    stub = _StubTrackerWithSnapshot(
+        snapshot={
+            "ticket_ref": "ELS-99",
+            "title": "Test ticket",
+            "description": "body",
+            "state": "In Progress",
+            "labels": [],
+        },
+        comments=[
+            CommentRef(
+                id="c1",
+                body="First [Ship SDLC:role-ba]",
+                author="Ship",
+                created_at=now,
+            ),
+            CommentRef(
+                id="c2",
+                body="Operator hint",
+                author="Ops",
+                created_at=now,
+            ),
+        ],
+    )
+
+    async def _stub_resolve(_self, _kind, _hint):
+        return stub
+
+    monkeypatch.setattr(
+        type(toolbox), "_resolve_tracker", _stub_resolve, raising=True
+    )
+
+    raw = await toolbox._tool_ticket_get(
+        {"ticket_ref": "ELS-99", "include_comments": True}
+    )
+    payload = json.loads(raw)
+    assert payload["ticket_ref"] == "ELS-99"
+    assert len(payload["comments"]) == 2
+    assert payload["comments"][0]["body"] == "First [Ship SDLC:role-ba]"
+    assert len(stub.comment_calls) == 1
+    assert stub.comment_calls[0].id == "ELS-99"
+
+
+@pytest.mark.asyncio
+async def test_get_ticket_comments_unsupported(toolbox, monkeypatch) -> None:
+    class _NoCommentsTracker:
+        kind = "linear"
+
+        async def get_ticket_snapshot(self, ref):
+            return {
+                "ticket_ref": "ELS-1",
+                "title": "T",
+                "description": "",
+                "state": "Todo",
+                "labels": [],
+            }
+
+    stub = _NoCommentsTracker()
+
+    async def _stub_resolve(_self, _kind, _hint):
+        return stub
+
+    monkeypatch.setattr(
+        type(toolbox), "_resolve_tracker", _stub_resolve, raising=True
+    )
+
+    raw = await toolbox._tool_ticket_get(
+        {"ticket_ref": "ELS-1", "include_comments": True}
+    )
+    payload = json.loads(raw)
+    assert payload["comments_error"] == "comments_unsupported"
+    assert "comments" not in payload
 
 
 # ---------------------------------------------------------------------------

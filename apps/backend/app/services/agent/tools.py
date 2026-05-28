@@ -84,6 +84,10 @@ from backend.app.integrations.gateway.tracker import (
     CreatedTicket,
     TrackerGateway,
 )
+from backend.app.services.tracker_ticket_context import (
+    serialize_ticket_comments,
+    ticket_ref_from,
+)
 from backend.app.integrations.github.code_host_adapter import GitHubCodeHost
 from backend.app.integrations.github.issues_tracker import GitHubIssuesTracker
 from backend.app.integrations.jira.tracker_adapter import JiraTracker
@@ -1290,7 +1294,9 @@ class ToolBox:
                     "the body / labels / state to act. Read-only; cheaper "
                     "than ``list_tickets`` when you already know which "
                     "ticket. Returns ``{ticket_ref, title, description, "
-                    "url, state, labels, project_id?}``."
+                    "url, state, labels, project_id?, comments?}``. Set "
+                    "``include_comments=true`` when answering clarifications "
+                    "or citing prior ``[Ship SDLC:role-…]`` verdicts."
                 ),
                 parameters={
                     "type": "object",
@@ -1303,6 +1309,14 @@ class ToolBox:
                                 "Other adapters use their native "
                                 "identifier (Jira ``ENG-42``, GitHub "
                                 "Issues ``owner/repo#42``)."
+                            ),
+                        },
+                        "include_comments": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": (
+                                "Include the recent comment thread "
+                                "(newest capped at 20, chronological)."
                             ),
                         },
                     },
@@ -4870,8 +4884,9 @@ class ToolBox:
 
     async def _tool_ticket_get(self, args: dict[str, Any]) -> str:
         ticket_ref = _require_str(args, "ticket_ref").strip()
+        include_comments = bool(args.get("include_comments", False))
         tracker = await self._resolve_tracker(None, None)
-        ref = _ticket_ref_from(_tracker_kind_of(tracker), ticket_ref)
+        ref = ticket_ref_from(_tracker_kind_of(tracker), ticket_ref)
         snapshot_fn = getattr(tracker, "get_ticket_snapshot", None)
         if snapshot_fn is None:
             raise ToolInvocationError(
@@ -4889,7 +4904,25 @@ class ToolBox:
                     ),
                 }
             )
-        return _json_result(snapshot)
+        result: dict[str, Any] = dict(snapshot)
+        if include_comments:
+            list_fn = getattr(tracker, "list_comments", None)
+            if list_fn is None:
+                result["comments_error"] = "comments_unsupported"
+            else:
+                try:
+                    raw_comments = await list_fn(ref)
+                except Exception as exc:  # noqa: BLE001 — surface vendor errors
+                    raise ToolInvocationError(
+                        f"tracker list_comments failed: {exc}"
+                    ) from exc
+                rows, truncated = serialize_ticket_comments(
+                    raw_comments or []
+                )
+                result["comments"] = rows
+                if truncated:
+                    result["comments_truncated"] = True
+        return _json_result(result)
 
     async def _tool_dashboard_get(self, args: dict[str, Any]) -> str:
         """Stitch the workspace's headline state into one payload.
@@ -5184,7 +5217,7 @@ class ToolBox:
             )
 
         tracker = await self._resolve_tracker(None, None)
-        ref = _ticket_ref_from(_tracker_kind_of(tracker), ticket_ref)
+        ref = ticket_ref_from(_tracker_kind_of(tracker), ticket_ref)
         actions: list[str] = []
 
         # Single ``issueUpdate`` call covers title/body/labels.
@@ -5670,7 +5703,7 @@ class ToolBox:
                 "planning anchor has no id; tracker returned malformed shape"
             )
 
-        ref = _ticket_ref_from(_tracker_kind_of(tracker), anchor_id)
+        ref = ticket_ref_from(_tracker_kind_of(tracker), anchor_id)
         try:
             await tracker.transition(ref, to_state="wbs")
         except Exception as exc:  # noqa: BLE001
