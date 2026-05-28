@@ -82,6 +82,7 @@ export async function discoverItemsAction(input: {
   type: string;
   config: Record<string, unknown>;
   secrets?: Record<string, string>;
+  use_workspace_integration?: boolean;
 }): Promise<DiscoverItemsResult> {
   if (!input.type?.trim()) return { ok: false, message: "Type is required." };
 

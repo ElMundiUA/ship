@@ -28,6 +28,10 @@ from backend.app.db.models.integrations import GitHubInstallation, WorkspaceRepo
 from backend.app.db.models.tenancy import Workspace
 from backend.app.db.session import get_session
 from backend.app.integrations.lighthouse import build_lighthouse_client
+from backend.app.integrations.lighthouse.secrets_resolver import (
+    list_workspace_importer_integrations,
+    resolve_workspace_importer_secrets,
+)
 from backend.app.services.knowledge_search import (
     EmbeddingsUnavailable,
     KnowledgeSearchHit,
@@ -311,6 +315,19 @@ class ImporterCreateIn(BaseModel):
     recipe: str | None = Field(default=None, min_length=1, max_length=200)
     config: dict[str, Any] = Field(default_factory=dict)
     secrets: dict[str, str] = Field(default_factory=dict)
+    # When true, Ship resolves the importer's secrets from the
+    # workspace's own integration (GitHub App, Notion / Linear OAuth)
+    # server-side. The browser never sees the token. Explicit values in
+    # ``secrets`` still override the resolved ones, so operators can
+    # mix.
+    use_workspace_integration: bool = False
+
+
+class ImporterIntegrationOut(BaseModel):
+    importer_type: str
+    provider: str
+    account_name: str | None = None
+    account_url: str | None = None
 
 
 def _coerce_importer(row: dict[str, Any]) -> ImporterOut:
@@ -329,6 +346,40 @@ def _coerce_importer(row: dict[str, Any]) -> ImporterOut:
         created_at=row.get("created_at"),
         updated_at=row.get("updated_at"),
     )
+
+
+async def _merge_workspace_secrets(
+    session: AsyncSession,
+    workspace_id: uuid.UUID,
+    importer_type: str,
+    operator_secrets: dict[str, str],
+    *,
+    use_workspace: bool,
+) -> dict[str, str]:
+    """When ``use_workspace`` is true, resolve the workspace's
+    integration creds for this importer type and merge them under the
+    operator-supplied secrets (explicit values override). Raises 400
+    if the workspace has no usable integration for the type."""
+    if not use_workspace:
+        return operator_secrets
+    resolved = await resolve_workspace_importer_secrets(
+        session,
+        workspace_id=workspace_id,
+        importer_type=importer_type,
+        settings=get_settings(),
+    )
+    if resolved is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "no_workspace_integration",
+                "message": (
+                    f"No workspace integration for importer type "
+                    f"'{importer_type}'."
+                ),
+            },
+        )
+    return {**resolved, **operator_secrets}
 
 
 def _require_lighthouse_or_503():
@@ -375,6 +426,32 @@ async def list_importer_types(
     ]
 
 
+@router.get(
+    "/importers/integrations",
+    response_model=list[ImporterIntegrationOut],
+)
+async def list_importer_workspace_integrations(
+    workspace_id: uuid.UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> list[ImporterIntegrationOut]:
+    """List importer types that the workspace can auto-authorize via
+    its existing Ship integration (GitHub App, Notion / Linear OAuth).
+    The Console uses this to surface the "Use workspace integration"
+    checkbox on the Add form."""
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
+    rows = await list_workspace_importer_integrations(session, workspace_id)
+    return [
+        ImporterIntegrationOut(
+            importer_type=r.importer_type,
+            provider=r.provider,
+            account_name=r.account_name,
+            account_url=r.account_url,
+        )
+        for r in rows
+    ]
+
+
 @router.get("/importers", response_model=list[ImporterOut])
 async def list_workspace_importers(
     workspace_id: uuid.UUID,
@@ -411,6 +488,10 @@ async def create_workspace_importer(
     await _require_membership(session, workspace_id, auth.user.id, ROLES_MAINTAIN)
     client = _require_lighthouse_or_503()
     recipe = payload.recipe or f"workspace-{payload.type}"
+    secrets = await _merge_workspace_secrets(
+        session, workspace_id, payload.type, payload.secrets,
+        use_workspace=payload.use_workspace_integration,
+    )
     try:
         row = await client.create_importer(
             workspace_id=workspace_id,
@@ -419,7 +500,7 @@ async def create_workspace_importer(
             description=payload.description,
             recipe=recipe,
             config=payload.config,
-            secrets=payload.secrets,
+            secrets=secrets,
         )
     except httpx.HTTPStatusError as exc:
         body = exc.response.text
@@ -442,6 +523,7 @@ class ImporterDiscoverIn(BaseModel):
     type: str = Field(min_length=1, max_length=120)
     config: dict[str, Any] = Field(default_factory=dict)
     secrets: dict[str, str] = Field(default_factory=dict)
+    use_workspace_integration: bool = False
 
 
 class ImporterDiscoveredItem(BaseModel):
@@ -466,12 +548,16 @@ async def discover_importer_items(
     items the operator can choose from. No DB writes."""
     await _require_membership(session, workspace_id, auth.user.id, ROLES_MAINTAIN)
     client = _require_lighthouse_or_503()
+    secrets = await _merge_workspace_secrets(
+        session, workspace_id, payload.type, payload.secrets,
+        use_workspace=payload.use_workspace_integration,
+    )
     try:
         items = await client.discover_importer(
             workspace_id=workspace_id,
             type_=payload.type,
             config=payload.config,
-            secrets=payload.secrets,
+            secrets=secrets,
         )
     except httpx.HTTPStatusError as exc:
         raise HTTPException(

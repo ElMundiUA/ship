@@ -3230,7 +3230,25 @@ export type ApiImporterCreateBody = {
   recipe?: string;
   config: Record<string, unknown>;
   secrets?: Record<string, string>;
+  use_workspace_integration?: boolean;
 };
+
+export type ApiWorkspaceImporterIntegration = {
+  importer_type: string;
+  provider: string;
+  account_name: string | null;
+  account_url: string | null;
+};
+
+export async function listWorkspaceImporterIntegrations(
+  workspaceId: string,
+  token?: string,
+): Promise<ApiWorkspaceImporterIntegration[]> {
+  return apiFetch<ApiWorkspaceImporterIntegration[]>(
+    `/v1/workspaces/${workspaceId}/knowledge/importers/integrations`,
+    { token },
+  );
+}
 
 export async function listImporterTypes(
   workspaceId: string,
@@ -3277,6 +3295,7 @@ export async function discoverImporterItems(
     type: string;
     config: Record<string, unknown>;
     secrets?: Record<string, string>;
+    use_workspace_integration?: boolean;
   },
   token?: string,
 ): Promise<ApiImporterDiscoveredItem[]> {

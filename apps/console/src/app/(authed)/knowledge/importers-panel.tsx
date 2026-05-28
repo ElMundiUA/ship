@@ -18,6 +18,7 @@ import type {
   ApiImporterDiscoveredItem,
   ApiImporterType,
   ApiWorkspaceImporter,
+  ApiWorkspaceImporterIntegration,
 } from "@/lib/api/client";
 
 import {
@@ -35,10 +36,15 @@ const HIDDEN_TYPES = new Set(["local_files"]);
 type Props = {
   importers: ApiWorkspaceImporter[];
   importerTypes: ApiImporterType[];
+  integrations: ApiWorkspaceImporterIntegration[];
 };
 
 
-export function ImportersPanel({ importers, importerTypes }: Props) {
+export function ImportersPanel({
+  importers,
+  importerTypes,
+  integrations,
+}: Props) {
   const [adding, setAdding] = useState(false);
   const visibleTypes = useMemo(
     () => importerTypes.filter((t) => !HIDDEN_TYPES.has(t.type)),
@@ -77,6 +83,7 @@ export function ImportersPanel({ importers, importerTypes }: Props) {
       {adding && (
         <AddImporterForm
           types={visibleTypes}
+          integrations={integrations}
           onDone={() => setAdding(false)}
         />
       )}
@@ -154,15 +161,21 @@ function ImporterRow({ importer }: { importer: ApiWorkspaceImporter }) {
 
 function AddImporterForm({
   types,
+  integrations,
   onDone,
 }: {
   types: ApiImporterType[];
+  integrations: ApiWorkspaceImporterIntegration[];
   onDone: () => void;
 }) {
   const [typeKey, setTypeKey] = useState<string>(types[0]?.type ?? "");
   const [name, setName] = useState("");
   const [configValues, setConfigValues] = useState<Record<string, string>>({});
   const [secrets, setSecrets] = useState<Record<string, string>>({});
+  // Default ON whenever the selected type has a workspace integration —
+  // the typical case is "user installed GitHub once, wants to import
+  // any repo without re-pasting a token".
+  const [useWorkspaceIntegration, setUseWorkspaceIntegration] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // Discovery state: items returned by the engine + the operator's
   // picks. Active only when the selected type ``supports_discovery``.
@@ -176,6 +189,11 @@ function AddImporterForm({
     () => types.find((t) => t.type === typeKey) ?? null,
     [types, typeKey],
   );
+  const integration = useMemo(
+    () => integrations.find((i) => i.importer_type === typeKey) ?? null,
+    [integrations, typeKey],
+  );
+  const useIntegration = !!integration && useWorkspaceIntegration;
   const needsDiscovery = !!selected?.supports_discovery;
   // Once discovery has surfaced items, we hide the config fields and
   // show only the picker — operators expect the form to advance.
@@ -195,6 +213,7 @@ function AddImporterForm({
     setName("");
     setDiscovered(null);
     setPicked(new Set());
+    setUseWorkspaceIntegration(true);
     setError(null);
   }
 
@@ -220,13 +239,15 @@ function AddImporterForm({
         message: `Missing required field(s): ${missing.join(", ")}.`,
       };
     }
-    const missingSecrets = selected.secret_keys.filter((k) => !secrets[k]);
-    if (missingSecrets.length > 0) {
-      return {
-        ok: false,
-        config,
-        message: `Missing required secret(s): ${missingSecrets.join(", ")}.`,
-      };
+    if (!useIntegration) {
+      const missingSecrets = selected.secret_keys.filter((k) => !secrets[k]);
+      if (missingSecrets.length > 0) {
+        return {
+          ok: false,
+          config,
+          message: `Missing required secret(s): ${missingSecrets.join(", ")}.`,
+        };
+      }
     }
     return { ok: true, config };
   }
@@ -242,7 +263,11 @@ function AddImporterForm({
       const result = await discoverItemsAction({
         type: selected!.type,
         config: check.config,
-        secrets: Object.keys(secrets).length > 0 ? secrets : undefined,
+        secrets:
+          !useIntegration && Object.keys(secrets).length > 0
+            ? secrets
+            : undefined,
+        use_workspace_integration: useIntegration ? true : undefined,
       });
       if (!result.ok) {
         setError(result.message);
@@ -287,7 +312,11 @@ function AddImporterForm({
         type: selected.type,
         name: name.trim(),
         config,
-        secrets: Object.keys(secrets).length > 0 ? secrets : undefined,
+        secrets:
+          !useIntegration && Object.keys(secrets).length > 0
+            ? secrets
+            : undefined,
+        use_workspace_integration: useIntegration ? true : undefined,
       });
       if (!result.ok) {
         setError(result.message);
@@ -338,8 +367,34 @@ function AddImporterForm({
           {selected.description && (
             <p className="text-xs text-white/55">{selected.description}</p>
           )}
-          {Object.entries(selected.config_schema?.properties ?? {}).map(
-            ([key, prop]) => (
+          {integration && (
+            <label className="flex items-start gap-2 rounded border border-aqua/20 bg-aqua/[0.05] p-2 text-xs">
+              <input
+                type="checkbox"
+                checked={useWorkspaceIntegration}
+                onChange={(e) =>
+                  setUseWorkspaceIntegration(e.target.checked)
+                }
+                className="mt-0.5"
+              />
+              <span className="text-white/75">
+                Use workspace{" "}
+                <span className="text-aqua">{integration.provider}</span>
+                {" "}integration
+                {integration.account_name
+                  ? ` (${integration.account_name})`
+                  : ""}
+                . Ship resolves the token server-side — the secret never
+                leaves the backend.
+              </span>
+            </label>
+          )}
+          {Object.entries(selected.config_schema?.properties ?? {})
+            // Hide schema entries that match a secret key — those are
+            // rendered as dedicated password inputs below (or skipped
+            // entirely when the workspace integration fills them).
+            .filter(([key]) => !selected.secret_keys.includes(key))
+            .map(([key, prop]) => (
               <SchemaField
                 key={key}
                 name={key}
@@ -348,20 +403,20 @@ function AddImporterForm({
                 value={configValues[key] ?? ""}
                 onChange={(v) => setConfig(key, v)}
               />
-            ),
-          )}
-          {selected.secret_keys.map((key) => (
-            <label key={key} className="block space-y-1 text-xs">
-              <span className="text-white/60">{key} (secret)</span>
-              <input
-                type="password"
-                value={secrets[key] ?? ""}
-                onChange={(e) => setSecret(key, e.target.value)}
-                autoComplete="off"
-                className="w-full rounded border border-white/10 bg-white/[0.04] px-2 py-1.5 text-sm text-white outline-none focus:border-aqua/60"
-              />
-            </label>
-          ))}
+            ))}
+          {!useIntegration &&
+            selected.secret_keys.map((key) => (
+              <label key={key} className="block space-y-1 text-xs">
+                <span className="text-white/60">{key} (secret)</span>
+                <input
+                  type="password"
+                  value={secrets[key] ?? ""}
+                  onChange={(e) => setSecret(key, e.target.value)}
+                  autoComplete="off"
+                  className="w-full rounded border border-white/10 bg-white/[0.04] px-2 py-1.5 text-sm text-white outline-none focus:border-aqua/60"
+                />
+              </label>
+            ))}
           {needsDiscovery && (
             <p className="text-[11px] text-white/45">
               Click <span className="text-white/70">Preview items</span> to
