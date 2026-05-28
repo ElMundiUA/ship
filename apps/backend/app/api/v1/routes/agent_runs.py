@@ -4195,6 +4195,7 @@ async def finish_agent_run(
                 workspace_id=workspace_id,
                 repo_id=None,
                 type="clarification",
+                category="decision_needed",
                 title=f"clarification: {payload.ticket_ref}"[:300],
                 summary=(payload.summary or payload.comment or "")[:2000] or None,
                 payload={

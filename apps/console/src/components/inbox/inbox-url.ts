@@ -23,7 +23,9 @@
 
 import {
   DEFAULT_INBOX_FILTERS,
+  isInboxType,
   type InboxFilterState,
+  type InboxType,
 } from "@/lib/inbox-types";
 
 export type BuildInboxUrlExtras = {
@@ -32,7 +34,58 @@ export type BuildInboxUrlExtras = {
   play?: string | null;
   /** Multi-workspace accounts: keep ``?ws=`` on every inbox URL. */
   workspaceScope?: string | null;
+  /** Mailbox preview selection — preserved across filter / tab changes. */
+  selected?: string | null;
 };
+
+export type ParsedInboxSearchParams = {
+  filters: InboxFilterState;
+  selectedId: string | null;
+  errorCode: string | null;
+};
+
+function parseInboxTypes(
+  raw: string | string[] | undefined,
+): InboxType[] {
+  const types: InboxType[] = [];
+  const add = (value: string) => {
+    if (isInboxType(value) && !types.includes(value)) types.push(value);
+  };
+  if (typeof raw === "string") add(raw);
+  else if (Array.isArray(raw)) {
+    for (const entry of raw) {
+      if (typeof entry === "string") add(entry);
+    }
+  }
+  return types;
+}
+
+/** Parse inbox list URL query params (server + client share this). */
+export function parseInboxSearchParams(
+  raw: Record<string, string | string[] | undefined>,
+): ParsedInboxSearchParams {
+  const ownershipRaw = typeof raw.ownership === "string" ? raw.ownership : null;
+  const ownership: InboxFilterState["ownership"] =
+    ownershipRaw === "mine" ||
+    ownershipRaw === "unassigned" ||
+    ownershipRaw === "all"
+      ? ownershipRaw
+      : DEFAULT_INBOX_FILTERS.ownership;
+
+  const selectedRaw = typeof raw.selected === "string" ? raw.selected : null;
+  const selectedId =
+    selectedRaw && selectedRaw.length > 0 ? selectedRaw : null;
+  const errorCode = typeof raw.error === "string" ? raw.error : null;
+
+  return {
+    filters: {
+      ownership,
+      types: parseInboxTypes(raw.type),
+    },
+    selectedId,
+    errorCode,
+  };
+}
 
 export function buildInboxUrl(
   filters: InboxFilterState,
@@ -47,6 +100,7 @@ export function buildInboxUrl(
   if (extras.play) params.set("play", extras.play);
   if (extras.cursor) params.set("cursor", extras.cursor);
   if (extras.workspaceScope) params.set("ws", extras.workspaceScope);
+  if (extras.selected) params.set("selected", extras.selected);
   const qs = params.toString();
   return qs ? `/inbox?${qs}` : "/inbox";
 }

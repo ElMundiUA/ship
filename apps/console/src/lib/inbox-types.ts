@@ -256,6 +256,13 @@ export function inboxListLine(item: {
 }
 
 /** Type kicker: glyph + label + dot tone for mailbox list rows. */
+/** Fallback when API rows carry an unknown ``type`` — avoids SSR throw. */
+export const ROW_KICKER_FALLBACK = {
+  glyph: "·",
+  label: "INBOX",
+  tone: "bg-white/15",
+} as const;
+
 export const ROW_KICKER: Record<
   InboxType,
   { glyph: string; label: string; tone: string }
@@ -269,6 +276,15 @@ export const ROW_KICKER: Record<
   stuck: { glyph: "★", label: "ATTENTION", tone: "bg-white/30" },
   report: { glyph: "≡", label: "REPORT", tone: "bg-white/15" },
 };
+
+/** Safe list-row kicker lookup — never throws on malformed API data. */
+export function inboxRowKicker(
+  type: string,
+): { glyph: string; label: string; tone: string } {
+  if (isInboxType(type)) return ROW_KICKER[type];
+  return ROW_KICKER_FALLBACK;
+}
+
 /**
  * One row as it appears in the inbox list. Compact: the detail view
  * fetches the full payload + audit trail separately.
@@ -429,6 +445,10 @@ export function isInboxType(value: string): value is InboxType {
 
 export function isInboxStatus(value: string): value is InboxStatus {
   return (INBOX_STATUSES as readonly string[]).includes(value);
+}
+
+export function isInboxLane(value: string): value is InboxLane {
+  return (INBOX_LANES as readonly string[]).includes(value);
 }
 
 /**

@@ -38,7 +38,8 @@ type HeadlineInput = Pick<InboxItem, "title" | "type"> & {
  * Unknown patterns pass through unchanged — no fabricated ticket refs.
  */
 export function formatInboxHeadline(item: HeadlineInput): string {
-  const title = item.title.trim();
+  const title = (item.title ?? "").trim();
+  if (!title) return "Inbox item";
   const payload: Record<string, unknown> = { ...(item.payload ?? {}) };
   if (item.ticket_ref) payload.ticket_ref = item.ticket_ref;
   if (item.fsm_stage) payload.fsm_stage = item.fsm_stage;
