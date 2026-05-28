@@ -13,8 +13,10 @@ import { revalidatePath } from "next/cache";
 import {
   ApiHttpError,
   type ApiImporterCreateBody,
+  type ApiImporterDiscoveredItem,
   type ApiWorkspaceImporter,
   createWorkspaceImporter,
+  discoverImporterItems,
   listWorkspaces,
   runWorkspaceImporter,
 } from "@/lib/api/client";
@@ -26,6 +28,10 @@ export type CreateImporterResult =
 
 export type RunImporterResult =
   | { ok: true; importerId: string }
+  | { ok: false; message: string; status?: number };
+
+export type DiscoverItemsResult =
+  | { ok: true; items: ApiImporterDiscoveredItem[] }
   | { ok: false; message: string; status?: number };
 
 
@@ -68,6 +74,34 @@ export async function createImporterAction(
     return { ok: true, importer };
   } catch (err) {
     return importerActionError(err);
+  }
+}
+
+
+export async function discoverItemsAction(input: {
+  type: string;
+  config: Record<string, unknown>;
+  secrets?: Record<string, string>;
+}): Promise<DiscoverItemsResult> {
+  if (!input.type?.trim()) return { ok: false, message: "Type is required." };
+
+  let token: string;
+  let workspaceId: string;
+  try {
+    token = await requireToken();
+    workspaceId = await requireWorkspaceId(token);
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : String(err) };
+  }
+
+  try {
+    const items = await discoverImporterItems(workspaceId, input, token);
+    return { ok: true, items };
+  } catch (err) {
+    if (err instanceof ApiHttpError) {
+      return { ok: false, message: apiErrorMessage(err), status: err.status };
+    }
+    return { ok: false, message: apiErrorMessage(err) };
   }
 }
 

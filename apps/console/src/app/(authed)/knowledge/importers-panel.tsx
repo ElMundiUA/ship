@@ -15,11 +15,21 @@ import { useMemo, useState, useTransition } from "react";
 
 import { cn } from "@/lib/cn";
 import type {
+  ApiImporterDiscoveredItem,
   ApiImporterType,
   ApiWorkspaceImporter,
 } from "@/lib/api/client";
 
-import { createImporterAction, runImporterAction } from "./actions";
+import {
+  createImporterAction,
+  discoverItemsAction,
+  runImporterAction,
+} from "./actions";
+
+
+// Importer types we hide from the operator: local_files only works on
+// the engine pod's filesystem and isn't useful in cloud deployments.
+const HIDDEN_TYPES = new Set(["local_files"]);
 
 
 type Props = {
@@ -30,6 +40,10 @@ type Props = {
 
 export function ImportersPanel({ importers, importerTypes }: Props) {
   const [adding, setAdding] = useState(false);
+  const visibleTypes = useMemo(
+    () => importerTypes.filter((t) => !HIDDEN_TYPES.has(t.type)),
+    [importerTypes],
+  );
   // Hide the built-in per-workspace S3 importer from the list; it's
   // auto-provisioned and not operator-managed.
   const visibleImporters = useMemo(
@@ -37,7 +51,7 @@ export function ImportersPanel({ importers, importerTypes }: Props) {
     [importers],
   );
 
-  if (importerTypes.length === 0) {
+  if (visibleTypes.length === 0) {
     // Lighthouse unreachable or unconfigured — render nothing.
     return null;
   }
@@ -62,7 +76,7 @@ export function ImportersPanel({ importers, importerTypes }: Props) {
 
       {adding && (
         <AddImporterForm
-          types={importerTypes}
+          types={visibleTypes}
           onDone={() => setAdding(false)}
         />
       )}
@@ -150,12 +164,22 @@ function AddImporterForm({
   const [configValues, setConfigValues] = useState<Record<string, string>>({});
   const [secrets, setSecrets] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
+  // Discovery state: items returned by the engine + the operator's
+  // picks. Active only when the selected type ``supports_discovery``.
+  const [discovered, setDiscovered] = useState<
+    ApiImporterDiscoveredItem[] | null
+  >(null);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
   const [pending, startTransition] = useTransition();
 
   const selected = useMemo(
     () => types.find((t) => t.type === typeKey) ?? null,
     [types, typeKey],
   );
+  const needsDiscovery = !!selected?.supports_discovery;
+  // Once discovery has surfaced items, we hide the config fields and
+  // show only the picker — operators expect the form to advance.
+  const inPickerStage = needsDiscovery && discovered !== null;
 
   function setConfig(key: string, value: string) {
     setConfigValues((prev) => ({ ...prev, [key]: value }));
@@ -169,6 +193,8 @@ function AddImporterForm({
     setConfigValues({});
     setSecrets({});
     setName("");
+    setDiscovered(null);
+    setPicked(new Set());
     setError(null);
   }
 
@@ -177,27 +203,83 @@ function AddImporterForm({
     reset();
   }
 
-  function submit(event: React.FormEvent) {
-    event.preventDefault();
-    if (!selected) return;
-    if (!name.trim()) {
-      setError("Name is required.");
-      return;
-    }
+  function validateBaseInputs(): {
+    ok: boolean;
+    config: Record<string, unknown>;
+    message?: string;
+  } {
+    if (!selected) return { ok: false, config: {}, message: "Pick a type." };
+    if (!name.trim()) return { ok: false, config: {}, message: "Name is required." };
     const config = coerceConfig(selected, configValues);
     const required = selected.config_schema?.required ?? [];
     const missing = required.filter((k) => isBlank(config[k]));
     if (missing.length > 0) {
-      setError(`Missing required field(s): ${missing.join(", ")}.`);
-      return;
+      return {
+        ok: false,
+        config,
+        message: `Missing required field(s): ${missing.join(", ")}.`,
+      };
     }
     const missingSecrets = selected.secret_keys.filter((k) => !secrets[k]);
     if (missingSecrets.length > 0) {
-      setError(
-        `Missing required secret(s): ${missingSecrets.join(", ")}.`,
-      );
+      return {
+        ok: false,
+        config,
+        message: `Missing required secret(s): ${missingSecrets.join(", ")}.`,
+      };
+    }
+    return { ok: true, config };
+  }
+
+  function preview() {
+    const check = validateBaseInputs();
+    if (!check.ok) {
+      setError(check.message ?? "Invalid input.");
       return;
     }
+    setError(null);
+    startTransition(async () => {
+      const result = await discoverItemsAction({
+        type: selected!.type,
+        config: check.config,
+        secrets: Object.keys(secrets).length > 0 ? secrets : undefined,
+      });
+      if (!result.ok) {
+        setError(result.message);
+        return;
+      }
+      setDiscovered(result.items);
+      // Default to "select all" — operator can uncheck.
+      setPicked(new Set(result.items.map((i) => i.id)));
+    });
+  }
+
+  function submit(event: React.FormEvent) {
+    event.preventDefault();
+    if (!selected) return;
+    const check = validateBaseInputs();
+    if (!check.ok) {
+      setError(check.message ?? "Invalid input.");
+      return;
+    }
+    if (needsDiscovery) {
+      if (!inPickerStage) {
+        // Operator clicked submit before previewing — run preview first.
+        preview();
+        return;
+      }
+      if (picked.size === 0) {
+        setError("Pick at least one item to import.");
+        return;
+      }
+    }
+
+    const config = needsDiscovery
+      ? mergeDiscoveredPatches(
+          check.config,
+          (discovered ?? []).filter((i) => picked.has(i.id)),
+        )
+      : check.config;
 
     setError(null);
     startTransition(async () => {
@@ -229,7 +311,8 @@ function AddImporterForm({
           <select
             value={typeKey}
             onChange={(e) => changeType(e.target.value)}
-            className="w-full rounded border border-white/10 bg-white/[0.04] px-2 py-1.5 text-sm text-white outline-none focus:border-aqua/60"
+            disabled={inPickerStage}
+            className="w-full rounded border border-white/10 bg-white/[0.04] px-2 py-1.5 text-sm text-white outline-none focus:border-aqua/60 disabled:opacity-60"
           >
             {types.map((t) => (
               <option key={t.type} value={t.type}>
@@ -250,7 +333,7 @@ function AddImporterForm({
         </label>
       </div>
 
-      {selected && (
+      {selected && !inPickerStage && (
         <>
           {selected.description && (
             <p className="text-xs text-white/55">{selected.description}</p>
@@ -279,7 +362,37 @@ function AddImporterForm({
               />
             </label>
           ))}
+          {needsDiscovery && (
+            <p className="text-[11px] text-white/45">
+              Click <span className="text-white/70">Preview items</span> to
+              fetch the list of available items for this source — you'll
+              pick which ones to import before saving.
+            </p>
+          )}
         </>
+      )}
+
+      {inPickerStage && (
+        <DiscoveredPicker
+          items={discovered ?? []}
+          picked={picked}
+          onToggle={(id) =>
+            setPicked((prev) => {
+              const next = new Set(prev);
+              if (next.has(id)) next.delete(id);
+              else next.add(id);
+              return next;
+            })
+          }
+          onSelectAll={() =>
+            setPicked(new Set((discovered ?? []).map((i) => i.id)))
+          }
+          onClearAll={() => setPicked(new Set())}
+          onBack={() => {
+            setDiscovered(null);
+            setPicked(new Set());
+          }}
+        />
       )}
 
       {error && <p className="text-xs text-coral">{error}</p>}
@@ -296,16 +409,157 @@ function AddImporterForm({
         >
           Cancel
         </button>
+        {needsDiscovery && !inPickerStage && (
+          <button
+            type="button"
+            onClick={preview}
+            disabled={pending || !selected}
+            className="rounded-full border border-white/15 px-3 py-1 text-xs font-semibold text-white/70 transition hover:border-aqua/40 hover:text-aqua disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {pending ? "Loading…" : "Preview items"}
+          </button>
+        )}
         <button
           type="submit"
-          disabled={pending || !selected}
+          disabled={pending || !selected || (inPickerStage && picked.size === 0)}
           className="rounded-full bg-aqua/15 px-3 py-1 text-xs font-semibold text-aqua transition hover:bg-aqua/25 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {pending ? "Creating…" : "Add + run"}
+          {pending
+            ? "Creating…"
+            : inPickerStage
+              ? `Add ${picked.size} item${picked.size === 1 ? "" : "s"}`
+              : needsDiscovery
+                ? "Preview & continue"
+                : "Add + run"}
         </button>
       </div>
     </form>
   );
+}
+
+
+function DiscoveredPicker({
+  items,
+  picked,
+  onToggle,
+  onSelectAll,
+  onClearAll,
+  onBack,
+}: {
+  items: ApiImporterDiscoveredItem[];
+  picked: Set<string>;
+  onToggle: (id: string) => void;
+  onSelectAll: () => void;
+  onClearAll: () => void;
+  onBack: () => void;
+}) {
+  return (
+    <div className="space-y-3 rounded border border-white/10 bg-black/20 p-3">
+      <div className="flex items-baseline justify-between gap-3">
+        <p className="text-xs text-white/55">
+          {items.length} item{items.length === 1 ? "" : "s"} discovered ·{" "}
+          {picked.size} selected
+        </p>
+        <div className="flex items-center gap-2 text-[11px]">
+          <button
+            type="button"
+            onClick={onBack}
+            className="text-white/45 hover:text-white"
+          >
+            ← Back
+          </button>
+          <button
+            type="button"
+            onClick={onSelectAll}
+            className="text-white/55 hover:text-aqua"
+          >
+            Select all
+          </button>
+          <button
+            type="button"
+            onClick={onClearAll}
+            className="text-white/55 hover:text-coral"
+          >
+            Clear
+          </button>
+        </div>
+      </div>
+      {items.length === 0 ? (
+        <p className="text-sm text-white/55">
+          The engine returned no items for these settings. Go back and
+          adjust the config or credentials.
+        </p>
+      ) : (
+        <ul className="max-h-72 space-y-1 overflow-y-auto pr-1 text-sm">
+          {items.map((item) => (
+            <li key={item.id} className="flex items-start gap-2">
+              <input
+                id={`pick-${item.id}`}
+                type="checkbox"
+                checked={picked.has(item.id)}
+                onChange={() => onToggle(item.id)}
+                className="mt-1"
+              />
+              <label
+                htmlFor={`pick-${item.id}`}
+                className="flex-1 cursor-pointer"
+              >
+                <div className="text-white/85">{item.name || item.id}</div>
+                {(item.hint || item.kind) && (
+                  <div className="text-[11px] text-white/40">
+                    {item.kind}
+                    {item.kind && item.hint ? " · " : ""}
+                    {item.hint}
+                  </div>
+                )}
+              </label>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+
+// Merge the picked discovered items' ``config_patch`` objects on top
+// of the operator's base config. Arrays concatenate (deduped); scalars
+// are last-write-wins, with the very last write being any explicit
+// value in ``base``.
+function mergeDiscoveredPatches(
+  base: Record<string, unknown>,
+  picks: ApiImporterDiscoveredItem[],
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const item of picks) {
+    for (const [k, v] of Object.entries(item.config_patch)) {
+      const existing = out[k];
+      if (Array.isArray(existing) && Array.isArray(v)) {
+        const merged = [...existing];
+        for (const el of v) {
+          if (!merged.some((x) => deepEqual(x, el))) merged.push(el);
+        }
+        out[k] = merged;
+      } else if (Array.isArray(v)) {
+        out[k] = [...v];
+      } else {
+        out[k] = v;
+      }
+    }
+  }
+  // Operator's explicit base values take final priority.
+  return { ...out, ...base };
+}
+
+
+function deepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== "object" || typeof b !== "object" || !a || !b) return false;
+  try {
+    return JSON.stringify(a) === JSON.stringify(b);
+  } catch {
+    return false;
+  }
 }
 
 

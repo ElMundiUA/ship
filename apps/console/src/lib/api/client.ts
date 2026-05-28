@@ -3263,6 +3263,29 @@ export async function createWorkspaceImporter(
   );
 }
 
+export type ApiImporterDiscoveredItem = {
+  id: string;
+  name: string;
+  kind: string;
+  hint: string | null;
+  config_patch: Record<string, unknown>;
+};
+
+export async function discoverImporterItems(
+  workspaceId: string,
+  body: {
+    type: string;
+    config: Record<string, unknown>;
+    secrets?: Record<string, string>;
+  },
+  token?: string,
+): Promise<ApiImporterDiscoveredItem[]> {
+  return apiFetch<ApiImporterDiscoveredItem[]>(
+    `/v1/workspaces/${workspaceId}/knowledge/importers/discover`,
+    { method: "POST", body, token },
+  );
+}
+
 export async function runWorkspaceImporter(
   workspaceId: string,
   importerId: string,

@@ -438,6 +438,64 @@ async def create_workspace_importer(
     return _coerce_importer(row)
 
 
+class ImporterDiscoverIn(BaseModel):
+    type: str = Field(min_length=1, max_length=120)
+    config: dict[str, Any] = Field(default_factory=dict)
+    secrets: dict[str, str] = Field(default_factory=dict)
+
+
+class ImporterDiscoveredItem(BaseModel):
+    id: str
+    name: str
+    kind: str
+    hint: str | None = None
+    config_patch: dict[str, Any] = Field(default_factory=dict)
+
+
+@router.post(
+    "/importers/discover",
+    response_model=list[ImporterDiscoveredItem],
+)
+async def discover_importer_items(
+    workspace_id: uuid.UUID,
+    payload: ImporterDiscoverIn,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> list[ImporterDiscoveredItem]:
+    """Probe the source with the given config/secrets and return the
+    items the operator can choose from. No DB writes."""
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_MAINTAIN)
+    client = _require_lighthouse_or_503()
+    try:
+        items = await client.discover_importer(
+            workspace_id=workspace_id,
+            type_=payload.type,
+            config=payload.config,
+            secrets=payload.secrets,
+        )
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(
+            status_code=exc.response.status_code,
+            detail=exc.response.text,
+        ) from exc
+    except Exception as exc:
+        logger.warning("lighthouse discover failed", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="lighthouse unavailable",
+        ) from exc
+    return [
+        ImporterDiscoveredItem(
+            id=str(i.get("id") or ""),
+            name=str(i.get("name") or ""),
+            kind=str(i.get("kind") or ""),
+            hint=i.get("hint"),
+            config_patch=dict(i.get("config_patch") or {}),
+        )
+        for i in items
+    ]
+
+
 @router.post(
     "/importers/{importer_id}/run",
     status_code=status.HTTP_202_ACCEPTED,

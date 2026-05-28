@@ -160,6 +160,33 @@ class LighthouseClient:
             resp.raise_for_status()
             return dict(resp.json())
 
+    async def discover_importer(
+        self,
+        *,
+        workspace_id: uuid.UUID | str,
+        type_: str,
+        config: dict[str, Any],
+        secrets: dict[str, str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Probe a source with the given config/secrets and return the
+        items the operator can pick from. No DB writes — secrets stay
+        in memory."""
+        body: dict[str, Any] = {
+            "type": type_,
+            "config": config,
+            "secrets": secrets or {},
+        }
+        async with httpx.AsyncClient(
+            base_url=self._base_url, timeout=httpx.Timeout(30.0, connect=5.0)
+        ) as client:
+            resp = await client.post(
+                "/v1/importers/discover",
+                headers=self._admin_headers(workspace_id),
+                json=body,
+            )
+            resp.raise_for_status()
+            return list(resp.json().get("items", []))
+
     async def run_importer(
         self,
         *,
