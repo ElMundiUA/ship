@@ -684,6 +684,18 @@ async def _apply_pull_request_event(
             workspace_id=repo_row.workspace_id,
             pr_title=title,
         )
+        # Phase 3 (2026-05-28): walk the queue. Find the next ready
+        # ticket in the same project (or the next project if this one
+        # is now empty) and fire ``maybe_dispatch`` so the cascade
+        # picks up without a cron tick or human re-touch. If the queue
+        # is empty the helper writes ``dispatch.queue_idle`` and the
+        # workspace genuinely stops firing dispatches until something
+        # enqueues fresh work.
+        await _dispatch_next_eligible_ticket(
+            session,
+            workspace_id=repo_row.workspace_id,
+            pr_title=title,
+        )
 
     # Same pattern for "closed without merge" — operator abandoned the
     # work, so the linked ticket lands in ``Canceled`` rather than
@@ -1140,6 +1152,256 @@ async def _maybe_complete_project_on_merge(
     except Exception as exc:  # noqa: BLE001 — best-effort, never fail the webhook
         logger.debug(
             "project auto-complete on merge failed ws=%s pr_title=%s err=%s",
+            workspace_id, pr_title, exc,
+        )
+
+
+async def _dispatch_next_eligible_ticket(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    pr_title: str,
+) -> None:
+    """Phase 3 of the FSM event-driven rearchitecture (2026-05-28).
+
+    When a PR merges and its Linear ticket reaches ``Done``, advance
+    the workspace's work queue automatically: find the next ready
+    ticket in the **same** Linear project (epic) and fire
+    ``maybe_dispatch`` so it starts walking the SDLC chain. If the
+    just-merged ticket was the project's last open one, fall back to
+    the **next** project in the workspace (Linear state ``started`` or
+    ``planned``, ordered by ``updatedAt`` desc — newest first, matching
+    Linear's UI). If neither yields a candidate, the queue is empty:
+    write ``dispatch.queue_idle`` and return. No cron will pick this
+    up — the queue stays idle until a human enqueues fresh work or
+    Linear webhooks fire on a state change.
+
+    Discovery shape — keep it cheap because we're inside the PR-merge
+    webhook ack:
+
+    1. Parse the PR title for the ticket ref (same regex the lock
+       release / completion helpers use; PR title is the source of
+       truth for "which ticket merged").
+    2. Resolve the workspace's tracker; pull the merged ticket's
+       snapshot for ``project_id``.
+    3. Same-project pass: list ``Backlog`` tickets under that
+       ``project_id``, sorted by ``createdAt`` ascending. Take the
+       first one and transition to entry stage ``planning``
+       (Backlog → Todo + ``stage:planning`` breadcrumb).
+    4. Next-project pass: ``list_projects(state="started")`` excluding
+       the current id; if empty, try ``state="planned"``. Take the
+       first project, list its ``Backlog`` tickets, take the first.
+    5. If neither pass found a candidate, write
+       ``dispatch.queue_idle`` audit + return.
+    6. For the chosen candidate: ``gateway.transition(ref,
+       to_state="planning")`` then ``maybe_dispatch(... ,
+       trigger_kind="project_next" | "next_epic")``. Both produce the
+       same downstream cascade chain as the operator-driven flow that
+       moved ELS-141 end-to-end on 2026-05-28.
+
+    Failure mode: best-effort. Anything that raises (tracker hiccup,
+    project deleted between merge and lookup, dispatcher gate refusal,
+    …) is logged + swallowed. The PR-merge webhook must still ack
+    GitHub within seconds; queue stalls are recovered next time the
+    operator touches a ticket in Linear.
+
+    Note: an overlay-frozen candidate (``blocked`` /
+    ``needs:clarification`` label) DOES land here — we don't fetch
+    labels ahead of dispatch. The dispatcher's picker overlay-freeze
+    filter catches it cleanly (verified on PAC-21 2026-05-28), at the
+    cost of one ~30-second runner that exits noop. Phase 4 will move
+    the overlay check into the candidate query and skip the wasted
+    runner entirely.
+    """
+    refs = TICKET_REF_PR_TITLE_RE.findall(pr_title or "")
+    if not refs:
+        return
+    merged_ref = refs[0]
+    try:
+        from backend.app.core.config import get_settings as _gs
+        from backend.app.integrations.gateway.tracker import TicketRef as _TR
+        from backend.app.services.dispatcher import maybe_dispatch
+        from backend.app.services.tracker_resolver import (
+            resolve_for_workspace as _resolve,
+        )
+
+        settings = _gs()
+        resolved = await _resolve(
+            session=session, settings=settings, workspace_id=workspace_id
+        )
+        if resolved is None:
+            return
+        gw = resolved.gateway
+        snap_fn = getattr(gw, "get_ticket_snapshot", None)
+        if snap_fn is None:
+            return
+        snap = await snap_fn(
+            _TR(kind=resolved.kind, workspace_hint=None, id=merged_ref)
+        )
+        current_project_id = str((snap or {}).get("project_id") or "")
+        # No project on the just-merged ticket → can't compute "same
+        # epic". Skip; queue stays idle. (Orphan tickets are already
+        # filtered out of the picker upstream.)
+        if not current_project_id:
+            return
+
+        list_in_state = getattr(gw, "list_project_tickets_in_state", None)
+        list_projects = getattr(gw, "list_projects", None)
+        if list_in_state is None or list_projects is None:
+            return
+
+        # 1. Same-project pass.
+        next_ref: str | None = None
+        chosen_via: str = "project_next"
+        chosen_project_id: str = current_project_id
+        try:
+            candidates = await list_in_state(
+                project_id=current_project_id,
+                linear_state_name="Backlog",
+                limit=10,
+            )
+        except Exception as exc:  # noqa: BLE001 — best-effort
+            logger.debug(
+                "project_next: list_in_state(current) failed ws=%s project=%s err=%s",
+                workspace_id, current_project_id, exc,
+            )
+            candidates = []
+        # Filter out the just-merged ticket defensively (shouldn't appear
+        # in Backlog state after the Done transition, but cache lag is
+        # cheap to guard against).
+        candidates = [
+            c for c in candidates if c.get("identifier") != merged_ref
+        ]
+        if candidates:
+            next_ref = str(candidates[0].get("identifier") or "")
+
+        # 2. Next-project pass (only if same-project came up empty).
+        if not next_ref:
+            for probe_state in ("started", "planned"):
+                try:
+                    projects = await list_projects(
+                        state=probe_state, limit=50
+                    )
+                except Exception as exc:  # noqa: BLE001 — best-effort
+                    logger.debug(
+                        "next_epic: list_projects(%s) failed ws=%s err=%s",
+                        probe_state, workspace_id, exc,
+                    )
+                    continue
+                # Skip current; ``list_projects`` orders by ``updatedAt``
+                # desc — most recently touched project wins, mirroring
+                # Linear's own UI sort.
+                for prj in projects:
+                    pid = str(prj.get("id") or "")
+                    if not pid or pid == current_project_id:
+                        continue
+                    try:
+                        prj_candidates = await list_in_state(
+                            project_id=pid,
+                            linear_state_name="Backlog",
+                            limit=5,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.debug(
+                            "next_epic: list_in_state(%s) failed ws=%s err=%s",
+                            pid, workspace_id, exc,
+                        )
+                        continue
+                    if prj_candidates:
+                        next_ref = str(
+                            prj_candidates[0].get("identifier") or ""
+                        )
+                        chosen_via = "next_epic"
+                        chosen_project_id = pid
+                        break
+                if next_ref:
+                    break
+
+        # 3. Queue empty — record + return.
+        if not next_ref:
+            session.add(
+                AuditLog(
+                    workspace_id=workspace_id,
+                    actor_user_id=None,
+                    actor_token_id=None,
+                    action="dispatch.queue_idle",
+                    target_kind="ticket",
+                    target_id=merged_ref,
+                    payload={
+                        "tracker_kind": resolved.kind,
+                        "current_project_id": current_project_id,
+                        "reason": "no_backlog_tickets",
+                    },
+                )
+            )
+            logger.info(
+                "queue idle after merge ws=%s ticket=%s project=%s",
+                workspace_id, merged_ref, current_project_id,
+            )
+            return
+
+        # 4. Move next ticket into entry state + dispatch. Transition
+        # is idempotent: a no-op if the ticket is already at "planning"
+        # because Linear webhook order happens to land its own
+        # state-change first. We pass ``from_state=None`` so the
+        # adapter falls back to adding ``stage:planning`` as the
+        # breadcrumb (the entry stage has no predecessor to retire).
+        next_ref_obj = _TR(
+            kind=resolved.kind, workspace_hint=None, id=next_ref
+        )
+        try:
+            await gw.transition(
+                next_ref_obj, to_state="planning", from_state=None
+            )
+        except Exception as exc:  # noqa: BLE001 — log + try dispatch anyway
+            logger.warning(
+                "project_next transition failed ws=%s ticket=%s err=%s",
+                workspace_id, next_ref, exc,
+            )
+
+        try:
+            result = await maybe_dispatch(
+                session,
+                workspace_id=workspace_id,
+                ticket_ref=next_ref,
+                trigger_kind=chosen_via,
+                fsm_stage="planning",
+                settings=settings,
+            )
+        except Exception as exc:  # noqa: BLE001 — best-effort
+            logger.warning(
+                "project_next maybe_dispatch failed ws=%s ticket=%s err=%s",
+                workspace_id, next_ref, exc,
+            )
+            return
+
+        session.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                actor_user_id=None,
+                actor_token_id=None,
+                action="dispatch.queue_advance",
+                target_kind="ticket",
+                target_id=next_ref,
+                payload={
+                    "tracker_kind": resolved.kind,
+                    "via": chosen_via,
+                    "merged_ticket": merged_ref,
+                    "merged_project_id": current_project_id,
+                    "next_project_id": chosen_project_id,
+                    "maybe_dispatch_fired": result.fired,
+                    "maybe_dispatch_reason": result.reason,
+                },
+            )
+        )
+        logger.info(
+            "queue advance ws=%s merged=%s -> next=%s via=%s fired=%s reason=%s",
+            workspace_id, merged_ref, next_ref,
+            chosen_via, result.fired, result.reason,
+        )
+    except Exception as exc:  # noqa: BLE001 — never fail the webhook ack
+        logger.debug(
+            "project_next dispatch failed ws=%s pr_title=%s err=%s",
             workspace_id, pr_title, exc,
         )
 
