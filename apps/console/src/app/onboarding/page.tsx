@@ -43,11 +43,13 @@ import {
   isApiConfigured,
   listActivatedRepos,
   listAvailableRepos,
+  listGitHubInstallCandidates,
   listIntegrations,
   listWorkspaces,
   type ApiActivatedRepo,
   type ApiAgentSecretStatus,
   type ApiAvailableRepo,
+  type ApiGitHubInstallCandidate,
   type ApiTrackerBinding,
 } from "@/lib/api/client";
 import { cn } from "@/lib/cn";
@@ -89,6 +91,9 @@ const GITHUB_ERRORS: Record<string, string> = {
     "GitHub App env vars are missing on the backend (GITHUB_APP_ID / GITHUB_APP_PRIVATE_KEY / GITHUB_APP_WEBHOOK_SECRET). Ask ops to wire them up and try again.",
   bad_state:
     "Install link expired or was tampered with. Start the install again from this step.",
+  installation_not_found:
+    "That GitHub App install is no longer available from your other workspaces. Install fresh on GitHub instead.",
+  bad_installation: "Pick a valid installation to reuse.",
   unknown: "Couldn't start the install flow. Try again.",
 };
 
@@ -332,6 +337,27 @@ export default async function OnboardingPage({
       // Other errors silently leave the flags at false; the UI then
       // surfaces the standard "not installed" path which is the
       // worst-case-but-safe rendering.
+    }
+  }
+
+  // Sibling-workspace installs the user can reuse without a GitHub
+  // round-trip (ELS-157). Only fetched on the github step when the
+  // target workspace has no install row yet.
+  let githubInstallCandidates: ApiGitHubInstallCandidate[] = [];
+  if (
+    step === "github" &&
+    wsId &&
+    apiConfigured &&
+    !githubAppInstalled
+  ) {
+    try {
+      const candidates = await listGitHubInstallCandidates(
+        wsId,
+        sessionToken ?? undefined,
+      );
+      githubInstallCandidates = candidates.installations;
+    } catch {
+      // Best-effort — the Install button remains the fallback path.
     }
   }
 
@@ -594,6 +620,7 @@ export default async function OnboardingPage({
             error={error}
             githubReason={pick(params.github)}
             installed={githubAppInstalled}
+            linkCandidates={githubInstallCandidates}
           />
         )}
         {step === "repos" && wsId && (
@@ -749,6 +776,7 @@ function GitHubStep({
   error,
   githubReason,
   installed,
+  linkCandidates,
 }: {
   wsId: string;
   error?: string;
@@ -760,6 +788,8 @@ function GitHubStep({
    * connected, leaving operators clicking Install on an installed
    * workspace and confusing themselves about state. */
   installed: boolean;
+  /** Sibling-workspace installs the user can one-click link (ELS-157). */
+  linkCandidates: ApiGitHubInstallCandidate[];
 }) {
   const message = error ? GITHUB_ERRORS[error] ?? error : null;
   // Backend redirects to `?step=repos&github=installed` after a
@@ -845,26 +875,82 @@ function GitHubStep({
           </Link>
         </div>
       ) : (
-        <form
-          action="/api/onboard/github-install"
-          method="POST"
-          className="mt-7 flex flex-wrap items-center gap-3"
-          suppressHydrationWarning
-        >
-          <input
-            type="hidden"
-            name="ws"
-            value={wsId}
+        <>
+          {linkCandidates.length > 0 && (
+            <div className="mt-7 space-y-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-white/55">
+                Already installed elsewhere
+              </p>
+              {linkCandidates.map((candidate) => (
+                <form
+                  key={candidate.installation_id}
+                  action="/api/onboard/github-link"
+                  method="POST"
+                  className="flex flex-wrap items-center gap-3 rounded-xl border border-aqua/30 bg-aqua/[0.06] px-4 py-3"
+                  suppressHydrationWarning
+                >
+                  <input
+                    type="hidden"
+                    name="ws"
+                    value={wsId}
+                    suppressHydrationWarning
+                  />
+                  <input
+                    type="hidden"
+                    name="installation_id"
+                    value={String(candidate.installation_id)}
+                    suppressHydrationWarning
+                  />
+                  <div className="min-w-0 flex-1 text-sm text-white/85">
+                    <span className="font-semibold text-white">
+                      {candidate.account_login ?? "GitHub account"}
+                    </span>
+                    <span className="text-white/55">
+                      {" "}
+                      from workspace{" "}
+                      <span className="font-mono text-aqua/90">
+                        {candidate.source_workspace_slug}
+                      </span>
+                    </span>
+                  </div>
+                  <button
+                    type="submit"
+                    data-testid={`onboarding-link-github-${candidate.installation_id}`}
+                    className="rounded-full border border-aqua/40 bg-aqua/[0.08] px-4 py-2 text-xs font-semibold text-aqua hover:bg-aqua/[0.16]"
+                  >
+                    Use existing installation →
+                  </button>
+                </form>
+              ))}
+            </div>
+          )}
+
+          <form
+            action="/api/onboard/github-install"
+            method="POST"
+            className={cn(
+              "flex flex-wrap items-center gap-3",
+              linkCandidates.length > 0 ? "mt-5" : "mt-7",
+            )}
             suppressHydrationWarning
-          />
-          <button
-            type="submit"
-            data-testid="onboarding-install-github"
-            className="btn-primary"
           >
-            Install Ship on GitHub &rarr;
-          </button>
-        </form>
+            <input
+              type="hidden"
+              name="ws"
+              value={wsId}
+              suppressHydrationWarning
+            />
+            <button
+              type="submit"
+              data-testid="onboarding-install-github"
+              className={linkCandidates.length > 0 ? "btn-secondary" : "btn-primary"}
+            >
+              {linkCandidates.length > 0
+                ? "Install on a different account →"
+                : "Install Ship on GitHub →"}
+            </button>
+          </form>
+        </>
       )}
 
       {!installed && (
