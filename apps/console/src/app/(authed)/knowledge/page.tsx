@@ -8,10 +8,12 @@ import {
   type ApiImporterType,
   type ApiKnowledgeCorpus,
   type ApiWorkspaceImporter,
+  type ApiWorkspaceImporterIntegration,
   ApiHttpError,
   getWorkspaceCorpus,
   listActivatedRepos,
   listImporterTypes,
+  listWorkspaceImporterIntegrations,
   listWorkspaceImporters,
 } from "@/lib/api/client";
 import {
@@ -32,6 +34,7 @@ type LiveData = {
   corpus: ApiKnowledgeCorpus | null;
   importers: ApiWorkspaceImporter[];
   importerTypes: ApiImporterType[];
+  importerIntegrations: ApiWorkspaceImporterIntegration[];
   me: Awaited<ReturnType<typeof getCachedMe>>;
 };
 
@@ -55,7 +58,14 @@ async function load(
   const workspace = pickWorkspace(workspaceRows, resolved);
 
   try {
-    const [repos, me, corpus, importers, importerTypes] = await Promise.all([
+    const [
+      repos,
+      me,
+      corpus,
+      importers,
+      importerTypes,
+      importerIntegrations,
+    ] = await Promise.all([
       listActivatedRepos(workspace.id, token).catch(() => [] as ApiActivatedRepo[]),
       getCachedMe(),
       getWorkspaceCorpus(workspace.id, token).catch(
@@ -67,6 +77,10 @@ async function load(
       ),
       listImporterTypes(workspace.id, token).catch(
         () => [] as ApiImporterType[],
+      ),
+      // Auto-resolvable workspace integrations (GitHub App, Notion / Linear).
+      listWorkspaceImporterIntegrations(workspace.id, token).catch(
+        () => [] as ApiWorkspaceImporterIntegration[],
       ),
     ]);
 
@@ -82,6 +96,7 @@ async function load(
         corpus,
         importers,
         importerTypes,
+        importerIntegrations,
         me,
       },
     };
@@ -114,7 +129,15 @@ export default async function KnowledgeIndexPage({
     );
   }
 
-  const { workspace, repos, corpus, importers, importerTypes, me } = result.data;
+  const {
+    workspace,
+    repos,
+    corpus,
+    importers,
+    importerTypes,
+    importerIntegrations,
+    me,
+  } = result.data;
 
   const scopePill = (
     <ScopePill
@@ -144,6 +167,7 @@ export default async function KnowledgeIndexPage({
           corpus={corpus}
           importers={importers}
           importerTypes={importerTypes}
+          importerIntegrations={importerIntegrations}
         />
       </PageBody>
     </>

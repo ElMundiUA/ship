@@ -24,6 +24,7 @@ import type {
   ApiKnowledgeSearchHit,
   ApiKnowledgeSearchResponse,
   ApiWorkspaceImporter,
+  ApiWorkspaceImporterIntegration,
 } from "@/lib/api/client";
 
 import { ImportersPanel } from "./importers-panel";
@@ -34,6 +35,7 @@ type Props = {
   corpus: ApiKnowledgeCorpus | null;
   importers: ApiWorkspaceImporter[];
   importerTypes: ApiImporterType[];
+  importerIntegrations: ApiWorkspaceImporterIntegration[];
 };
 
 
@@ -42,6 +44,7 @@ export function KnowledgeControlCenter({
   corpus,
   importers,
   importerTypes,
+  importerIntegrations,
 }: Props) {
   const [query, setQuery] = useState("");
   const [searchHits, setSearchHits] = useState<ApiKnowledgeSearchHit[] | null>(null);
@@ -112,6 +115,7 @@ export function KnowledgeControlCenter({
       <ImportersPanel
         importers={importers}
         importerTypes={importerTypes}
+        integrations={importerIntegrations}
       />
 
       {pending && <p className="text-xs text-white/45">Searching…</p>}
