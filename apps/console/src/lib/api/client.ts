@@ -422,6 +422,35 @@ export function startGitHubAppInstall(
   return apiFetch<ApiGitHubInstallStart>(path, { method: "POST", token });
 }
 
+/** Sibling-workspace GitHub App install the user can reuse. */
+export interface ApiGitHubInstallCandidate {
+  installation_id: number;
+  account_login: string | null;
+  source_workspace_id: string;
+  source_workspace_slug: string;
+}
+
+export interface ApiGitHubInstallCandidates {
+  installations: ApiGitHubInstallCandidate[];
+}
+
+export function listGitHubInstallCandidates(
+  workspaceId: string,
+  token?: string,
+): Promise<ApiGitHubInstallCandidates> {
+  const path = `/v1/integrations/github/install/candidates?workspace_id=${encodeURIComponent(workspaceId)}`;
+  return apiFetch<ApiGitHubInstallCandidates>(path, { token });
+}
+
+export function linkGitHubInstallation(
+  workspaceId: string,
+  body: { installation_id: number },
+  token?: string,
+): Promise<{ workspace_id: string; installation_id: number }> {
+  const path = `/v1/integrations/github/install/link?workspace_id=${encodeURIComponent(workspaceId)}`;
+  return apiFetch(path, { method: "POST", token, body: JSON.stringify(body) });
+}
+
 // --- Workspace repos (Day-2 picker) ----------------------------------------
 
 /**

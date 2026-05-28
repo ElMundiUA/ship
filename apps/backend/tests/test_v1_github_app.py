@@ -344,3 +344,263 @@ async def test_webhook_created_event_backfills_account_metadata(
     assert row.account_login == "acme"
     assert row.account_type == "Organization"
     assert row.repository_selection == "selected"
+
+
+@pytest.mark.asyncio
+async def test_install_candidates_empty_without_sibling(
+    v1_client, seed_workspace, github_app_env
+) -> None:
+    _, raw, workspace = seed_workspace
+    headers = {"Authorization": f"Bearer {raw}"}
+    response = await v1_client.get(
+        "/v1/integrations/github/install/candidates",
+        headers=headers,
+        params={"workspace_id": str(workspace.id)},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["installations"] == []
+
+
+@pytest.mark.asyncio
+async def test_install_candidates_lists_sibling_install(
+    v1_client, seed_workspace, db_session, github_app_env
+) -> None:
+    from datetime import datetime, timezone
+
+    from backend.app.db.models.integrations import GitHubInstallation
+    from backend.app.db.models.tenancy import Org, OrgMember, Workspace, WorkspaceMember
+
+    user, raw, ws_a = seed_workspace
+    other_org = Org(slug=f"o-{uuid.uuid4().hex[:6]}", name="x", plan="free")
+    db_session.add(other_org)
+    await db_session.flush()
+    db_session.add(OrgMember(org_id=other_org.id, user_id=user.id, role="org_owner"))
+    ws_b = Workspace(
+        org_id=other_org.id, slug=f"ws-b-{uuid.uuid4().hex[:4]}", name="ws-b"
+    )
+    db_session.add(ws_b)
+    await db_session.flush()
+    db_session.add(
+        WorkspaceMember(workspace_id=ws_b.id, user_id=user.id, role="owner")
+    )
+    db_session.add(
+        GitHubInstallation(
+            workspace_id=ws_a.id,
+            installation_id=424242,
+            account_login="acme",
+            account_type="Organization",
+            installed_at=datetime.now(timezone.utc),
+        )
+    )
+    await db_session.flush()
+
+    headers = {"Authorization": f"Bearer {raw}"}
+    response = await v1_client.get(
+        "/v1/integrations/github/install/candidates",
+        headers=headers,
+        params={"workspace_id": str(ws_b.id)},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert len(body["installations"]) == 1
+    assert body["installations"][0]["installation_id"] == 424242
+    assert body["installations"][0]["account_login"] == "acme"
+    assert body["installations"][0]["source_workspace_slug"] == ws_a.slug
+
+
+@pytest.mark.asyncio
+async def test_install_candidates_excludes_non_admin_sibling(
+    v1_client, seed_workspace, db_session, github_app_env
+) -> None:
+    from datetime import datetime, timezone
+
+    from backend.app.db.models.integrations import GitHubInstallation
+    from backend.app.db.models.tenancy import (
+        Org,
+        OrgMember,
+        User,
+        Workspace,
+        WorkspaceMember,
+    )
+
+    user, raw, ws_a = seed_workspace
+    other_user = User(
+        email=f"other-{uuid.uuid4().hex[:6]}@example.com",
+        display_name="Other",
+    )
+    db_session.add(other_user)
+    await db_session.flush()
+    other_org = Org(slug=f"o-{uuid.uuid4().hex[:6]}", name="x", plan="free")
+    db_session.add(other_org)
+    await db_session.flush()
+    db_session.add(
+        OrgMember(org_id=other_org.id, user_id=other_user.id, role="org_owner")
+    )
+    ws_other = Workspace(
+        org_id=other_org.id, slug=f"ws-other-{uuid.uuid4().hex[:4]}", name="ws-other"
+    )
+    db_session.add(ws_other)
+    await db_session.flush()
+    db_session.add(
+        WorkspaceMember(workspace_id=ws_other.id, user_id=other_user.id, role="owner")
+    )
+    db_session.add(
+        GitHubInstallation(
+            workspace_id=ws_other.id,
+            installation_id=999001,
+            account_login="secret-org",
+            installed_at=datetime.now(timezone.utc),
+        )
+    )
+    other_org_b = Org(slug=f"o-{uuid.uuid4().hex[:6]}", name="y", plan="free")
+    db_session.add(other_org_b)
+    await db_session.flush()
+    db_session.add(
+        OrgMember(org_id=other_org_b.id, user_id=user.id, role="org_owner")
+    )
+    ws_b = Workspace(
+        org_id=other_org_b.id, slug=f"ws-b-{uuid.uuid4().hex[:4]}", name="ws-b"
+    )
+    db_session.add(ws_b)
+    await db_session.flush()
+    db_session.add(
+        WorkspaceMember(workspace_id=ws_b.id, user_id=user.id, role="owner")
+    )
+    await db_session.flush()
+
+    headers = {"Authorization": f"Bearer {raw}"}
+    response = await v1_client.get(
+        "/v1/integrations/github/install/candidates",
+        headers=headers,
+        params={"workspace_id": str(ws_b.id)},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["installations"] == []
+
+
+@pytest.mark.asyncio
+async def test_install_link_creates_row_and_lists_repos(
+    v1_client, seed_workspace, db_session, github_app_env
+) -> None:
+    from datetime import datetime, timezone
+
+    from backend.app.db.models.integrations import GitHubInstallation
+    from backend.app.db.models.tenancy import Org, OrgMember, Workspace, WorkspaceMember
+
+    user, raw, ws_a = seed_workspace
+    other_org = Org(slug=f"o-{uuid.uuid4().hex[:6]}", name="x", plan="free")
+    db_session.add(other_org)
+    await db_session.flush()
+    db_session.add(OrgMember(org_id=other_org.id, user_id=user.id, role="org_owner"))
+    ws_b = Workspace(
+        org_id=other_org.id, slug=f"ws-b-{uuid.uuid4().hex[:4]}", name="ws-b"
+    )
+    db_session.add(ws_b)
+    await db_session.flush()
+    db_session.add(
+        WorkspaceMember(workspace_id=ws_b.id, user_id=user.id, role="owner")
+    )
+    db_session.add(
+        GitHubInstallation(
+            workspace_id=ws_a.id,
+            installation_id=777888,
+            account_login="acme",
+            account_type="Organization",
+            installed_at=datetime.now(timezone.utc),
+        )
+    )
+    await db_session.flush()
+
+    headers = {"Authorization": f"Bearer {raw}"}
+    link = await v1_client.post(
+        "/v1/integrations/github/install/link",
+        headers=headers,
+        params={"workspace_id": str(ws_b.id)},
+        json={"installation_id": 777888},
+    )
+    assert link.status_code == 200, link.text
+    body = link.json()
+    assert body["workspace_id"] == str(ws_b.id)
+    assert body["installation_id"] == 777888
+
+    rows = (
+        await db_session.execute(
+            select(GitHubInstallation).where(
+                GitHubInstallation.installation_id == 777888
+            )
+        )
+    ).scalars().all()
+    assert len(rows) == 2
+    assert {row.workspace_id for row in rows} == {ws_a.id, ws_b.id}
+
+
+@pytest.mark.asyncio
+async def test_install_link_idempotent(
+    v1_client, seed_workspace, db_session, github_app_env
+) -> None:
+    from datetime import datetime, timezone
+
+    from backend.app.db.models.integrations import GitHubInstallation
+    from backend.app.db.models.tenancy import Org, OrgMember, Workspace, WorkspaceMember
+
+    user, raw, ws_a = seed_workspace
+    other_org = Org(slug=f"o-{uuid.uuid4().hex[:6]}", name="x", plan="free")
+    db_session.add(other_org)
+    await db_session.flush()
+    db_session.add(OrgMember(org_id=other_org.id, user_id=user.id, role="org_owner"))
+    ws_b = Workspace(
+        org_id=other_org.id, slug=f"ws-b-{uuid.uuid4().hex[:4]}", name="ws-b"
+    )
+    db_session.add(ws_b)
+    await db_session.flush()
+    db_session.add(
+        WorkspaceMember(workspace_id=ws_b.id, user_id=user.id, role="owner")
+    )
+    db_session.add(
+        GitHubInstallation(
+            workspace_id=ws_a.id,
+            installation_id=333444,
+            installed_at=datetime.now(timezone.utc),
+        )
+    )
+    db_session.add(
+        GitHubInstallation(
+            workspace_id=ws_b.id,
+            installation_id=333444,
+            installed_at=datetime.now(timezone.utc),
+        )
+    )
+    await db_session.flush()
+
+    headers = {"Authorization": f"Bearer {raw}"}
+    response = await v1_client.post(
+        "/v1/integrations/github/install/link",
+        headers=headers,
+        params={"workspace_id": str(ws_b.id)},
+        json={"installation_id": 333444},
+    )
+    assert response.status_code == 200, response.text
+    rows = (
+        await db_session.execute(
+            select(GitHubInstallation).where(
+                GitHubInstallation.workspace_id == ws_b.id,
+                GitHubInstallation.installation_id == 333444,
+            )
+        )
+    ).scalars().all()
+    assert len(rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_install_link_404_for_unknown_installation(
+    v1_client, seed_workspace, github_app_env
+) -> None:
+    _, raw, workspace = seed_workspace
+    headers = {"Authorization": f"Bearer {raw}"}
+    response = await v1_client.post(
+        "/v1/integrations/github/install/link",
+        headers=headers,
+        params={"workspace_id": str(workspace.id)},
+        json={"installation_id": 123456789},
+    )
+    assert response.status_code == 404

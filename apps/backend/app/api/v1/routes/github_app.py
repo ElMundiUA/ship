@@ -39,7 +39,7 @@ from backend.app.core.config import Settings, get_settings
 from backend.app.db.models.integrations import GitHubInstallation, WorkspaceRepo
 from backend.app.db.models.lanes import Routine, RoutineRun
 from backend.app.db.models.pipelines import PullRequest, WorkflowRun
-from backend.app.db.models.tenancy import AuditLog
+from backend.app.db.models.tenancy import AuditLog, Workspace, WorkspaceMember
 from backend.app.db.session import get_session
 from backend.app.integrations.github.app_auth import (
     GitHubAppMisconfigured,
@@ -80,6 +80,23 @@ class InstallationOut(BaseModel):
     account_type: str | None
     repository_selection: str | None
     installed_at: datetime | None
+
+
+class InstallCandidateOut(BaseModel):
+    """Sibling-workspace GitHub App install the caller can reuse."""
+
+    installation_id: int
+    account_login: str | None
+    source_workspace_id: uuid.UUID
+    source_workspace_slug: str
+
+
+class InstallCandidatesResponse(BaseModel):
+    installations: list[InstallCandidateOut]
+
+
+class InstallLinkRequest(BaseModel):
+    installation_id: int
 
 
 def _row_to_out(row: GitHubInstallation) -> InstallationOut:
@@ -127,6 +144,58 @@ async def install_start(
         install_url=install_url,
         state=state,
     )
+
+
+@router.get(
+    "/integrations/github/install/candidates",
+    response_model=InstallCandidatesResponse,
+)
+async def install_candidates(
+    workspace_id: uuid.UUID = Query(..., description="Workspace to attach an install to"),
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> InstallCandidatesResponse:
+    """List GitHub App installs from sibling workspaces the caller admins.
+
+    Used by onboarding Step 1 when the target workspace has no
+    ``GitHubInstallation`` row but the user already wired the App on
+    another workspace they control — avoids the GitHub configure
+    dead-end where Save stays disabled on an already-installed account.
+    """
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+    candidates = await _list_linkable_install_candidates(
+        session,
+        workspace_id=workspace_id,
+        user_id=auth.user.id,
+    )
+    return InstallCandidatesResponse(installations=candidates)
+
+
+@router.post(
+    "/integrations/github/install/link",
+    response_model=InstallationOut,
+)
+async def install_link(
+    body: InstallLinkRequest,
+    workspace_id: uuid.UUID = Query(..., description="Workspace to attach the install to"),
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> InstallationOut:
+    """Bind an existing GitHub App install to this workspace without GitHub.
+
+    Mirrors the ``install_callback`` share path: creates a
+    ``(workspace_id, installation_id)`` row when the caller admins
+    both the target workspace and a sibling workspace that already
+    holds the install.
+    """
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+    row = await _link_installation_from_sibling(
+        session,
+        workspace_id=workspace_id,
+        user_id=auth.user.id,
+        installation_id=body.installation_id,
+    )
+    return _row_to_out(row)
 
 
 @router.get("/integrations/github/install/callback")
@@ -370,6 +439,139 @@ async def github_webhook(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+async def _list_linkable_install_candidates(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> list[InstallCandidateOut]:
+    """Sibling installs the caller can one-click link into ``workspace_id``."""
+    target_has = (
+        await session.execute(
+            select(GitHubInstallation.id)
+            .where(GitHubInstallation.workspace_id == workspace_id)
+            .limit(1)
+        )
+    ).first()
+    if target_has is not None:
+        return []
+
+    admin_ws_subq = (
+        select(WorkspaceMember.workspace_id)
+        .where(
+            WorkspaceMember.user_id == user_id,
+            WorkspaceMember.role.in_(ROLES_ADMIN),
+            WorkspaceMember.workspace_id != workspace_id,
+        )
+        .scalar_subquery()
+    )
+    rows = (
+        await session.execute(
+            select(GitHubInstallation, Workspace.slug)
+            .join(Workspace, GitHubInstallation.workspace_id == Workspace.id)
+            .where(
+                GitHubInstallation.workspace_id.in_(admin_ws_subq),
+                GitHubInstallation.suspended_at.is_(None),
+            )
+            .order_by(GitHubInstallation.updated_at.desc())
+        )
+    ).all()
+
+    seen: set[int] = set()
+    out: list[InstallCandidateOut] = []
+    for install_row, source_slug in rows:
+        if install_row.installation_id in seen:
+            continue
+        seen.add(install_row.installation_id)
+        out.append(
+            InstallCandidateOut(
+                installation_id=install_row.installation_id,
+                account_login=install_row.account_login,
+                source_workspace_id=install_row.workspace_id,
+                source_workspace_slug=source_slug,
+            )
+        )
+    return out
+
+
+async def _link_installation_from_sibling(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    user_id: uuid.UUID,
+    installation_id: int,
+) -> GitHubInstallation:
+    """Create a workspace install row by copying a sibling the caller admins."""
+    existing = (
+        await session.execute(
+            select(GitHubInstallation).where(
+                GitHubInstallation.workspace_id == workspace_id,
+                GitHubInstallation.installation_id == installation_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return existing
+
+    admin_ws_subq = (
+        select(WorkspaceMember.workspace_id)
+        .where(
+            WorkspaceMember.user_id == user_id,
+            WorkspaceMember.role.in_(ROLES_ADMIN),
+            WorkspaceMember.workspace_id != workspace_id,
+        )
+        .scalar_subquery()
+    )
+    source = (
+        await session.execute(
+            select(GitHubInstallation)
+            .where(
+                GitHubInstallation.installation_id == installation_id,
+                GitHubInstallation.workspace_id.in_(admin_ws_subq),
+                GitHubInstallation.suspended_at.is_(None),
+            )
+            .order_by(GitHubInstallation.updated_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if source is None:
+        raise HTTPException(
+            status_code=404,
+            detail="installation not found in a workspace you admin",
+        )
+
+    now = datetime.now(timezone.utc)
+    row = GitHubInstallation(
+        workspace_id=workspace_id,
+        installation_id=installation_id,
+        account_id=source.account_id,
+        account_login=source.account_login,
+        account_type=source.account_type,
+        repository_selection=source.repository_selection,
+        settings=dict(source.settings or {}),
+        installed_at=now,
+    )
+    session.add(row)
+    session.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=user_id,
+            actor_token_id=None,
+            action="github.install.share",
+            target_kind="github_installation",
+            target_id=str(installation_id),
+            payload={
+                "installation_id": installation_id,
+                "source_workspace_id": str(source.workspace_id),
+                "via": "install_link",
+            },
+        )
+    )
+    await session.flush()
+    invalidate_installation_token_cache(installation_id)
+    return row
 
 
 def _console_onboarding_url(settings: Settings, *, step: str, reason: str) -> str:
@@ -2228,4 +2430,11 @@ async def _reconcile_routine_run_from_webhook(
     routine_run.updated_at = now
 
 
-__all__ = ["router", "InstallStartResponse", "InstallationOut"]
+__all__ = [
+    "router",
+    "InstallStartResponse",
+    "InstallationOut",
+    "InstallCandidateOut",
+    "InstallCandidatesResponse",
+    "InstallLinkRequest",
+]
