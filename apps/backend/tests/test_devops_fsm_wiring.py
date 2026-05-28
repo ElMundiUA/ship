@@ -94,10 +94,18 @@ def test_devops_linear_state_and_provisioned() -> None:
     assert "devops_implementation" in SHIP_FSM_STAGES
 
 
-def test_self_heal_scans_devops_stage() -> None:
-    from backend.app.services.fsm_self_heal import SCAN_STAGES
+def test_devops_implementation_in_fsm_stage_order() -> None:
+    # Phase 2 of the FSM rearchitecture (2026-05-28) deleted the
+    # 15-min self-heal scan that used to enforce stage coverage from
+    # the dispatcher side. The reachability pin moved to
+    # ``DEVOPS_STAGE_ORDER`` — what the picker actually walks via
+    # labels — so the devops chain stays observable without
+    # resurrecting the cron.
+    from backend.app.services.linear_provisioner import (
+        DEVOPS_STAGE_ORDER,
+    )
 
-    assert "devops_implementation" in SCAN_STAGES
+    assert "devops_implementation" in DEVOPS_STAGE_ORDER
 
 
 def test_devops_in_default_bundle() -> None:

@@ -596,18 +596,18 @@ def register_all() -> None:
 
     register_workspace_ticks()
 
-    # FSM self-heal backstop (askslayer/PAC-32..36 2026-05-17).
-    # Event-driven dispatch via tracker_poller fires only on state
-    # changes; a maybe_dispatch dropped on the floor (lock,
-    # refire-cap, transient API 5xx) silently strands the ticket
-    # until something else moves it. Every 15 minutes this cron
-    # walks each workspace's Linear FSM filter and re-fires any
-    # ticket without a recent dispatch.
-    register_cron(
-        fn=_fsm_self_heal_scan_tick,
-        cron_expr="*/15 * * * *",  # every 15 min
-        job_id="fsm_self_heal_scan",
-    )
+    # FSM self-heal 15-min backstop DELETED 2026-05-28 (Phase 2 of
+    # the event-driven rearchitecture). Reasoning: Phase 1 (PR #341)
+    # made every ``outcome=blocked`` add a Linear ``blocked`` label
+    # that the picker drops via OVERLAY_FREEZE_LABEL_PREFIXES. The
+    # original purpose of this backstop — "re-fire tickets that the
+    # event path missed" — degenerated into "re-fire blocked tickets
+    # every 15 minutes, watch the picker refuse them, repeat". Linear
+    # state transitions still fan out via tracker_poller → maybe_dispatch
+    # on every webhook delivery; that's the load-bearing event source
+    # now. A daily safety scan can come back later if missed-event
+    # symptoms reappear, but Phase 1 verification showed zero such
+    # symptoms in 20+ minutes of production observation.
 
     register_cron(
         fn=_inbox_stale_sweep_tick,
@@ -678,16 +678,6 @@ async def _inbox_stale_sweep_tick() -> None:
     async with sessionmaker() as session:
         await sweep_stale_inbox_items(session)
         await session.commit()
-
-
-@cron_with_lock(lock=CronLockId.FSM_SCAN_BACKSTOP, name="fsm_self_heal_scan")
-async def _fsm_self_heal_scan_tick() -> None:
-    """Periodic backstop — re-fire dispatch on tickets the
-    event-driven path missed. See :mod:`fsm_self_heal` for the
-    detailed contract."""
-    from backend.app.services.fsm_self_heal import scan_eligible_tickets
-
-    await scan_eligible_tickets()
 
 
 @cron_with_lock(

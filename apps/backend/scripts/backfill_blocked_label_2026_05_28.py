@@ -37,9 +37,11 @@ import sys
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.app.core.config import get_settings
 from backend.app.db.models.tenancy import Workspace
-from backend.app.db.session import session_factory
-from backend.app.services.tracker_resolver import resolve_tracker
+from backend.app.db.session import get_sessionmaker
+from backend.app.integrations.gateway.tracker import TicketRef
+from backend.app.services.tracker_resolver import resolve_for_workspace
 
 
 log = logging.getLogger("backfill.blocked")
@@ -92,7 +94,11 @@ async def _add_blocked_label(
     ``no_adapter`` / ``no_tracker`` / ``error:<msg>``.
     """
     try:
-        resolved = await resolve_tracker(session, workspace_id=workspace.id)
+        resolved = await resolve_for_workspace(
+            session=session,
+            settings=get_settings(),
+            workspace_id=workspace.id,
+        )
     except Exception as exc:  # noqa: BLE001
         return f"error:resolve:{exc}"
     if resolved is None:
@@ -100,9 +106,7 @@ async def _add_blocked_label(
     add_signal = getattr(resolved.gateway, "add_signal_label", None)
     if add_signal is None:
         return "no_adapter"
-    from backend.app.services.tracker_resolver import TicketRef
-
-    ref = TicketRef(kind=resolved.kind, id=ticket_ref)
+    ref = TicketRef(kind=resolved.kind, workspace_hint=None, id=ticket_ref)
     try:
         await add_signal(ref, key="blocked")
         return "added"
@@ -117,7 +121,7 @@ async def _add_blocked_label(
 
 
 async def run(dry_run: bool) -> int:
-    async with session_factory() as session:
+    async with get_sessionmaker()() as session:
         rows = (await session.execute(_CANDIDATES_SQL)).all()
         if not rows:
             print("no stuck tickets — nothing to backfill")
