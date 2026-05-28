@@ -448,7 +448,7 @@ export function linkGitHubInstallation(
   token?: string,
 ): Promise<{ workspace_id: string; installation_id: number }> {
   const path = `/v1/integrations/github/install/link?workspace_id=${encodeURIComponent(workspaceId)}`;
-  return apiFetch(path, { method: "POST", token, body: JSON.stringify(body) });
+  return apiFetch(path, { method: "POST", token, body });
 }
 
 // --- Workspace repos (Day-2 picker) ----------------------------------------
