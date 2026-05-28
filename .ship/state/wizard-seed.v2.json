@@ -12,13 +12,14 @@
     "tech-architect",
     "qa-architect",
     "developer",
+    "devops",
     "qa-engineer",
     "qa-automation",
     "reviewer"
   ],
-  "bundle_version": "3b1534b47fbc",
+  "bundle_version": "ac1f6d16d4ce",
   "knowledge": [],
-  "seeded_at": "2026-05-15T08:52:25Z",
+  "seeded_at": "2026-05-28T09:48:46Z",
   "ship_version": "unknown",
   "tracker_kind": "linear"
 }
