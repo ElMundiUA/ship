@@ -125,11 +125,15 @@ async def _weekly_audit_tick() -> None:
     )
 
 
-@cron_with_lock(lock=CronLockId.WORKSPACE_SELF_HEAL, name="self_heal")
-async def _self_heal_tick() -> None:
-    await _dispatch_bundle_for_every_workspace(
-        bundle_id="self-heal", trigger_kind="self_heal_tick"
-    )
+# self_heal hourly workspace bundle DELETED 2026-05-28 (Phase 2 of
+# the event-driven rearchitecture). The bundle was the largest cron-
+# clock source by event volume — fanning out one dispatch per
+# workspace every top-of-hour, regardless of whether anything in the
+# workspace had changed. With the Phase 1 label-driven freeze in
+# place, stuck tickets opt themselves out; with daily-digest +
+# weekly-audit still firing, operators still get the rollup view.
+# Hourly self-heal was pure cron-spam against tickets the dispatcher
+# already knows about.
 
 
 # ---------------------------------------------------------------------------
@@ -138,7 +142,7 @@ async def _self_heal_tick() -> None:
 
 
 def register_all() -> None:
-    """Register the three workspace ticks against the cron scheduler.
+    """Register the workspace digest ticks against the cron scheduler.
 
     Called from ``cron_jobs.register_all`` during FastAPI lifespan.
     Cron expressions are hard-coded for now; if operators need to
@@ -153,11 +157,6 @@ def register_all() -> None:
         fn=_weekly_audit_tick,
         cron_expr="0 9 * * 1",  # 09:00 UTC Monday
         job_id="weekly_audit",
-    )
-    register_cron(
-        fn=_self_heal_tick,
-        cron_expr="0 * * * *",  # top of every hour
-        job_id="self_heal",
     )
 
 

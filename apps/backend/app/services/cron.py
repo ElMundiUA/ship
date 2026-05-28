@@ -106,16 +106,11 @@ class CronLockId(IntEnum):
     # replaced the legacy reviewer chain.
     WORKSPACE_DAILY_DIGEST = 1013
     WORKSPACE_WEEKLY_AUDIT = 1014
-    WORKSPACE_SELF_HEAL = 1015
-    # FSM backstop scan (askslayer/PAC-32..36 2026-05-17). Event-
-    # driven dispatch via tracker_poller fires on state changes; if
-    # a maybe_dispatch was dropped (lock, refire-cap, transient
-    # error), the ticket sits idle until something else moves its
-    # state. This scan walks the Linear FSM filter per stage every
-    # 15 min and re-fires any ticket whose last dispatch is older
-    # than 20 min. Conservative cadence + idempotent dispatch (same
-    # lock as the poller's path) makes the overlap safe.
-    FSM_SCAN_BACKSTOP = 1016
+    # WORKSPACE_SELF_HEAL (1015) and FSM_SCAN_BACKSTOP (1016) lived
+    # here until Phase 2 of the FSM event-driven rearchitecture
+    # (2026-05-28). Both crons were deleted; the lock ids stay
+    # reserved (don't reuse the numbers — old rows in cron_leases
+    # may still reference them).
     # Inbox stale-row dismiss (ELS-144) — rows with ``stale_after`` past
     # ``created_at + stale_after`` and ``status=new`` become dismissed.
     INBOX_STALE_SWEEP = 1017
