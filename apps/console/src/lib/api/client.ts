@@ -3179,6 +3179,101 @@ export async function getWorkspaceCorpus(
   );
 }
 
+// ---------------------------------------------------------------------------
+// Workspace importers — Lighthouse admin surface proxied through Ship.
+// ---------------------------------------------------------------------------
+
+export type ApiImporterType = {
+  type: string;
+  display_name: string;
+  description: string;
+  config_schema: {
+    type?: string;
+    required?: string[];
+    properties?: Record<
+      string,
+      {
+        type?: string;
+        title?: string;
+        description?: string;
+        format?: string;
+        default?: unknown;
+        enum?: string[];
+      }
+    >;
+  };
+  secret_keys: string[];
+  supports_discovery: boolean;
+  discovery_required: string[];
+};
+
+export type ApiWorkspaceImporter = {
+  id: string;
+  type: string;
+  name: string;
+  description: string | null;
+  recipe: string;
+  config: Record<string, unknown>;
+  has_secrets: boolean;
+  enabled: boolean;
+  status: string;
+  last_run_at: string | null;
+  last_error: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+export type ApiImporterCreateBody = {
+  type: string;
+  name: string;
+  description?: string;
+  recipe?: string;
+  config: Record<string, unknown>;
+  secrets?: Record<string, string>;
+};
+
+export async function listImporterTypes(
+  workspaceId: string,
+  token?: string,
+): Promise<ApiImporterType[]> {
+  return apiFetch<ApiImporterType[]>(
+    `/v1/workspaces/${workspaceId}/knowledge/importers/types`,
+    { token },
+  );
+}
+
+export async function listWorkspaceImporters(
+  workspaceId: string,
+  token?: string,
+): Promise<ApiWorkspaceImporter[]> {
+  return apiFetch<ApiWorkspaceImporter[]>(
+    `/v1/workspaces/${workspaceId}/knowledge/importers`,
+    { token },
+  );
+}
+
+export async function createWorkspaceImporter(
+  workspaceId: string,
+  body: ApiImporterCreateBody,
+  token?: string,
+): Promise<ApiWorkspaceImporter> {
+  return apiFetch<ApiWorkspaceImporter>(
+    `/v1/workspaces/${workspaceId}/knowledge/importers`,
+    { method: "POST", body, token },
+  );
+}
+
+export async function runWorkspaceImporter(
+  workspaceId: string,
+  importerId: string,
+  token?: string,
+): Promise<{ run_id?: string; importer_id?: string; status?: string }> {
+  return apiFetch<{ run_id?: string; importer_id?: string; status?: string }>(
+    `/v1/workspaces/${workspaceId}/knowledge/importers/${importerId}/run`,
+    { method: "POST", token },
+  );
+}
+
 export type ApiClaimSourceLink = {
   source_item_id: string | null;
   external_url: string | null;

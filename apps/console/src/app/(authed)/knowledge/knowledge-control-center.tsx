@@ -19,19 +19,30 @@
 import { useState, useTransition } from "react";
 
 import type {
+  ApiImporterType,
   ApiKnowledgeCorpus,
   ApiKnowledgeSearchHit,
   ApiKnowledgeSearchResponse,
+  ApiWorkspaceImporter,
 } from "@/lib/api/client";
+
+import { ImportersPanel } from "./importers-panel";
 
 
 type Props = {
   workspace: { id?: string; slug: string; name: string };
   corpus: ApiKnowledgeCorpus | null;
+  importers: ApiWorkspaceImporter[];
+  importerTypes: ApiImporterType[];
 };
 
 
-export function KnowledgeControlCenter({ workspace, corpus }: Props) {
+export function KnowledgeControlCenter({
+  workspace,
+  corpus,
+  importers,
+  importerTypes,
+}: Props) {
   const [query, setQuery] = useState("");
   const [searchHits, setSearchHits] = useState<ApiKnowledgeSearchHit[] | null>(null);
   const [searchedFor, setSearchedFor] = useState("");
@@ -97,6 +108,11 @@ export function KnowledgeControlCenter({ workspace, corpus }: Props) {
       />
 
       <CorpusSummary corpus={corpus} />
+
+      <ImportersPanel
+        importers={importers}
+        importerTypes={importerTypes}
+      />
 
       {pending && <p className="text-xs text-white/45">Searching…</p>}
       {searchError && <p className="text-sm text-coral">{searchError}</p>}

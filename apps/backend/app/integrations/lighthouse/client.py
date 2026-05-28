@@ -89,17 +89,105 @@ class LighthouseClient:
         self, *, workspace_id: uuid.UUID | str
     ) -> dict[str, Any]:
         """Idempotently provision the per-workspace S3 importer."""
-        headers = {"X-Workspace": str(workspace_id)}
-        if self._admin_token:
-            headers["Authorization"] = f"Bearer {self._admin_token}"
         async with httpx.AsyncClient(
             base_url=self._base_url, timeout=_TIMEOUT
         ) as client:
             resp = await client.post(
-                "/v1/importers/provision/s3", headers=headers
+                "/v1/importers/provision/s3",
+                headers=self._admin_headers(workspace_id),
             )
             resp.raise_for_status()
             return dict(resp.json())
+
+    # ---- importer CRUD (operator-driven, e.g. "add import source" UI) ----
+
+    async def list_importer_types(self) -> list[dict[str, Any]]:
+        """Return every importer type the engine knows about plus its
+        ``config_schema`` and ``secret_keys`` — used to drive the
+        "Add import source" form."""
+        async with httpx.AsyncClient(
+            base_url=self._base_url, timeout=_TIMEOUT
+        ) as client:
+            resp = await client.get(
+                "/v1/importers/types", headers=self._admin_headers()
+            )
+            resp.raise_for_status()
+            return list(resp.json())
+
+    async def list_workspace_importers(
+        self, *, workspace_id: uuid.UUID | str
+    ) -> list[dict[str, Any]]:
+        """List every importer registered against the workspace."""
+        async with httpx.AsyncClient(
+            base_url=self._base_url, timeout=_TIMEOUT
+        ) as client:
+            resp = await client.get(
+                "/v1/importers/",
+                headers=self._admin_headers(workspace_id),
+            )
+            resp.raise_for_status()
+            return list(resp.json())
+
+    async def create_importer(
+        self,
+        *,
+        workspace_id: uuid.UUID | str,
+        type_: str,
+        name: str,
+        recipe: str,
+        config: dict[str, Any],
+        secrets: dict[str, str] | None = None,
+        description: str | None = None,
+    ) -> dict[str, Any]:
+        """Create an importer under the workspace."""
+        body: dict[str, Any] = {
+            "type": type_,
+            "name": name,
+            "recipe": recipe,
+            "config": config,
+            "secrets": secrets or {},
+        }
+        if description is not None:
+            body["description"] = description
+        async with httpx.AsyncClient(
+            base_url=self._base_url, timeout=_TIMEOUT
+        ) as client:
+            resp = await client.post(
+                "/v1/importers/",
+                headers=self._admin_headers(workspace_id),
+                json=body,
+            )
+            resp.raise_for_status()
+            return dict(resp.json())
+
+    async def run_importer(
+        self,
+        *,
+        workspace_id: uuid.UUID | str,
+        importer_id: uuid.UUID | str,
+    ) -> dict[str, Any]:
+        """Trigger an on-demand run of the importer."""
+        async with httpx.AsyncClient(
+            base_url=self._base_url, timeout=_TIMEOUT
+        ) as client:
+            resp = await client.post(
+                f"/v1/importers/{importer_id}/run",
+                headers=self._admin_headers(workspace_id),
+            )
+            resp.raise_for_status()
+            return dict(resp.json())
+
+    # ---- helpers ----
+
+    def _admin_headers(
+        self, workspace_id: uuid.UUID | str | None = None
+    ) -> dict[str, str]:
+        headers: dict[str, str] = {}
+        if workspace_id is not None:
+            headers["X-Workspace"] = str(workspace_id)
+        if self._admin_token:
+            headers["Authorization"] = f"Bearer {self._admin_token}"
+        return headers
 
 
 def build_lighthouse_client(settings: "Settings") -> LighthouseClient | None:

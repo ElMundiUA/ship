@@ -1,34 +1,33 @@
 "use server";
 
 /**
- * Server actions for `/knowledge`.
+ * Server actions for /knowledge importer management.
  *
- * Bucket creation is no longer a user surface — workspaces ship with
- * a fixed set of buckets and the harvester pipeline routes new content
- * into them. Operators can archive/restore buckets and connect
- * external import sources; the import-source feed lands in
- * ``Improvement(kind='knowledge_note')`` rows for the harvester to
- * pick up.
+ * Operator-driven: add a Lighthouse importer scoped to the workspace
+ * (sitemap, RSS, URL list, GitHub repo, etc.), trigger an on-demand
+ * run, and revalidate the page so the new row shows up.
  */
+
+import { revalidatePath } from "next/cache";
 
 import {
   ApiHttpError,
-  archiveBucket,
-  archiveKnowledgeImportSource,
-  createKnowledgeImportSource,
+  type ApiImporterCreateBody,
+  type ApiWorkspaceImporter,
+  createWorkspaceImporter,
   listWorkspaces,
-  restoreBucket,
-  syncKnowledgeImportSource,
+  runWorkspaceImporter,
 } from "@/lib/api/client";
 import { getSessionToken } from "@/lib/api/session";
 
-export type ArchiveResult =
-  | { ok: true; slug: string }
+export type CreateImporterResult =
+  | { ok: true; importer: ApiWorkspaceImporter }
   | { ok: false; message: string; status?: number };
 
-export type ImportSourceResult =
-  | { ok: true; sourceId: string; synced: boolean; stats?: Record<string, unknown>; syncError?: string }
+export type RunImporterResult =
+  | { ok: true; importerId: string }
   | { ok: false; message: string; status?: number };
+
 
 async function requireToken(): Promise<string> {
   const token = await getSessionToken();
@@ -38,6 +37,7 @@ async function requireToken(): Promise<string> {
   return token;
 }
 
+
 async function requireWorkspaceId(token: string): Promise<string> {
   const wss = await listWorkspaces(token);
   if (wss.length === 0) {
@@ -46,9 +46,12 @@ async function requireWorkspaceId(token: string): Promise<string> {
   return wss[0].id;
 }
 
-export async function archiveBucketAction(slug: string): Promise<ArchiveResult> {
-  const cleanSlug = slug.trim();
-  if (!cleanSlug) return { ok: false, message: "Bucket slug is required." };
+
+export async function createImporterAction(
+  body: ApiImporterCreateBody,
+): Promise<CreateImporterResult> {
+  if (!body.type?.trim()) return { ok: false, message: "Type is required." };
+  if (!body.name?.trim()) return { ok: false, message: "Name is required." };
 
   let token: string;
   let workspaceId: string;
@@ -60,16 +63,19 @@ export async function archiveBucketAction(slug: string): Promise<ArchiveResult> 
   }
 
   try {
-    await archiveBucket(workspaceId, cleanSlug, { token });
-    return { ok: true, slug: cleanSlug };
+    const importer = await createWorkspaceImporter(workspaceId, body, token);
+    revalidatePath("/knowledge");
+    return { ok: true, importer };
   } catch (err) {
-    return bucketActionError(err);
+    return importerActionError(err);
   }
 }
 
-export async function restoreBucketAction(slug: string): Promise<ArchiveResult> {
-  const cleanSlug = slug.trim();
-  if (!cleanSlug) return { ok: false, message: "Bucket slug is required." };
+
+export async function runImporterAction(
+  importerId: string,
+): Promise<RunImporterResult> {
+  if (!importerId) return { ok: false, message: "Importer id is required." };
 
   let token: string;
   let workspaceId: string;
@@ -81,98 +87,22 @@ export async function restoreBucketAction(slug: string): Promise<ArchiveResult> 
   }
 
   try {
-    await restoreBucket(workspaceId, cleanSlug, { token });
-    return { ok: true, slug: cleanSlug };
+    await runWorkspaceImporter(workspaceId, importerId, token);
+    revalidatePath("/knowledge");
+    return { ok: true, importerId };
   } catch (err) {
-    return bucketActionError(err);
+    return importerActionError(err) as RunImporterResult;
   }
 }
 
-export async function createImportSourceAction(input: {
-  kind: "notion" | "confluence" | "static_upload" | "docs_repo" | "website";
-  name: string;
-  config: Record<string, unknown>;
-  integrationId?: string | null;
-  repoId?: string | null;
-  syncNow?: boolean;
-}): Promise<ImportSourceResult> {
-  const name = input.name.trim();
-  if (!name) return { ok: false, message: "Source name is required." };
 
-  let token: string;
-  let workspaceId: string;
-  try {
-    token = await requireToken();
-    workspaceId = await requireWorkspaceId(token);
-  } catch (err) {
-    return { ok: false, message: err instanceof Error ? err.message : String(err) };
-  }
-
-  try {
-    const source = await createKnowledgeImportSource(
-      workspaceId,
-      {
-        kind: input.kind,
-        name,
-        config: input.config,
-        integration_id: input.integrationId ?? null,
-        repo_id: input.repoId ?? null,
-        sync_interval_minutes: input.kind === "static_upload" ? null : 24 * 60,
-      },
-      { token },
-    );
-    if (!input.syncNow) {
-      return { ok: true, sourceId: source.id, synced: false };
-    }
-    try {
-      const run = await syncKnowledgeImportSource(workspaceId, source.id, token);
-      return { ok: true, sourceId: source.id, synced: true, stats: run.stats };
-    } catch (err) {
-      return { ok: true, sourceId: source.id, synced: false, syncError: apiErrorMessage(err) };
-    }
-  } catch (err) {
-    if (err instanceof ApiHttpError) {
-      return { ok: false, message: apiErrorMessage(err), status: err.status };
-    }
-    return { ok: false, message: apiErrorMessage(err) };
-  }
-}
-
-export type ArchiveSourceResult =
-  | { ok: true; sourceId: string }
-  | { ok: false; message: string; status?: number };
-
-export async function archiveImportSourceAction(
-  sourceId: string,
-): Promise<ArchiveSourceResult> {
-  if (!sourceId) return { ok: false, message: "Source id is required." };
-
-  let token: string;
-  let workspaceId: string;
-  try {
-    token = await requireToken();
-    workspaceId = await requireWorkspaceId(token);
-  } catch (err) {
-    return { ok: false, message: err instanceof Error ? err.message : String(err) };
-  }
-
-  try {
-    await archiveKnowledgeImportSource(workspaceId, sourceId, token);
-    return { ok: true, sourceId };
-  } catch (err) {
-    if (err instanceof ApiHttpError) {
-      return { ok: false, message: apiErrorMessage(err), status: err.status };
-    }
-    return { ok: false, message: apiErrorMessage(err) };
-  }
-}
-
-function bucketActionError(err: unknown): ArchiveResult {
+function importerActionError(err: unknown): CreateImporterResult {
   if (err instanceof ApiHttpError) {
     return { ok: false, message: apiErrorMessage(err), status: err.status };
   }
   return { ok: false, message: apiErrorMessage(err) };
 }
+
 
 function apiErrorMessage(err: unknown): string {
   if (err instanceof ApiHttpError) {
