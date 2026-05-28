@@ -15,7 +15,10 @@ import {
   getCachedWorkspaces,
   meToShellUser,
 } from "@/lib/api/session-cache.server";
-import { getResolvedWorkspaceId } from "@/lib/workspace-resolve.server";
+import {
+  getLayoutWorkspaceSearchParams,
+  getResolvedWorkspaceId,
+} from "@/lib/workspace-resolve.server";
 import {
   pickWorkspace,
   toAppShellWorkspaces,
@@ -29,10 +32,9 @@ import {
  * not re-mount the sidebar nor re-issue those calls. Pages render only
  * their own data + a {@link PageHeader}.
  *
- * Pages still receive `searchParams` and can read `?ws=` themselves
- * via {@link getResolvedWorkspaceId}; the cookie middleware sets it,
- * so this layout's resolve is just to render the right name/slug in
- * the sidebar.
+ * Pages receive `searchParams` directly; this layout reads the same
+ * ``?ws=`` via {@link getLayoutWorkspaceSearchParams} (middleware
+ * forwards it on a request header) so the sidebar chip matches pages.
  */
 export default async function AuthedLayout({
   children,
@@ -77,7 +79,8 @@ export default async function AuthedLayout({
     redirect("/onboarding?step=github");
   }
 
-  const resolvedId = await getResolvedWorkspaceId({}, workspaces);
+  const layoutSearch = await getLayoutWorkspaceSearchParams();
+  const resolvedId = await getResolvedWorkspaceId(layoutSearch, workspaces);
   const workspace = pickWorkspace(workspaces, resolvedId);
   const me = await getCachedMe();
   const inboxCounts = await getInboxCounts(workspace.id, token).catch(() => null);

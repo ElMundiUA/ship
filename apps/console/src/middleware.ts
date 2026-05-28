@@ -9,12 +9,13 @@
  * password flow continues to work without any session-shape change.
  */
 
-import { NextResponse, type NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
 import { auth0, isAuth0Mode } from "@/lib/auth0";
 import {
   isLikelyWorkspaceId,
   SHIP_ACTIVE_WORKSPACE_COOKIE,
+  SHIP_ACTIVE_WS_REQUEST_HEADER,
 } from "@/lib/workspace-scope";
 
 function applyWorkspaceCookie(
@@ -34,12 +35,30 @@ function applyWorkspaceCookie(
   return response;
 }
 
+function withActiveWorkspaceRequestHeader(
+  request: NextRequest,
+): Headers {
+  const ws = request.nextUrl.searchParams.get("ws");
+  const requestHeaders = new Headers(request.headers);
+  if (ws && isLikelyWorkspaceId(ws)) {
+    requestHeaders.set(SHIP_ACTIVE_WS_REQUEST_HEADER, ws);
+  }
+  return requestHeaders;
+}
+
 export async function middleware(request: NextRequest) {
+  const requestHeaders = withActiveWorkspaceRequestHeader(request);
+  const requestWithHeaders = new NextRequest(request.url, {
+    headers: requestHeaders,
+  });
+
   let response: NextResponse;
   if (isAuth0Mode && auth0) {
-    response = await auth0.middleware(request);
+    response = await auth0.middleware(requestWithHeaders);
   } else {
-    response = NextResponse.next();
+    response = NextResponse.next({
+      request: { headers: requestHeaders },
+    });
   }
   return applyWorkspaceCookie(request, response);
 }

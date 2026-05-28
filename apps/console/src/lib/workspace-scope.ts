@@ -19,6 +19,12 @@ export function parseWorkspaceIdParam(
 /** Cookie set by middleware when a request carries ``?ws=<uuid>`` (multi-tenant). */
 export const SHIP_ACTIVE_WORKSPACE_COOKIE = "ship.ws" as const;
 
+/**
+ * Request header set by middleware when ``?ws=`` is present so server
+ * layouts (which cannot read search params) resolve the same id as pages.
+ */
+export const SHIP_ACTIVE_WS_REQUEST_HEADER = "x-ship-active-ws" as const;
+
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 

@@ -24,7 +24,7 @@ import { cn } from "@/lib/cn";
  * ``Ctrl+Shift+K`` (devtools console) keep working.
  */
 
-const SCOPE_KEYS = ["scope", "repo_id", "project_id"] as const;
+const SCOPE_KEYS = ["scope", "repo_id", "project_id", "ws"] as const;
 
 /**
  * Wrapping the launcher in ``Suspense`` keeps Next's static prerender
