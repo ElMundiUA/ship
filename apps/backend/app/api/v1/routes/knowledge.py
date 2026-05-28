@@ -6,6 +6,7 @@ import logging
 import uuid
 from typing import Any
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, select
@@ -13,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.api.v1.deps import AuthContext, get_current_auth
 from backend.app.api.v1.routes.workspaces import (
+    ROLES_MAINTAIN,
     ROLES_READ,
     _require_membership,
 )
@@ -267,6 +269,261 @@ async def get_workspace_corpus(
             for s in raw_sources
         ],
     )
+
+
+# ---------------------------------------------------------------------------
+# Workspace importer CRUD — operator-driven "Add import source" surface.
+# Proxies Lighthouse's admin importer API, scoped to the workspace.
+# Kept above /{slug} so "importers" isn't captured as a slug.
+# ---------------------------------------------------------------------------
+
+
+class ImporterTypeOut(BaseModel):
+    type: str
+    display_name: str
+    description: str
+    config_schema: dict[str, Any] = Field(default_factory=dict)
+    secret_keys: list[str] = Field(default_factory=list)
+    supports_discovery: bool = False
+    discovery_required: list[str] = Field(default_factory=list)
+
+
+class ImporterOut(BaseModel):
+    id: str
+    type: str
+    name: str
+    description: str | None = None
+    recipe: str
+    config: dict[str, Any] = Field(default_factory=dict)
+    has_secrets: bool = False
+    enabled: bool = True
+    status: str
+    last_run_at: str | None = None
+    last_error: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class ImporterCreateIn(BaseModel):
+    type: str = Field(min_length=1, max_length=120)
+    name: str = Field(min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=2000)
+    recipe: str | None = Field(default=None, min_length=1, max_length=200)
+    config: dict[str, Any] = Field(default_factory=dict)
+    secrets: dict[str, str] = Field(default_factory=dict)
+
+
+def _coerce_importer(row: dict[str, Any]) -> ImporterOut:
+    return ImporterOut(
+        id=str(row.get("id") or ""),
+        type=str(row.get("type") or ""),
+        name=str(row.get("name") or ""),
+        description=row.get("description"),
+        recipe=str(row.get("recipe") or ""),
+        config=dict(row.get("config") or {}),
+        has_secrets=bool(row.get("has_secrets")),
+        enabled=bool(row.get("enabled", True)),
+        status=str(row.get("status") or "idle"),
+        last_run_at=row.get("last_run_at"),
+        last_error=row.get("last_error"),
+        created_at=row.get("created_at"),
+        updated_at=row.get("updated_at"),
+    )
+
+
+def _require_lighthouse_or_503():
+    client = build_lighthouse_client(get_settings())
+    if client is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "lighthouse_unconfigured",
+                "message": "Lighthouse engine is not configured.",
+            },
+        )
+    return client
+
+
+@router.get("/importers/types", response_model=list[ImporterTypeOut])
+async def list_importer_types(
+    workspace_id: uuid.UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> list[ImporterTypeOut]:
+    """All importer types the engine knows about, with config schemas."""
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
+    client = _require_lighthouse_or_503()
+    try:
+        rows = await client.list_importer_types()
+    except Exception as exc:
+        logger.warning("lighthouse types fetch failed", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="lighthouse unavailable",
+        ) from exc
+    return [
+        ImporterTypeOut(
+            type=str(r.get("type") or ""),
+            display_name=str(r.get("display_name") or ""),
+            description=str(r.get("description") or ""),
+            config_schema=dict(r.get("config_schema") or {}),
+            secret_keys=list(r.get("secret_keys") or []),
+            supports_discovery=bool(r.get("supports_discovery")),
+            discovery_required=list(r.get("discovery_required") or []),
+        )
+        for r in rows
+    ]
+
+
+@router.get("/importers", response_model=list[ImporterOut])
+async def list_workspace_importers(
+    workspace_id: uuid.UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> list[ImporterOut]:
+    """List every importer registered against this workspace."""
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
+    client = _require_lighthouse_or_503()
+    try:
+        rows = await client.list_workspace_importers(workspace_id=workspace_id)
+    except Exception as exc:
+        logger.warning("lighthouse list importers failed", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="lighthouse unavailable",
+        ) from exc
+    return [_coerce_importer(r) for r in rows]
+
+
+@router.post(
+    "/importers",
+    response_model=ImporterOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_workspace_importer(
+    workspace_id: uuid.UUID,
+    payload: ImporterCreateIn,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> ImporterOut:
+    """Create a new importer in this workspace. ``recipe`` defaults to
+    ``workspace-<type>`` if not supplied — it's just a grouping label."""
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_MAINTAIN)
+    client = _require_lighthouse_or_503()
+    recipe = payload.recipe or f"workspace-{payload.type}"
+    try:
+        row = await client.create_importer(
+            workspace_id=workspace_id,
+            type_=payload.type,
+            name=payload.name,
+            description=payload.description,
+            recipe=recipe,
+            config=payload.config,
+            secrets=payload.secrets,
+        )
+    except httpx.HTTPStatusError as exc:
+        body = exc.response.text
+        logger.warning("lighthouse create importer rejected: %s", body)
+        # Forward the engine's validation error to the operator.
+        raise HTTPException(
+            status_code=exc.response.status_code,
+            detail=body,
+        ) from exc
+    except Exception as exc:
+        logger.warning("lighthouse create importer failed", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="lighthouse unavailable",
+        ) from exc
+    return _coerce_importer(row)
+
+
+class ImporterDiscoverIn(BaseModel):
+    type: str = Field(min_length=1, max_length=120)
+    config: dict[str, Any] = Field(default_factory=dict)
+    secrets: dict[str, str] = Field(default_factory=dict)
+
+
+class ImporterDiscoveredItem(BaseModel):
+    id: str
+    name: str
+    kind: str
+    hint: str | None = None
+    config_patch: dict[str, Any] = Field(default_factory=dict)
+
+
+@router.post(
+    "/importers/discover",
+    response_model=list[ImporterDiscoveredItem],
+)
+async def discover_importer_items(
+    workspace_id: uuid.UUID,
+    payload: ImporterDiscoverIn,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> list[ImporterDiscoveredItem]:
+    """Probe the source with the given config/secrets and return the
+    items the operator can choose from. No DB writes."""
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_MAINTAIN)
+    client = _require_lighthouse_or_503()
+    try:
+        items = await client.discover_importer(
+            workspace_id=workspace_id,
+            type_=payload.type,
+            config=payload.config,
+            secrets=payload.secrets,
+        )
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(
+            status_code=exc.response.status_code,
+            detail=exc.response.text,
+        ) from exc
+    except Exception as exc:
+        logger.warning("lighthouse discover failed", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="lighthouse unavailable",
+        ) from exc
+    return [
+        ImporterDiscoveredItem(
+            id=str(i.get("id") or ""),
+            name=str(i.get("name") or ""),
+            kind=str(i.get("kind") or ""),
+            hint=i.get("hint"),
+            config_patch=dict(i.get("config_patch") or {}),
+        )
+        for i in items
+    ]
+
+
+@router.post(
+    "/importers/{importer_id}/run",
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def run_workspace_importer(
+    workspace_id: uuid.UUID,
+    importer_id: uuid.UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Trigger an on-demand run of the importer (background)."""
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_MAINTAIN)
+    client = _require_lighthouse_or_503()
+    try:
+        return await client.run_importer(
+            workspace_id=workspace_id, importer_id=importer_id
+        )
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(
+            status_code=exc.response.status_code,
+            detail=exc.response.text,
+        ) from exc
+    except Exception as exc:
+        logger.warning("lighthouse run importer failed", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="lighthouse unavailable",
+        ) from exc
 
 
 # ---------------------------------------------------------------------------

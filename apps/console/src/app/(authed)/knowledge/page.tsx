@@ -5,10 +5,14 @@ import { PageBody, PageHeader } from "@/components/app-shell";
 import { ScopePill } from "@/components/scope-pill";
 import {
   type ApiActivatedRepo,
+  type ApiImporterType,
   type ApiKnowledgeCorpus,
+  type ApiWorkspaceImporter,
   ApiHttpError,
   getWorkspaceCorpus,
   listActivatedRepos,
+  listImporterTypes,
+  listWorkspaceImporters,
 } from "@/lib/api/client";
 import {
   getCachedMe,
@@ -26,6 +30,8 @@ type LiveData = {
   workspace: { id: string; slug: string; name: string };
   repos: ApiActivatedRepo[];
   corpus: ApiKnowledgeCorpus | null;
+  importers: ApiWorkspaceImporter[];
+  importerTypes: ApiImporterType[];
   me: Awaited<ReturnType<typeof getCachedMe>>;
 };
 
@@ -49,11 +55,18 @@ async function load(
   const workspace = pickWorkspace(workspaceRows, resolved);
 
   try {
-    const [repos, me, corpus] = await Promise.all([
+    const [repos, me, corpus, importers, importerTypes] = await Promise.all([
       listActivatedRepos(workspace.id, token).catch(() => [] as ApiActivatedRepo[]),
       getCachedMe(),
       getWorkspaceCorpus(workspace.id, token).catch(
         () => null as ApiKnowledgeCorpus | null,
+      ),
+      // Importers + types are best-effort: Lighthouse may be unconfigured.
+      listWorkspaceImporters(workspace.id, token).catch(
+        () => [] as ApiWorkspaceImporter[],
+      ),
+      listImporterTypes(workspace.id, token).catch(
+        () => [] as ApiImporterType[],
       ),
     ]);
 
@@ -67,6 +80,8 @@ async function load(
         },
         repos,
         corpus,
+        importers,
+        importerTypes,
         me,
       },
     };
@@ -99,7 +114,7 @@ export default async function KnowledgeIndexPage({
     );
   }
 
-  const { workspace, repos, corpus, me } = result.data;
+  const { workspace, repos, corpus, importers, importerTypes, me } = result.data;
 
   const scopePill = (
     <ScopePill
@@ -124,7 +139,12 @@ export default async function KnowledgeIndexPage({
     <>
       <PageHeader title="Knowledge" scopePill={scopePill} />
       <PageBody>
-        <KnowledgeControlCenter workspace={workspace} corpus={corpus} />
+        <KnowledgeControlCenter
+          workspace={workspace}
+          corpus={corpus}
+          importers={importers}
+          importerTypes={importerTypes}
+        />
       </PageBody>
     </>
   );
