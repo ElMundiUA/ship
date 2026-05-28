@@ -365,7 +365,7 @@ function AddImporterForm({
           {needsDiscovery && (
             <p className="text-[11px] text-white/45">
               Click <span className="text-white/70">Preview items</span> to
-              fetch the list of available items for this source — you'll
+              fetch the list of available items for this source — you&apos;ll
               pick which ones to import before saving.
             </p>
           )}
