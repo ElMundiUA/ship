@@ -227,6 +227,13 @@ _REVIEW_STATE_COLOR = "#F2994A"  # warm orange — matches Linear's review motif
 # operator sees in the Linear UI.
 SIGNAL_LABELS: dict[str, str] = {
     "needs_clarification": "needs:clarification",
+    # ``blocked`` is the canonical stop state set by ``agent_run.finish``
+    # when an agent reports ``outcome=blocked``. The label is already in
+    # OVERLAY_FREEZE_LABEL_PREFIXES below — picker and dispatcher refuse
+    # any ticket carrying it. Operator clears the label in Linear to
+    # resume work; the webhook ingest catches the label removal and
+    # cascades the next dispatch automatically.
+    "blocked": "blocked",
 }
 
 
