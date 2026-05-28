@@ -1107,6 +1107,174 @@ def _collect_project_sections(payload: "FinishIn") -> list["ProjectSectionPatch"
     return out
 
 
+def _extract_pr_url(text: str | None) -> str | None:
+    """Pull the first GitHub PR URL out of ``text`` using the same
+    regex the ELS-120 PR-URL gate uses.
+
+    The dev role's sidecar appends ``PR: <url>`` to ``comment`` after
+    ``gh pr create`` succeeds (see :data:`_PR_AUTHORING_STAGES`). For
+    the Phase 4 gate we just need the URL; finer parsing (owner / repo
+    / number) happens inside :func:`_validate_code_review_to_auto_merge`.
+    Returns ``None`` when nothing matches so the caller can short-circuit
+    on the ``no_pr_url`` reason.
+    """
+    if not text:
+        return None
+    match = _PR_URL_RE.search(text)
+    return match.group(0) if match else None
+
+
+async def _validate_code_review_to_auto_merge(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    pr_url: str | None,
+    settings: Settings,
+) -> tuple[bool, str]:
+    """Verify the agent's ``code_review → auto_merge`` claim against
+    GitHub.
+
+    Phase 4 of the FSM event-driven rearchitecture (2026-05-29). The
+    code_review agent is supposed to leave an ``APPROVED`` review on
+    the PR before claiming ``ready_next_step → auto_merge``; the
+    auto-merger then squash-merges via the App token. Pre-Phase-4 the
+    server trusted the agent's word — if the review never landed (or
+    the CI was red), the auto-merger fired anyway, hit GitHub's 405
+    "not mergeable" wall, audited ``github.auto_merge.failed``, and
+    sat at ``auto_merge`` until something else moved it. Wasted agent
+    tokens + one extra cycle in the cascade.
+
+    This gate checks:
+
+    1. PR URL exists in the finish ``comment`` (``no_pr_url``).
+    2. PR URL parses into owner/repo/number (``invalid_pr_url``).
+    3. Workspace has an active GitHub installation (``no_install``).
+    4. GitHub returns reviews + PR detail without 4xx (``reviews_api_X``,
+       ``pr_api_X``).
+    5. At least one submitted review state ``APPROVED`` (``no_approval``).
+    6. Every completed check_run on the PR's head SHA has a non-failing
+       conclusion (``success`` / ``skipped`` / ``neutral``);
+       ``ci_red`` for any failing conclusion, ``ci_incomplete`` for any
+       run still in progress, ``checks_api_X`` for GitHub errors.
+
+    Returns ``(True, "ok")`` when every check passes. The caller
+    downgrades ``outcome=ready_next_step`` to ``outcome=blocked`` on
+    any other return so the Phase 1 freeze flow runs (label + inbox).
+
+    Best-effort: any unexpected exception inside the check surfaces as
+    ``("unexpected_error:<exc>")`` so a transient GH outage doesn't
+    silently advance bad transitions. The Phase 1 freeze stops the
+    bleeding either way (one stage later, via the auto-merger's own
+    failed merge), so a brittle gate is safer than a permissive one.
+    """
+    if not pr_url:
+        return False, "no_pr_url"
+    pr_path_re = re.compile(
+        r"^https://github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)$",
+        re.IGNORECASE,
+    )
+    m = pr_path_re.match(pr_url.strip())
+    if not m:
+        return False, "invalid_pr_url"
+    owner, repo, number_str = m.group(1), m.group(2), m.group(3)
+    try:
+        number = int(number_str)
+    except ValueError:
+        return False, "invalid_pr_url"
+
+    from sqlalchemy import select as _select
+
+    from backend.app.db.models.integrations import (
+        GitHubInstallation as _GHInstall,
+    )
+    from backend.app.integrations.github.app_auth import (
+        fetch_installation_token as _fetch_install_token,
+    )
+
+    install_row = (
+        await session.execute(
+            _select(_GHInstall).where(
+                _GHInstall.workspace_id == workspace_id,
+                _GHInstall.suspended_at.is_(None),
+            ).limit(1)
+        )
+    ).scalar_one_or_none()
+    if install_row is None:
+        return False, "no_install"
+
+    import httpx as _httpx
+
+    try:
+        async with _httpx.AsyncClient(timeout=_httpx.Timeout(15.0)) as client:
+            token = await _fetch_install_token(
+                install_row.installation_id,
+                settings=settings,
+                client=client,
+            )
+            api_root = f"https://api.github.com/repos/{owner}/{repo}"
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github+json",
+            }
+            # 1. Reviews — need ≥1 APPROVED.
+            reviews_resp = await client.get(
+                f"{api_root}/pulls/{number}/reviews",
+                headers=headers,
+                params={"per_page": "100"},
+            )
+            if reviews_resp.status_code >= 400:
+                return False, f"reviews_api_{reviews_resp.status_code}"
+            reviews = reviews_resp.json() or []
+            has_approval = any(
+                str(r.get("state") or "").upper() == "APPROVED"
+                for r in reviews
+            )
+            if not has_approval:
+                return False, "no_approval"
+
+            # 2. PR detail — need head SHA for check-runs.
+            pr_resp = await client.get(
+                f"{api_root}/pulls/{number}",
+                headers=headers,
+            )
+            if pr_resp.status_code >= 400:
+                return False, f"pr_api_{pr_resp.status_code}"
+            head_sha = (
+                ((pr_resp.json() or {}).get("head") or {}).get("sha")
+            )
+            if not head_sha:
+                return False, "no_head_sha"
+
+            # 3. check_runs on the head SHA — all completed + non-failing.
+            checks_resp = await client.get(
+                f"{api_root}/commits/{head_sha}/check-runs",
+                headers=headers,
+                params={"per_page": "100"},
+            )
+            if checks_resp.status_code >= 400:
+                return False, f"checks_api_{checks_resp.status_code}"
+            check_runs = (checks_resp.json() or {}).get("check_runs") or []
+            # Empty check_runs is a pass — some workspaces don't have
+            # CI configured at all. If the repo enforces required
+            # checks via branch protection, GH will reject the merge
+            # downstream; we just don't double-gate here.
+            for c in check_runs:
+                status_val = str(c.get("status") or "").lower()
+                conclusion = str(c.get("conclusion") or "").lower()
+                if status_val != "completed":
+                    return False, "ci_incomplete"
+                if conclusion not in ("success", "skipped", "neutral"):
+                    return False, "ci_red"
+
+            return True, "ok"
+    except Exception as exc:  # noqa: BLE001 — fail closed on any error
+        logger.warning(
+            "phase4 validation crashed ws=%s pr_url=%s err=%s",
+            workspace_id, pr_url, exc,
+        )
+        return False, f"unexpected_error:{type(exc).__name__}"
+
+
 async def _release_project_lock_for_ticket(
     session: AsyncSession,
     *,
@@ -3775,6 +3943,77 @@ async def finish_agent_run(
         workspace_id=workspace_id,
     )
     tracker_kind = resolved.kind if resolved else None
+
+    # Phase 4 gate (2026-05-29): server-validate the agent's
+    # ``stage_next`` claim against real-world facts before allowing the
+    # FSM transition. Today's check: ``code_review → auto_merge``
+    # requires the PR to carry ≥1 ``APPROVED`` review AND every
+    # completed check_run with a non-success conclusion. If either
+    # fails, we downgrade the outcome to ``blocked`` so the Phase 1
+    # blocked-handler flow runs (adds the ``blocked`` signal label →
+    # picker overlay-freezes the ticket; files one inbox letter). The
+    # agent's word is no longer load-bearing for the highest-stakes
+    # transition; the server verifies via GitHub before letting the
+    # auto-merger dispatch fire.
+    if (
+        payload.outcome == "ready_next_step"
+        and payload.fsm_stage == "code_review"
+        and payload.stage_next == "auto_merge"
+        and payload.ticket_ref
+        and resolved is not None
+    ):
+        pr_url = _extract_pr_url(payload.comment)
+        gate_ok, gate_reason = await _validate_code_review_to_auto_merge(
+            session,
+            workspace_id=workspace_id,
+            pr_url=pr_url,
+            settings=settings,
+        )
+        if not gate_ok:
+            logger.info(
+                "phase4 gate rejected code_review→auto_merge "
+                "ws=%s ticket=%s reason=%s pr_url=%s",
+                workspace_id, payload.ticket_ref, gate_reason, pr_url,
+            )
+            session.add(
+                AuditLog(
+                    workspace_id=workspace_id,
+                    actor_user_id=auth.user.id,
+                    actor_token_id=auth.token.id if auth.token else None,
+                    action="transition.validation_failed",
+                    target_kind="ticket",
+                    target_id=payload.ticket_ref,
+                    payload={
+                        "fsm_stage": payload.fsm_stage,
+                        "stage_next": payload.stage_next,
+                        "reason": gate_reason,
+                        "pr_url": pr_url,
+                        "run_id": payload.run_id,
+                    },
+                )
+            )
+            actions.append(f"phase4:rejected:{gate_reason}")
+            # Mutate the payload so the existing elif chain processes
+            # this as a blocked finish (freeze label + inbox letter).
+            # Stash the rejection reason in payload.payload so the
+            # blocker letter body has the diagnostic without us having
+            # to duplicate the letter-creation code.
+            payload.outcome = "blocked"
+            payload.stage_next = None
+            existing = dict(payload.payload or {})
+            existing["phase4_reject_reason"] = gate_reason
+            if pr_url:
+                existing["phase4_pr_url"] = pr_url
+            payload.payload = existing
+            payload.summary = (
+                f"Phase 4 gate refused code_review → auto_merge for "
+                f"{payload.ticket_ref}: {gate_reason}. The server "
+                "checked the PR's approval and CI state before "
+                "allowing the transition; the agent's claim didn't "
+                "match GitHub. Resolve the underlying gap (missing "
+                "approval, red CI, no PR URL on the finish) and "
+                "remove the ``blocked`` label in Linear to retry."
+            )[:2000]
 
     # Outcomes that need a tracker but the workspace has none → drop an
     # inbox item so the operator notices, but still record the run.
