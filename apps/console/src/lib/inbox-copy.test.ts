@@ -46,6 +46,15 @@ describe("formatInboxHeadline", () => {
       }),
     ).toBe("ELS-99 validation bounced — restart or skip?");
   });
+
+  it("does not throw when title is missing", () => {
+    expect(
+      formatInboxHeadline({
+        title: undefined as unknown as string,
+        type: "clarification",
+      }),
+    ).toBe("Inbox item");
+  });
 });
 
 describe("formatIntakeReasonTooltip", () => {

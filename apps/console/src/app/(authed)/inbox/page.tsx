@@ -24,6 +24,7 @@ import { InboxMailboxListClient } from "@/components/inbox/inbox-mailbox-list-cl
 import { InboxActionPanel } from "@/components/inbox/inbox-action-panel";
 import { InboxDispositionPanel } from "@/components/inbox/inbox-disposition-panel";
 import { MailboxFooter } from "@/components/inbox/mailbox-footer";
+import { buildInboxUrl, parseInboxSearchParams } from "@/components/inbox/inbox-url";
 import { MarkdownBlock } from "@/components/markdown-block";
 import { EmptyState } from "@/components/ui";
 import { formatInboxHeadline } from "@/lib/inbox-copy";
@@ -43,6 +44,8 @@ import {
   INBOX_ACTIONABLE_CATEGORIES,
   INBOX_LIST_DEFAULT_STATUSES,
   INBOX_TYPE_META,
+  inboxRowKicker,
+  isInboxType,
   parseChecklistActionItems,
   type InboxItemDetail,
   type InboxListResponse,
@@ -56,12 +59,6 @@ const PAGE_LIMIT = 50;
 
 type Ownership = "mine" | "unassigned" | "all";
 
-type ParsedParams = {
-  ownership: Ownership;
-  selectedId: string | null;
-  errorCode: string | null;
-};
-
 type Mode =
   | {
       source: "live";
@@ -71,6 +68,7 @@ type Mode =
       detail: InboxItemDetail | null;
       detailError: string | null;
       ownership: Ownership;
+      typeFilters: InboxType[];
       selectedId: string | null;
     }
   | { source: "down"; reason: string };
@@ -94,24 +92,12 @@ function errorMessage(code: string): string {
 
 function parseSearchParams(
   raw: Record<string, string | string[] | undefined>,
-): ParsedParams {
-  const ownershipRaw = typeof raw.ownership === "string" ? raw.ownership : null;
-  const ownership: Ownership =
-    ownershipRaw === "mine" ||
-    ownershipRaw === "unassigned" ||
-    ownershipRaw === "all"
-      ? ownershipRaw
-      : "all";
-
-  const selectedRaw = typeof raw.selected === "string" ? raw.selected : null;
-  const selectedId = selectedRaw && selectedRaw.length > 0 ? selectedRaw : null;
-  const errorCode = typeof raw.error === "string" ? raw.error : null;
-
-  return { ownership, selectedId, errorCode };
+) {
+  return parseInboxSearchParams(raw);
 }
 
 async function load(
-  parsed: ParsedParams,
+  parsed: ReturnType<typeof parseInboxSearchParams>,
   searchParams: Record<string, string | string[] | undefined>,
 ): Promise<Mode> {
   const token = await getCachedSessionToken();
@@ -121,6 +107,9 @@ async function load(
 
   const ws = await getCachedWorkspaces();
   const resolved = await getResolvedWorkspaceId(searchParams, ws);
+  if (ws.length === 0) {
+    redirect("/onboarding?step=github");
+  }
   const workspace = pickWorkspace(ws, resolved);
 
   let list: InboxListResponse;
@@ -128,7 +117,9 @@ async function load(
     list = await listInboxItems(
       workspace.id,
       {
-        ownership: parsed.ownership,
+        ownership: parsed.filters.ownership,
+        types:
+          parsed.filters.types.length > 0 ? parsed.filters.types : undefined,
         categories: INBOX_ACTIONABLE_CATEGORIES,
         statuses: INBOX_LIST_DEFAULT_STATUSES,
         sort: "priority_desc_created_asc",
@@ -172,7 +163,8 @@ async function load(
     list,
     detail,
     detailError,
-    ownership: parsed.ownership,
+    ownership: parsed.filters.ownership,
+    typeFilters: parsed.filters.types,
     selectedId: effectiveSelected,
   };
 }
@@ -205,9 +197,10 @@ export default async function InboxMailboxPage({
     );
   }
 
-  const { workspaceId, multiWs, list, detail, detailError, ownership, selectedId } =
+  const { workspaceId, multiWs, list, detail, detailError, ownership, typeFilters, selectedId } =
     data;
   const wsScope = multiWs ? workspaceId : undefined;
+  const inboxFilters = { ownership, types: typeFilters };
 
   return (
     <>
@@ -225,8 +218,13 @@ export default async function InboxMailboxPage({
             ownership={ownership}
             selectedId={selectedId}
             workspaceScope={wsScope}
+            typeFilters={typeFilters}
             ownershipTabs={
-              <OwnershipTabs current={ownership} workspaceScope={wsScope} />
+              <OwnershipTabs
+                current={ownership}
+                filters={inboxFilters}
+                workspaceScope={wsScope}
+              />
             }
           />
 
@@ -235,7 +233,7 @@ export default async function InboxMailboxPage({
             detailError={detailError}
             workspaceId={workspaceId}
             workspaceScope={wsScope}
-            ownership={ownership}
+            filters={inboxFilters}
             selectedId={selectedId}
             empty={list.items.length === 0}
           />
@@ -248,23 +246,26 @@ export default async function InboxMailboxPage({
 
 function buildOwnershipHref({
   ownership,
+  filters,
   workspaceScope,
 }: {
   ownership: Ownership;
+  filters: { ownership: Ownership; types: InboxType[] };
   workspaceScope?: string;
 }): string {
-  const params = new URLSearchParams();
-  if (ownership !== "all") params.set("ownership", ownership);
-  if (workspaceScope) params.set("ws", workspaceScope);
-  const qs = params.toString();
-  return qs ? `/inbox?${qs}` : "/inbox";
+  return buildInboxUrl(
+    { ownership, types: filters.types },
+    { workspaceScope },
+  );
 }
 
 function OwnershipTabs({
   current,
+  filters,
   workspaceScope,
 }: {
   current: Ownership;
+  filters: { ownership: Ownership; types: InboxType[] };
   workspaceScope?: string;
 }) {
   const tabs: { key: Ownership; label: string }[] = [
@@ -281,6 +282,7 @@ function OwnershipTabs({
             <Link
               href={buildOwnershipHref({
                 ownership: tab.key,
+                filters,
                 workspaceScope,
               })}
               aria-current={active ? "page" : undefined}
@@ -309,18 +311,14 @@ function OwnershipTabs({
 
 function buildMailboxReturnTo({
   selectedId,
-  ownership,
+  filters,
   workspaceScope,
 }: {
   selectedId: string;
-  ownership: Ownership;
+  filters: { ownership: Ownership; types: InboxType[] };
   workspaceScope?: string;
 }): string {
-  const params = new URLSearchParams();
-  params.set("selected", selectedId);
-  if (ownership !== "all") params.set("ownership", ownership);
-  if (workspaceScope) params.set("ws", workspaceScope);
-  return `/inbox?${params.toString()}`;
+  return buildInboxUrl(filters, { selected: selectedId, workspaceScope });
 }
 
 function MailboxPreview({
@@ -328,14 +326,14 @@ function MailboxPreview({
   detailError,
   workspaceId,
   workspaceScope,
-  ownership,
+  filters,
   empty,
 }: {
   detail: InboxItemDetail | null;
   detailError: string | null;
   workspaceId: string;
   workspaceScope?: string;
-  ownership: Ownership;
+  filters: { ownership: Ownership; types: InboxType[] };
   selectedId: string | null;
   empty: boolean;
 }) {
@@ -364,7 +362,10 @@ function MailboxPreview({
     );
   }
 
-  const meta = INBOX_TYPE_META[detail.type as InboxType];
+  const meta = isInboxType(detail.type)
+    ? INBOX_TYPE_META[detail.type]
+    : null;
+  const kicker = inboxRowKicker(detail.type);
   const body = readBody(detail);
   const isClosed = detail.status === "resolved" || detail.status === "dismissed";
   const previewHeadline = formatInboxHeadline(detail);
@@ -376,7 +377,7 @@ function MailboxPreview({
     Array.isArray(rawActionItems) && rawActionItems.length > 0;
   const returnTo = buildMailboxReturnTo({
     selectedId: detail.id,
-    ownership,
+    filters,
     workspaceScope,
   });
 
@@ -393,7 +394,7 @@ function MailboxPreview({
     >
       <header className="border-b border-white/[0.06] px-6 py-4">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] uppercase tracking-[0.18em] text-white/45">
-          <span>{meta?.label ?? detail.type}</span>
+          <span>{meta?.label ?? kicker.label}</span>
           <span className="text-white/15">·</span>
           <span
             className="text-white/55 normal-case tracking-normal"
@@ -449,14 +450,12 @@ function MailboxPreview({
         ) : hasActionItems ? (
           <InboxActionPanel workspaceId={workspaceId} item={detail} />
         ) : (
-          // No structured action_items → fall back to the type-driven
-          // disposition buttons (accept / dismiss / answer / …). This is
-          // what made knowledge-draft / approval letters actionable in
-          // the preview after the standalone detail route was retired.
           <InboxDispositionPanel
             workspaceId={workspaceId}
             itemId={detail.id}
-            itemType={detail.type as InboxType}
+            itemType={
+              isInboxType(detail.type) ? detail.type : "clarification"
+            }
           />
         )}
       </footer>

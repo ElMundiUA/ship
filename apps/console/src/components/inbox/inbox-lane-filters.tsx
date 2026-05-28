@@ -6,6 +6,7 @@ import { cn } from "@/lib/cn";
 import {
   INBOX_LANE_META,
   INBOX_LANES,
+  isInboxLane,
   type InboxItem,
   type InboxLane,
 } from "@/lib/inbox-types";
@@ -100,7 +101,7 @@ export function useInboxLaneFilter(items: InboxItem[]) {
   const counts = useMemo(() => {
     const map: Record<InboxLane, number> = { now: 0, today: 0, whenever: 0 };
     for (const item of items) {
-      map[item.lane] += 1;
+      if (isInboxLane(item.lane)) map[item.lane] += 1;
     }
     return map;
   }, [items]);

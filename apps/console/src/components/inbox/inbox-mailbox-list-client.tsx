@@ -15,7 +15,12 @@ import {
   formatInboxHeadline,
   formatIntakeReasonTooltip,
 } from "@/lib/inbox-copy";
-import { ROW_KICKER, type InboxItem } from "@/lib/inbox-types";
+import {
+  inboxRowKicker,
+  type InboxFilterState,
+  type InboxItem,
+} from "@/lib/inbox-types";
+import { buildInboxUrl } from "@/components/inbox/inbox-url";
 
 type Ownership = "mine" | "unassigned" | "all";
 
@@ -24,18 +29,25 @@ export function InboxMailboxListClient({
   ownership,
   selectedId,
   workspaceScope,
+  typeFilters,
   ownershipTabs,
 }: {
   items: InboxItem[];
   ownership: Ownership;
   selectedId: string | null;
   workspaceScope?: string;
+  /** URL ``type=`` filters — preserved when selecting a row. */
+  typeFilters?: InboxFilterState["types"];
   ownershipTabs: React.ReactNode;
 }) {
+  const filters: InboxFilterState = {
+    ownership,
+    types: typeFilters ?? [],
+  };
   const { lane, setLane, visible, counts } = useInboxLaneFilter(items);
 
   const hrefForId = (id: string) =>
-    buildSelectHref({ id, ownership, workspaceScope });
+    buildInboxUrl(filters, { selected: id, workspaceScope });
 
   return (
     <div className="flex min-h-[60vh] flex-col rounded-xl border border-white/[0.08] bg-white/[0.015]">
@@ -75,7 +87,7 @@ export function InboxMailboxListClient({
               <MailboxRow
                 item={item}
                 selected={item.id === selectedId}
-                ownership={ownership}
+                filters={filters}
                 workspaceScope={workspaceScope}
               />
             </li>
@@ -89,15 +101,15 @@ export function InboxMailboxListClient({
 function MailboxRow({
   item,
   selected,
-  ownership,
+  filters,
   workspaceScope,
 }: {
   item: InboxItem;
   selected: boolean;
-  ownership: Ownership;
+  filters: InboxFilterState;
   workspaceScope?: string;
 }) {
-  const kicker = ROW_KICKER[item.type];
+  const kicker = inboxRowKicker(item.type);
   const isUnread = item.status === "new";
   const headline = formatInboxHeadline(item);
   const decisionCount = item.action_item_count ?? 0;
@@ -105,7 +117,7 @@ function MailboxRow({
 
   return (
     <Link
-      href={buildSelectHref({ id: item.id, ownership, workspaceScope })}
+      href={buildInboxUrl(filters, { selected: item.id, workspaceScope })}
       className={cn(
         "group relative flex items-center gap-2.5 px-4 py-2 transition",
         selected ? "bg-aqua/[0.08]" : "hover:bg-white/[0.03]",
@@ -160,21 +172,4 @@ function MailboxRow({
       </div>
     </Link>
   );
-}
-
-function buildSelectHref({
-  id,
-  ownership,
-  workspaceScope,
-}: {
-  id: string;
-  ownership: Ownership;
-  workspaceScope?: string;
-}): string {
-  const params = new URLSearchParams();
-  params.set("selected", id);
-  if (ownership !== "all") params.set("ownership", ownership);
-  if (workspaceScope) params.set("ws", workspaceScope);
-  const qs = params.toString();
-  return qs ? `/inbox?${qs}` : "/inbox";
 }

@@ -3,9 +3,18 @@ import { describe, expect, it } from "vitest";
 import {
   INBOX_TYPES,
   inboxFooterKind,
+  inboxRowKicker,
   parseChecklistActionItems,
   ROW_KICKER,
+  ROW_KICKER_FALLBACK,
 } from "@/lib/inbox-types";
+
+describe("inboxRowKicker", () => {
+  it("falls back for unknown API types instead of throwing", () => {
+    expect(inboxRowKicker("clarification")).toEqual(ROW_KICKER.clarification);
+    expect(inboxRowKicker("legacy-unknown")).toEqual(ROW_KICKER_FALLBACK);
+  });
+});
 
 describe("ROW_KICKER", () => {
   it("maps clarification to ? CLARIFY", () => {
