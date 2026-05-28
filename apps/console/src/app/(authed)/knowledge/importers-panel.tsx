@@ -231,7 +231,13 @@ function AddImporterForm({
     if (!name.trim()) return { ok: false, config: {}, message: "Name is required." };
     const config = coerceConfig(selected, configValues);
     const required = selected.config_schema?.required ?? [];
-    const missing = required.filter((k) => isBlank(config[k]));
+    // Skip required-check for fields the workspace integration fills.
+    const filledByIntegration = useIntegration
+      ? new Set(integration?.provides_config_keys ?? [])
+      : new Set<string>();
+    const missing = required.filter(
+      (k) => isBlank(config[k]) && !filledByIntegration.has(k),
+    );
     if (missing.length > 0) {
       return {
         ok: false,
@@ -393,7 +399,13 @@ function AddImporterForm({
             // Hide schema entries that match a secret key — those are
             // rendered as dedicated password inputs below (or skipped
             // entirely when the workspace integration fills them).
-            .filter(([key]) => !selected.secret_keys.includes(key))
+            // Also hide config keys the chosen integration will fill
+            // server-side (e.g. base_url + email for atlassian).
+            .filter(
+              ([key]) =>
+                !selected.secret_keys.includes(key) &&
+                !(useIntegration && (integration?.provides_config_keys ?? []).includes(key)),
+            )
             .map(([key, prop]) => (
               <SchemaField
                 key={key}
