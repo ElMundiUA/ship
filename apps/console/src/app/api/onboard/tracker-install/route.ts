@@ -28,7 +28,9 @@ import {
   isApiConfigured,
   startLinearInstall,
   startNotionInstall,
+  upsertIntegration,
 } from "@/lib/api/client";
+import { getSessionToken } from "@/lib/api/session";
 import { resolveOrigin } from "@/lib/api/origin";
 
 export async function POST(request: Request) {
@@ -41,7 +43,24 @@ export async function POST(request: Request) {
     return NextResponse.redirect(new URL("/onboarding", origin), 303);
   }
 
-  if (kind === "skip" || kind === "github") {
+  if (kind === "skip") {
+    return forward(origin, wsId);
+  }
+
+  if (kind === "github") {
+    // GitHub Issues rides on the App installation token — no OAuth needed.
+    // But we still need to persist an Integration row (kind=github,
+    // repo_id=NULL) so wizard-seed's workspace_tracker_required check
+    // finds it. Without this the selection is never saved to the DB.
+    if (isApiConfigured()) {
+      try {
+        const token = await getSessionToken();
+        await upsertIntegration(wsId, "github", { config: {} }, token ?? undefined);
+      } catch {
+        // Best-effort — if the upsert fails the user still proceeds;
+        // wizard-seed will surface workspace_tracker_required if needed.
+      }
+    }
     return forward(origin, wsId);
   }
 

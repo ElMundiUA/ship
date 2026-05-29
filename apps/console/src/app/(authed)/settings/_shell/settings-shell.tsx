@@ -21,6 +21,7 @@ import {
 } from "@/components/integrations-workspace-body";
 import { WorkspaceMembersPanelLoader } from "@/components/workspace-members-panel";
 import { AgentRolesList } from "../agent-roles/agent-roles-list";
+import { WorkspaceNameField } from "./workspace-name-field";
 import {
   Badge,
   Card,
@@ -366,7 +367,7 @@ export async function SettingsShell({
               <Card>
                 <CardHeader title="General" subtitle="Workspace identity" />
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                  <Field label="Workspace name" value={workspace.name} readOnly />
+                  <WorkspaceNameField workspace={workspace} />
                   <Field label="Slug (URL handle)" value={workspace.slug} mono readOnly />
                   <Field label="Workspace ID" value={workspace.id} mono readOnly />
                   <Field
@@ -1185,42 +1186,6 @@ function WorkspacesPanel({
   const peers = memberships.filter((w) => w.id !== current.id);
   return (
     <div className="space-y-6">
-      <Card>
-        <CardHeader
-          title="Rename this workspace"
-          subtitle="Name is for humans (sidebar header, audit, invites). The slug is the URL handle and can't change after create."
-        />
-        <form
-          action="/api/settings/workspace/rename"
-          method="POST"
-          className="grid grid-cols-1 gap-4 md:grid-cols-[1fr_auto]"
-        >
-          <input type="hidden" name="ws" value={current.id} suppressHydrationWarning />
-          <label className="block">
-            <div className="mb-1 text-[10px] font-bold uppercase tracking-widest text-white/45">
-              Workspace name
-            </div>
-            <input
-              name="name"
-              defaultValue={current.name}
-              required
-              maxLength={200}
-              className="w-full rounded-lg border border-white/10 bg-white/[0.06] px-3 py-2 text-sm text-white outline-none focus:border-aqua/40"
-              suppressHydrationWarning
-            />
-            <div className="mt-1 text-[11px] text-white/45">
-              Slug: <code className="font-mono">{current.slug}</code> · ID:{" "}
-              <code className="font-mono">{current.id}</code>
-            </div>
-          </label>
-          <div className="flex items-end">
-            <button type="submit" className="btn-primary">
-              Save
-            </button>
-          </div>
-        </form>
-      </Card>
-
       <Card>
         <CardHeader
           title="Your workspaces"

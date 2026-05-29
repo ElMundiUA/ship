@@ -22,6 +22,7 @@ import {
   isApiConfigured,
   listActivatedRepos,
   listInboxItems,
+  listIntegrations,
   listWorkspaces,
 } from "@/lib/api/client";
 import {
@@ -129,11 +130,19 @@ export default async function CloudHomePage({
   return renderWorkspaceHome(result, { opsWindow, skipWizard });
 }
 
+export type SetupResume = {
+  step: "tracker" | "roles" | "confirm";
+  label: string;
+  href: string;
+};
+
 type LiveContext = {
   workspace: ApiWorkspace;
   allWorkspaces: ApiWorkspace[];
   data: ApiOpsDashboard;
   repos: ApiActivatedRepo[];
+  /** Earliest incomplete onboarding step, or null if setup is done. */
+  setupResume: SetupResume | null;
   /** Inbox preview for "What needs you" — top items + counts. Best-effort:
    *  if the call fails we degrade to empty arrays so the rest of the
    *  dashboard still renders. */
@@ -170,6 +179,8 @@ function isGreenfieldWorkspace(ctx: LiveContext): boolean {
   );
 }
 
+const TRACKER_KINDS = new Set(["github", "linear", "notion", "jira", "azure_devops", "gitlab"]);
+
 async function loadLiveContext(
   token: string,
   list: ApiWorkspace[],
@@ -178,12 +189,13 @@ async function loadLiveContext(
 ): Promise<LiveContext | "unauthorized" | "down"> {
   const workspace = pickWorkspace(list, wsParam);
   try {
-    const [data, repos, inboxItems, inboxCounts, priorities, liveSystem] =
+    const [data, repos, integrations, inboxItems, inboxCounts, priorities, liveSystem] =
       await Promise.all([
         getOpsDashboard(workspace.id, token, { window: opsWindow }),
         listActivatedRepos(workspace.id, token).catch(
           () => [] as ApiActivatedRepo[],
         ),
+        listIntegrations(workspace.id, token).catch(() => []),
         listInboxItems(
           workspace.id,
           {
@@ -204,11 +216,15 @@ async function loadLiveContext(
           () => null as ApiLiveSystem | null,
         ),
       ]);
+
+    const setupResume = resolveSetupResume(workspace, repos, integrations);
+
     return {
       workspace,
       allWorkspaces: list,
       data,
       repos,
+      setupResume,
       inboxItems,
       inboxCounts,
       priorities,
@@ -219,6 +235,33 @@ async function loadLiveContext(
     if (err instanceof ApiUnavailableError) return "down";
     return "down";
   }
+}
+
+function resolveSetupResume(
+  workspace: ApiWorkspace,
+  repos: ApiActivatedRepo[],
+  integrations: Awaited<ReturnType<typeof listIntegrations>>,
+): SetupResume | null {
+  if (repos.length === 0) return null;
+
+  const wsId = workspace.id;
+  const base = `/onboarding`;
+
+  const hasTracker = integrations.some((i) => TRACKER_KINDS.has(i.kind));
+  if (!hasTracker) {
+    return { step: "tracker", label: "Connect a tracker", href: `${base}?step=tracker&ws=${wsId}` };
+  }
+
+  if (workspace.default_agent_profile === null) {
+    return { step: "roles", label: "Pick an agent role", href: `${base}?step=roles&ws=${wsId}` };
+  }
+
+  const allUnseeded = repos.every((r) => r.installed_bundle_version === null);
+  if (allUnseeded) {
+    return { step: "confirm", label: "Open your seed PR", href: `${base}?step=confirm&ws=${wsId}` };
+  }
+
+  return null;
 }
 
 function renderWorkspaceHome(
@@ -255,6 +298,7 @@ function renderWorkspaceHome(
         liveSystem={ctx.liveSystem}
         opsWindow={opsWindow}
         skipWizard={skipWizard}
+        setupResume={skipWizard ? null : ctx.setupResume}
       />
     </AppShell>
   );
@@ -300,11 +344,6 @@ function renderGreenfieldWelcome(ctx: LiveContext) {
       kicker={workspace.slug}
       workspace={{ id: workspace.id, name: workspace.name, slug: workspace.slug }}
       allWorkspaces={toAppShellWorkspaces(allWorkspaces)}
-      actions={
-        <ButtonPrimary>
-          <Link href={onboardingHref}>Continue setup →</Link>
-        </ButtonPrimary>
-      }
     >
       <div className="mx-auto max-w-3xl space-y-10">
         <header className="space-y-3">
@@ -333,6 +372,11 @@ function renderGreenfieldWelcome(ctx: LiveContext) {
             </li>
           ))}
         </ol>
+        <div>
+          <ButtonPrimary>
+            <Link href={onboardingHref}>Continue setup →</Link>
+          </ButtonPrimary>
+        </div>
       </div>
     </AppShell>
   );

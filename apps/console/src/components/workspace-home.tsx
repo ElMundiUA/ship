@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import { DashboardPrioritizer } from "@/components/dashboard/prioritizer";
 import { TemplateUpdateAlert } from "@/components/template-update-alert";
+import type { SetupResume } from "@/app/page";
 import type {
   ApiActivatedRepo,
   ApiLiveSystem,
@@ -61,6 +62,7 @@ export type WorkspaceHomeProps = {
   liveSystem: ApiLiveSystem | null;
   opsWindow: OpsReportWindow;
   skipWizard: boolean;
+  setupResume?: SetupResume | null;
 };
 
 export function WorkspaceHome({
@@ -74,6 +76,7 @@ export function WorkspaceHome({
   liveSystem,
   opsWindow,
   skipWizard,
+  setupResume = null,
 }: WorkspaceHomeProps) {
   const reposNeedingUpdate = repos.filter(needsShipTemplateUpdate);
   const decisions = (inboxItems?.items ?? []).slice(0, 5);
@@ -94,6 +97,24 @@ export function WorkspaceHome({
 
   return (
     <div className="mx-auto w-full max-w-[1600px] space-y-10">
+      {setupResume && (
+        <div className="flex items-center justify-between gap-4 rounded-2xl border border-sun/30 bg-sun/[0.06] px-5 py-4">
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-sun">Setup not finished</p>
+            <p className="mt-0.5 text-xs text-white/55">
+              {setupResume.step === "tracker" && "Connect a tracker so Ship can link work to issues."}
+              {setupResume.step === "roles" && "Pick an agent role so Ship knows which AI to use."}
+              {setupResume.step === "confirm" && "Open the seed PR to wire Ship into your repo."}
+            </p>
+          </div>
+          <Link
+            href={setupResume.href}
+            className="shrink-0 rounded-full bg-sun/15 px-4 py-2 text-xs font-semibold text-sun transition-colors hover:bg-sun/25"
+          >
+            Continue setup →
+          </Link>
+        </div>
+      )}
       {(reposNeedingUpdate.length > 0 || summary.blockers.length > 0) && (
         <StatusAlerts
           blockers={summary.blockers}

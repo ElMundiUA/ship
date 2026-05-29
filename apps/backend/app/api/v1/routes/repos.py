@@ -1381,6 +1381,13 @@ async def wizard_seed(
             return_url=return_url,
         )
     except WorkflowDispatchError as exc:
+        logger.exception(
+            "wizard_seed: commit_bundle_pr failed for repo=%s install=%s status=%s body=%s",
+            repo_row.full_name,
+            install_row.installation_id,
+            exc.status_code,
+            exc.message[:512],
+        )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail={

@@ -128,7 +128,9 @@ export function RepoCard({
 
   const [seedSaving, setSeedSaving] = useState(false);
   const [seedError, setSeedError] = useState<string | null>(null);
+  const [trackerRequired, setTrackerRequired] = useState(false);
   const seedButtonRef = useRef<HTMLButtonElement | null>(null);
+  const trackerRef = useRef<HTMLFieldSetElement | null>(null);
   // Post-seed modal state. Pre-fix the seed POST navigated straight
   // to ``/done`` and silently dropped the operator on a screen that
   // told them "open the PR on GitHub and merge it" — ~30% of pilot
@@ -280,10 +282,15 @@ export function RepoCard({
       )}
 
       {/* ── Tracker binding ────────────────────────────────────── */}
-      <fieldset className="mt-5">
+      <fieldset ref={trackerRef} className="mt-5">
         <legend className="text-[11px] font-bold uppercase tracking-widest text-white/55">
           Tracker
         </legend>
+        {trackerRequired && (
+          <p className="mt-1 text-[11px] font-semibold text-coral">
+            Pick a tracker before opening the seed PR.
+          </p>
+        )}
         {initial.probe_errors?.tracker && (
           <p className="mt-2 rounded border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] leading-snug text-amber-200">
             Couldn&apos;t read the current tracker binding:{" "}
@@ -319,12 +326,13 @@ export function RepoCard({
                     ? "Connect Linear OAuth at the workspace level first"
                     : undefined
                 }
-                onClick={() =>
+                onClick={() => {
                   setTrackerDraft((d) => ({
                     ...d,
                     kind: selected ? "" : k,
-                  }))
-                }
+                  }));
+                  if (!selected) setTrackerRequired(false);
+                }}
                 className={`${baseClass} ${stateClass}`}
               >
                 {k}
@@ -423,6 +431,10 @@ export function RepoCard({
                 binding: ApiTrackerBinding;
               };
               setTracker(body.binding);
+              setTrackerRequired(false);
+              setSeedError((prev) =>
+                prev === "workspace_tracker_required" ? null : prev,
+              );
             }}
             className="rounded-full border border-aqua/40 bg-aqua/[0.08] px-3 py-1 text-[11px] font-semibold text-aqua transition hover:bg-aqua/[0.16] disabled:opacity-40"
           >
@@ -474,7 +486,7 @@ export function RepoCard({
           summary. */}
       <details
         className="mt-5 group/agents"
-        open={missingRequiredSecrets.length > 0 || secretsFailed.length > 0}
+        open
       >
         <summary className="cursor-pointer list-none [&::-webkit-details-marker]:hidden">
           <span className="inline-flex items-center gap-2">
@@ -684,10 +696,9 @@ export function RepoCard({
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-0 text-[11px] leading-snug text-white/55">
             {!readyToSeed ? (
-              <>
-                <strong className="text-white/80">Not ready.</strong>{" "}
-                {missingBlockers(missingRequiredSecrets)}
-              </>
+              <span className="font-semibold text-coral">
+                Not ready. {missingBlockers(missingRequiredSecrets)}
+              </span>
             ) : seedState === "update_available" ? (
               <>
                 Re-seed updates Ship&apos;s workflow and config files to{" "}
@@ -722,7 +733,16 @@ export function RepoCard({
               if (!resp.ok) {
                 setSeedSaving(false);
                 const p = await resp.json().catch(() => ({}));
-                setSeedError(p?.error ?? "unknown");
+                const errCode = p?.error ?? "unknown";
+                const errDetail = p?.detail ? ` — ${p.detail}` : "";
+                setSeedError(errCode + errDetail);
+                if (errCode === "workspace_tracker_required") {
+                  setTrackerRequired(true);
+                  trackerRef.current?.scrollIntoView({
+                    behavior: "smooth",
+                    block: "center",
+                  });
+                }
                 return;
               }
               const body = (await resp.json()) as {
@@ -749,11 +769,17 @@ export function RepoCard({
             }}
             className="inline-flex items-center justify-center gap-1.5 rounded-full bg-gradient-to-r from-coral via-lilac to-aqua px-5 py-2 text-sm font-semibold text-ink shadow-glow transition hover:brightness-110 active:scale-[0.99] disabled:cursor-default disabled:bg-none disabled:bg-white/[0.05] disabled:text-white/45 disabled:shadow-none"
           >
-            {seedSaving
-              ? "Opening PR..."
-              : seedState === "update_available"
-                ? "Open re-seed PR"
-                : "Open seed PR"}
+            {seedSaving ? (
+              <span className="inline-flex items-center gap-2">
+                <svg className="animate-spin h-3.5 w-3.5" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/>
+                </svg>
+                Opening PR…
+              </span>
+            ) : seedState === "update_available"
+              ? "Open re-seed PR"
+              : "Open seed PR"}
           </button>
         </div>
         {seedError && (

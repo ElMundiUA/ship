@@ -1,6 +1,7 @@
 site/
 .cursor/
 .playwright-cli/
+.playwright-mcp/
 .venv-docs/
 .venv/
 node_modules/

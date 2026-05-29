@@ -77,7 +77,14 @@ function relayError(err: unknown) {
       return json({ error: code }, 412);
     }
     if (err.status === 422) return json({ error: "bad_body" }, 422);
-    if (err.status === 502) return json({ error: "github_api_error" }, 502);
+    if (err.status === 502) {
+      const detail = err.detail as { code?: string; message?: string; upstream_status?: number } | null;
+      return json({
+        error: "github_api_error",
+        detail: detail?.message ?? null,
+        upstream_status: detail?.upstream_status ?? null,
+      }, 502);
+    }
     return json({ error: `http_${err.status}` }, err.status);
   }
   return json({ error: "unknown" }, 500);
