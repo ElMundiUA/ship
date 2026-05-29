@@ -976,6 +976,188 @@ async def _apply_pull_request_event(
                 exc,
             )
 
+        # Phase 5 of the FSM event-driven rearchitecture (2026-05-29).
+        # The seed PR is what wires Ship into the repo — workflow file
+        # lands, run-token rotates, the dispatcher can fire. The very
+        # next thing the operator wants is dev/test/prod + CI/CD up,
+        # not a docs link saying "press this button to start". Hand the
+        # repo to bootstrap-intelligence here, then dispatch the first
+        # infra ticket so Phase 3 walks the rest autonomously through
+        # to merge. Operator can walk away from the wizard and come
+        # back to a configured workspace.
+        await _autostart_bootstrap_on_install_merge(
+            session,
+            workspace_id=repo_row.workspace_id,
+            repo_row=repo_row,
+        )
+
+
+async def _autostart_bootstrap_on_install_merge(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    repo_row: Any,
+) -> None:
+    """Phase 5 — run bootstrap-intelligence + dispatch its first ticket
+    after the seed PR merges.
+
+    Pipes the standard ``run_bootstrap_for_repo`` (BS3 endpoint + Inbox
+    decision action share this entry point) into an automatic call
+    inside the install-PR-merge webhook, then immediately fires
+    ``maybe_dispatch`` for the first infra ticket so Phase 3's
+    auto-advance walks the rest of the epic to merge without an
+    operator touch. Audit events bracket every outcome:
+
+    - ``wizard.bootstrap_skipped`` — readiness probe came back
+      ``skipped_no_blueprint`` / ``skipped_already_ready`` /
+      ``skipped_no_gaps``. Workspace stays as-is; operator can press
+      "Generate bootstrap tickets" from the inbox card if they
+      disagree.
+    - ``wizard.bootstrap_epic_generated`` — readiness produced a plan,
+      epic minted (or reused) in Linear. Payload carries
+      ``project_url`` + ``ticket_count`` + ``first_ticket_ref``.
+    - ``wizard.bootstrap_first_dispatch`` — dispatch outcome for the
+      first ticket. ``fired=true / reason=fired`` is the happy path;
+      anything else (``project_busy``, ``no_repo``, …) surfaces here
+      so the operator can diagnose without reading the cascade chain.
+
+    Best-effort: any exception in the chain is logged + swallowed; the
+    seed PR-merge webhook must still ack GitHub on time. Idempotent on
+    re-delivery of the same install-PR-merge event because
+    ``generate_bootstrap_plan`` reuses an existing OPEN epic with the
+    same deterministic name.
+    """
+    try:
+        from backend.app.core.config import get_settings as _gs
+        from backend.app.services.bootstrap_plan import run_bootstrap_for_repo
+        from backend.app.services.dispatcher import maybe_dispatch
+        from backend.app.services.tracker_resolver import (
+            resolve_for_workspace as _resolve,
+        )
+
+        settings = _gs()
+        resolved = await _resolve(
+            session=session, settings=settings, workspace_id=workspace_id,
+        )
+        if resolved is None:
+            # Workspace has no tracker bound yet — nothing to anchor
+            # the bootstrap epic against. Operator wires the tracker
+            # later, then clicks "Generate bootstrap tickets" by hand.
+            return
+
+        try:
+            result = await run_bootstrap_for_repo(
+                session=session,
+                repo=repo_row,
+                tracker=resolved.gateway,
+                settings=settings,
+            )
+        except Exception as exc:  # noqa: BLE001 — best-effort
+            logger.warning(
+                "phase5 run_bootstrap_for_repo failed ws=%s repo=%s err=%s",
+                workspace_id, getattr(repo_row, "id", None), exc,
+            )
+            return
+
+        outcome = str(result.get("result") or "")
+        if outcome != "bootstrap_generated":
+            session.add(
+                AuditLog(
+                    workspace_id=workspace_id,
+                    actor_user_id=None,
+                    actor_token_id=None,
+                    action="wizard.bootstrap_skipped",
+                    target_kind="repo",
+                    target_id=str(getattr(repo_row, "id", "")),
+                    payload={
+                        "reason": outcome or "unknown",
+                        "detail": result.get("detail"),
+                    },
+                )
+            )
+            logger.info(
+                "phase5 bootstrap skipped ws=%s repo=%s reason=%s",
+                workspace_id, getattr(repo_row, "id", None), outcome,
+            )
+            return
+
+        session.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                actor_user_id=None,
+                actor_token_id=None,
+                action="wizard.bootstrap_epic_generated",
+                target_kind="project",
+                target_id=str(result.get("project_native_id") or ""),
+                payload={
+                    "repo_id": str(getattr(repo_row, "id", "")),
+                    "project_url": result.get("project_url"),
+                    "ticket_count": result.get("ticket_count"),
+                    "first_ticket_ref": result.get("first_ticket_ref"),
+                    "tracker_kind": resolved.kind,
+                },
+            )
+        )
+
+        first_ticket = result.get("first_ticket_ref")
+        if not first_ticket:
+            # Idempotent reuse path — epic existed already, no new
+            # tickets minted. Don't second-guess the operator: if they
+            # asked for re-run and the existing epic has live work,
+            # Phase 3's PR-merge cascade picks the next ticket
+            # whenever the current one merges.
+            logger.info(
+                "phase5 bootstrap reused existing epic; no first_ticket "
+                "to dispatch ws=%s repo=%s",
+                workspace_id, getattr(repo_row, "id", None),
+            )
+            return
+
+        try:
+            dispatch_result = await maybe_dispatch(
+                session,
+                workspace_id=workspace_id,
+                ticket_ref=str(first_ticket),
+                trigger_kind="wizard_bootstrap",
+                fsm_stage="planning",
+                settings=settings,
+            )
+        except Exception as exc:  # noqa: BLE001 — best-effort
+            logger.warning(
+                "phase5 maybe_dispatch failed ws=%s ticket=%s err=%s",
+                workspace_id, first_ticket, exc,
+            )
+            return
+
+        session.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                actor_user_id=None,
+                actor_token_id=None,
+                action="wizard.bootstrap_first_dispatch",
+                target_kind="ticket",
+                target_id=str(first_ticket),
+                payload={
+                    "project_native_id": result.get("project_native_id"),
+                    "tracker_kind": resolved.kind,
+                    "fired": dispatch_result.fired,
+                    "reason": dispatch_result.reason,
+                },
+            )
+        )
+        logger.info(
+            "phase5 bootstrap autostart ws=%s repo=%s epic=%s "
+            "first_ticket=%s fired=%s reason=%s",
+            workspace_id, getattr(repo_row, "id", None),
+            result.get("project_native_id"), first_ticket,
+            dispatch_result.fired, dispatch_result.reason,
+        )
+    except Exception as exc:  # noqa: BLE001 — never fail the webhook ack
+        logger.warning(
+            "phase5 autostart crashed ws=%s repo=%s err=%s",
+            workspace_id, getattr(repo_row, "id", None), exc,
+        )
+
 
 # Pull a ``ELS-99`` / ``ENG-12`` / ``ABCD-1234`` style ticket id out of
 # an agent-PR title. Agent PRs follow ``agent: <role> · <stage> ELS-99``
