@@ -480,9 +480,27 @@ export default async function OnboardingPage({
   // the per-repo reads with ``Promise.all`` — they're independent.
   let confirmCards: RepoCardInitial[] | null = null;
   let confirmLoadError: string | null = null;
+  let rolesComplete =
+    rolesInitial !== null &&
+    rolesInitial.currentTrackerKind !== null &&
+    rolesInitial.currentAgentProfile !== null;
   if (step === "confirm" && wsId && apiConfigured) {
     try {
-      const activated = await listActivatedRepos(wsId, sessionToken ?? undefined);
+      const [activated, wsListForRoles, integrationsForRoles] = await Promise.all([
+        listActivatedRepos(wsId, sessionToken ?? undefined),
+        listWorkspaces(sessionToken ?? undefined).catch(() => [] as Awaited<ReturnType<typeof listWorkspaces>>),
+        listIntegrations(wsId, sessionToken ?? undefined).catch(() => [] as Awaited<ReturnType<typeof listIntegrations>>),
+      ]);
+      // Compute roles completion for the stepper checkmark — the roles
+      // data isn't loaded on the confirm step normally, so we fetch it
+      // here to avoid showing "4" instead of ✓ when arriving from step 4.
+      const wsForRoles = wsListForRoles.find((w) => w.id === wsId);
+      const hasTracker =
+        integrationsForRoles.some(
+          (i) => (i.kind === "linear" || i.kind === "jira") && i.has_secret,
+        ) || githubAppInstalled;
+      const defaultAgentProfile = wsForRoles?.default_agent_profile ?? null;
+      rolesComplete = hasTracker && defaultAgentProfile != null;
       if (activated.length === 0) {
         // No repos → bounce to the picker. Soft redirect via URL
         // param so the banner explains what happened.
@@ -492,7 +510,7 @@ export default async function OnboardingPage({
       }
       confirmCards = await Promise.all(
         activated.map((r) =>
-          loadRepoCardInitial(wsId, r, sessionToken ?? undefined),
+          loadRepoCardInitial(wsId, r, sessionToken ?? undefined, defaultAgentProfile),
         ),
       );
     } catch (err) {
@@ -589,10 +607,7 @@ export default async function OnboardingPage({
                 // rendered (otherwise we don't pay for the workspace
                 // + integrations fetch on every step). On other
                 // steps the cell shows the step number, not a ✓.
-                roles:
-                  rolesInitial !== null &&
-                  rolesInitial.currentTrackerKind !== null &&
-                  rolesInitial.currentAgentProfile !== null,
+                roles: rolesComplete,
                 confirm: false /* never auto-checks; confirm is the action */,
               }}
             />
@@ -1485,10 +1500,26 @@ function TrackerStep({
  * instead of a generic "reload" banner. The full message is logged
  * server-side for ops to triage.
  */
+/** Maps a workspace ``default_agent_profile`` to the agent catalog slug
+ *  whose secret becomes required on the confirm step. Abstract profiles
+ *  (auto/main/cheaper) default to claude-md — the canonical Ship agent.
+ *  Profiles that need no vendor key (local_cli, ship_cloud_agent) return
+ *  null so no agent is marked required. */
+const PROFILE_TO_REQUIRED_SLUG: Record<string, string | null> = {
+  cursor_agent: "cursor-cloud",
+  codex_cli: "codex",
+  main: "claude-md",
+  auto: "claude-md",
+  cheaper: "claude-md",
+  ship_cloud_agent: null,
+  local_cli: null,
+};
+
 async function loadRepoCardInitial(
   wsId: string,
   repo: ApiActivatedRepo,
   token: string | undefined,
+  defaultAgentProfile: string | null = null,
 ): Promise<RepoCardInitial> {
   const [trackerRes, secretsRes] = await Promise.allSettled([
     getRepoTrackerBinding(wsId, repo.id, token),
@@ -1531,6 +1562,18 @@ async function loadRepoCardInitial(
     // open a seed PR. The card surfaces ``probe_errors.agents`` so
     // they know the secret check is stale.
     agents = [];
+  }
+
+  // Mark the agent matching the workspace's chosen profile as required
+  // so the "Open seed PR" button stays blocked until that key is set.
+  const requiredSlug =
+    defaultAgentProfile != null
+      ? (PROFILE_TO_REQUIRED_SLUG[defaultAgentProfile] ?? null)
+      : null;
+  if (requiredSlug !== null) {
+    agents = agents.map((a) =>
+      a.slug === requiredSlug ? { ...a, required: true } : a,
+    );
   }
 
   return {

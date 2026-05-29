@@ -41,14 +41,13 @@ export async function POST(request: Request) {
     return back(origin, wsId, "unknown");
   }
 
-  const url = new URL("/settings/workspaces", origin);
+  const url = new URL("/settings", origin);
   url.searchParams.set("ws", wsId);
-  url.searchParams.set("renamed", "1");
   return NextResponse.redirect(url, 303);
 }
 
 function back(origin: string, wsId: string, code: string) {
-  const url = new URL("/settings/workspaces", origin);
+  const url = new URL("/settings", origin);
   if (wsId) url.searchParams.set("ws", wsId);
   url.searchParams.set("error", code);
   return NextResponse.redirect(url, 303);

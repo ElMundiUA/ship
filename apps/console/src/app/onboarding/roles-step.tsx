@@ -33,6 +33,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 import { Badge } from "@/components/ui";
@@ -101,6 +102,9 @@ export function RolesStep({ initial }: { initial: RolesStepInitial }) {
   const [agentError, setAgentError] = useState<string | null>(null);
   const [trackerSaving, setTrackerSaving] = useState(false);
   const [trackerError, setTrackerError] = useState<string | null>(null);
+  const [submitted, setSubmitted] = useState(false);
+  const [continuing, setContinuing] = useState(false);
+  const router = useRouter();
 
   const trackerOptions = initial.trackerCandidates;
   const trackerReady = tracker !== "";
@@ -153,52 +157,64 @@ export function RolesStep({ initial }: { initial: RolesStepInitial }) {
             </p>
           ) : (
             <div className="flex flex-wrap items-center gap-3">
-              <select
-                value={tracker}
-                disabled={trackerSaving}
-                onChange={async (e) => {
-                  const next = e.target.value as TrackerKind | "";
-                  if (!next || next === tracker) return;
-                  setTrackerSaving(true);
-                  setTrackerError(null);
-                  // ``tracker-install`` is form-encoded by design, so
-                  // we use a transient form to fire the request.
-                  // Browser-side fetch with form-data also works and
-                  // skips the page redirect.
-                  try {
-                    const fd = new FormData();
-                    fd.set("ws", initial.workspaceId);
-                    fd.set("kind", next);
-                    const resp = await fetch(
-                      "/api/onboard/tracker-install",
-                      { method: "POST", body: fd, redirect: "manual" },
-                    );
-                    // The handler 303-redirects on success; with
-                    // ``redirect: "manual"`` fetch returns an opaque
-                    // response and ``resp.ok`` is false. Treat any
-                    // non-error type as success — the action itself
-                    // is fire-and-forget.
-                    if (resp.type !== "opaqueredirect" && !resp.ok) {
-                      throw new Error(`HTTP ${resp.status}`);
+              <div className="relative">
+                <select
+                  value={tracker}
+                  disabled={trackerSaving}
+                  onChange={async (e) => {
+                    const next = e.target.value as TrackerKind | "";
+                    if (!next || next === tracker) return;
+                    setTrackerSaving(true);
+                    setTrackerError(null);
+                    // ``tracker-install`` is form-encoded by design, so
+                    // we use a transient form to fire the request.
+                    // Browser-side fetch with form-data also works and
+                    // skips the page redirect.
+                    try {
+                      const fd = new FormData();
+                      fd.set("ws", initial.workspaceId);
+                      fd.set("kind", next);
+                      const resp = await fetch(
+                        "/api/onboard/tracker-install",
+                        { method: "POST", body: fd, redirect: "manual" },
+                      );
+                      // The handler 303-redirects on success; with
+                      // ``redirect: "manual"`` fetch returns an opaque
+                      // response and ``resp.ok`` is false. Treat any
+                      // non-error type as success — the action itself
+                      // is fire-and-forget.
+                      if (resp.type !== "opaqueredirect" && !resp.ok) {
+                        throw new Error(`HTTP ${resp.status}`);
+                      }
+                      setTracker(next);
+                    } catch (err) {
+                      setTrackerError(
+                        err instanceof Error ? err.message : "save failed",
+                      );
+                    } finally {
+                      setTrackerSaving(false);
                     }
-                    setTracker(next);
-                  } catch (err) {
-                    setTrackerError(
-                      err instanceof Error ? err.message : "save failed",
-                    );
-                  } finally {
-                    setTrackerSaving(false);
+                  }}
+                  className={
+                    "appearance-none rounded-lg border px-3 py-2 pr-8 text-xs text-white bg-white/[0.04] " +
+                    (submitted && !trackerReady
+                      ? "border-coral/70 bg-coral/[0.06]"
+                      : "border-white/[0.08]")
                   }
-                }}
-                className="rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-1.5 text-xs text-white"
-              >
-                <option value="">— pick a tracker —</option>
-                {trackerOptions.map((kind) => (
-                  <option key={kind} value={kind}>
-                    {TRACKER_LABEL[kind]}
-                  </option>
-                ))}
-              </select>
+                >
+                  <option value="">— pick a tracker —</option>
+                  {trackerOptions.map((kind) => (
+                    <option key={kind} value={kind}>
+                      {TRACKER_LABEL[kind]}
+                    </option>
+                  ))}
+                </select>
+                <span className="pointer-events-none absolute inset-y-0 right-2.5 flex items-center text-white/45">
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                    <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                </span>
+              </div>
               {trackerSaving && (
                 <span className="text-[11px] text-white/55">Saving…</span>
               )}
@@ -216,6 +232,7 @@ export function RolesStep({ initial }: { initial: RolesStepInitial }) {
           label="Documentation"
           description="Where curated knowledge buckets live."
           ready={initial.docsCandidates.length > 0}
+          hideBadge
         >
           {initial.docsCandidates.length === 0 ? (
             <p className="text-[11px] text-white/55">
@@ -251,52 +268,64 @@ export function RolesStep({ initial }: { initial: RolesStepInitial }) {
           ready={agentReady}
         >
           <div className="flex flex-wrap items-center gap-3">
-            <select
-              value={agent}
-              disabled={agentSaving}
-              onChange={async (e) => {
-                const next = e.target.value;
-                if (!next || next === agent) return;
-                setAgentSaving(true);
-                setAgentError(null);
-                try {
-                  const resp = await fetch(
-                    "/api/onboard/workspace-defaults",
-                    {
-                      method: "PATCH",
-                      headers: { "content-type": "application/json" },
-                      body: JSON.stringify({
-                        workspace_id: initial.workspaceId,
-                        default_agent_profile: next,
-                      }),
-                    },
-                  );
-                  if (!resp.ok) {
-                    const payload = await resp.json().catch(() => ({}));
-                    throw new Error(
-                      typeof payload?.error === "string"
-                        ? payload.error
-                        : `HTTP ${resp.status}`,
+            <div className="relative">
+              <select
+                value={agent}
+                disabled={agentSaving}
+                onChange={async (e) => {
+                  const next = e.target.value;
+                  if (!next || next === agent) return;
+                  setAgentSaving(true);
+                  setAgentError(null);
+                  try {
+                    const resp = await fetch(
+                      "/api/onboard/workspace-defaults",
+                      {
+                        method: "PATCH",
+                        headers: { "content-type": "application/json" },
+                        body: JSON.stringify({
+                          workspace_id: initial.workspaceId,
+                          default_agent_profile: next,
+                        }),
+                      },
                     );
+                    if (!resp.ok) {
+                      const payload = await resp.json().catch(() => ({}));
+                      throw new Error(
+                        typeof payload?.error === "string"
+                          ? payload.error
+                          : `HTTP ${resp.status}`,
+                      );
+                    }
+                    setAgent(next);
+                  } catch (err) {
+                    setAgentError(
+                      err instanceof Error ? err.message : "save failed",
+                    );
+                  } finally {
+                    setAgentSaving(false);
                   }
-                  setAgent(next);
-                } catch (err) {
-                  setAgentError(
-                    err instanceof Error ? err.message : "save failed",
-                  );
-                } finally {
-                  setAgentSaving(false);
+                }}
+                className={
+                  "appearance-none rounded-lg border px-3 py-2 pr-8 text-xs text-white bg-white/[0.04] " +
+                  (submitted && !agentReady
+                    ? "border-coral/70 bg-coral/[0.06]"
+                    : "border-white/[0.08]")
                 }
-              }}
-              className="rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-1.5 text-xs text-white"
-            >
-              <option value="">— pick a default agent —</option>
-              {AGENT_PROFILES.map((p) => (
-                <option key={p.value} value={p.value}>
-                  {p.label}
-                </option>
-              ))}
-            </select>
+              >
+                <option value="">— pick a default agent —</option>
+                {AGENT_PROFILES.map((p) => (
+                  <option key={p.value} value={p.value}>
+                    {p.label}
+                  </option>
+                ))}
+              </select>
+              <span className="pointer-events-none absolute inset-y-0 right-2.5 flex items-center text-white/45">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                  <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              </span>
+            </div>
             {agentSaving && (
               <span className="text-[11px] text-white/55">Saving…</span>
             )}
@@ -337,19 +366,60 @@ export function RolesStep({ initial }: { initial: RolesStepInitial }) {
           >
             ← Integrations
           </Link>
-          <Link
-            href={`/onboarding?step=confirm&ws=${encodeURIComponent(
-              initial.workspaceId,
-            )}`}
+          <button
+            type="button"
             data-testid="onboarding-roles-continue"
-            className={`rounded-md px-3 py-1.5 text-sm font-semibold transition ${
-              allReady
-                ? "bg-aqua/15 text-aqua hover:bg-aqua/25"
-                : "bg-white/[0.02] text-white/40 pointer-events-none"
-            }`}
+            disabled={continuing}
+            onClick={async () => {
+              if (!allReady) {
+                setSubmitted(true);
+                return;
+              }
+              setContinuing(true);
+              // Ensure the workspace-level tracker Integration row exists
+              // before navigating. tracker-install with kind=github creates
+              // the row if it's missing — this covers the case where the
+              // user arrived with github pre-selected but never changed the
+              // dropdown (so the onChange fetch never fired).
+              if (tracker) {
+                try {
+                  const fd = new FormData();
+                  fd.set("ws", initial.workspaceId);
+                  fd.set("kind", tracker);
+                  await fetch("/api/onboard/tracker-install", {
+                    method: "POST",
+                    body: fd,
+                    redirect: "manual",
+                  });
+                } catch {
+                  // best-effort
+                }
+              }
+              router.push(
+                `/onboarding?step=confirm&ws=${encodeURIComponent(initial.workspaceId)}`,
+              );
+            }}
+            className={
+              "rounded-md px-3 py-1.5 text-sm font-semibold transition " +
+              (continuing
+                ? "cursor-not-allowed bg-white/[0.04] text-white/30"
+                : allReady
+                  ? "bg-aqua/15 text-aqua hover:bg-aqua/25"
+                  : "bg-white/[0.02] text-white/40 hover:bg-white/[0.05] hover:text-white/60")
+            }
           >
-            Continue →
-          </Link>
+            {continuing ? (
+              <span className="inline-flex items-center gap-2">
+                <svg className="animate-spin h-3.5 w-3.5" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/>
+                </svg>
+                Saving…
+              </span>
+            ) : (
+              "Continue →"
+            )}
+          </button>
         </div>
       </div>
     </section>
@@ -360,11 +430,13 @@ function RoleRow({
   label,
   description,
   ready,
+  hideBadge,
   children,
 }: {
   label: string;
   description: string;
   ready: boolean;
+  hideBadge?: boolean;
   children: React.ReactNode;
 }) {
   return (
@@ -373,9 +445,11 @@ function RoleRow({
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="text-sm font-semibold text-white">{label}</span>
-            <Badge tone={ready ? "ok" : "warn"}>
-              {ready ? "ready" : "needed"}
-            </Badge>
+            {!hideBadge && (
+              <Badge tone={ready ? "ok" : "warn"}>
+                {ready ? "ready" : "needed"}
+              </Badge>
+            )}
           </div>
           <p className="mt-0.5 text-[11px] text-white/60">{description}</p>
         </div>
