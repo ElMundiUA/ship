@@ -3267,6 +3267,7 @@ export type ApiWorkspaceImporterIntegration = {
   provider: string;
   account_name: string | null;
   account_url: string | null;
+  provides_config_keys: string[];
 };
 
 export async function listWorkspaceImporterIntegrations(

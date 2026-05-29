@@ -328,6 +328,7 @@ class ImporterIntegrationOut(BaseModel):
     provider: str
     account_name: str | None = None
     account_url: str | None = None
+    provides_config_keys: list[str] = Field(default_factory=list)
 
 
 def _coerce_importer(row: dict[str, Any]) -> ImporterOut:
@@ -348,20 +349,22 @@ def _coerce_importer(row: dict[str, Any]) -> ImporterOut:
     )
 
 
-async def _merge_workspace_secrets(
+async def _merge_workspace_creds(
     session: AsyncSession,
     workspace_id: uuid.UUID,
     importer_type: str,
+    operator_config: dict[str, Any],
     operator_secrets: dict[str, str],
     *,
     use_workspace: bool,
-) -> dict[str, str]:
+) -> tuple[dict[str, Any], dict[str, str]]:
     """When ``use_workspace`` is true, resolve the workspace's
     integration creds for this importer type and merge them under the
-    operator-supplied secrets (explicit values override). Raises 400
-    if the workspace has no usable integration for the type."""
+    operator-supplied values (explicit values override). Raises 400 if
+    the workspace has no usable integration for the type. Returns
+    ``(config, secrets)``."""
     if not use_workspace:
-        return operator_secrets
+        return operator_config, operator_secrets
     resolved = await resolve_workspace_importer_secrets(
         session,
         workspace_id=workspace_id,
@@ -379,7 +382,10 @@ async def _merge_workspace_secrets(
                 ),
             },
         )
-    return {**resolved, **operator_secrets}
+    return (
+        {**resolved.config, **operator_config},
+        {**resolved.secrets, **operator_secrets},
+    )
 
 
 def _require_lighthouse_or_503():
@@ -447,6 +453,7 @@ async def list_importer_workspace_integrations(
             provider=r.provider,
             account_name=r.account_name,
             account_url=r.account_url,
+            provides_config_keys=list(r.provides_config_keys),
         )
         for r in rows
     ]
@@ -488,8 +495,12 @@ async def create_workspace_importer(
     await _require_membership(session, workspace_id, auth.user.id, ROLES_MAINTAIN)
     client = _require_lighthouse_or_503()
     recipe = payload.recipe or f"workspace-{payload.type}"
-    secrets = await _merge_workspace_secrets(
-        session, workspace_id, payload.type, payload.secrets,
+    config, secrets = await _merge_workspace_creds(
+        session,
+        workspace_id,
+        payload.type,
+        payload.config,
+        payload.secrets,
         use_workspace=payload.use_workspace_integration,
     )
     try:
@@ -499,7 +510,7 @@ async def create_workspace_importer(
             name=payload.name,
             description=payload.description,
             recipe=recipe,
-            config=payload.config,
+            config=config,
             secrets=secrets,
         )
     except httpx.HTTPStatusError as exc:
@@ -548,15 +559,19 @@ async def discover_importer_items(
     items the operator can choose from. No DB writes."""
     await _require_membership(session, workspace_id, auth.user.id, ROLES_MAINTAIN)
     client = _require_lighthouse_or_503()
-    secrets = await _merge_workspace_secrets(
-        session, workspace_id, payload.type, payload.secrets,
+    config, secrets = await _merge_workspace_creds(
+        session,
+        workspace_id,
+        payload.type,
+        payload.config,
+        payload.secrets,
         use_workspace=payload.use_workspace_integration,
     )
     try:
         items = await client.discover_importer(
             workspace_id=workspace_id,
             type_=payload.type,
-            config=payload.config,
+            config=config,
             secrets=secrets,
         )
     except httpx.HTTPStatusError as exc:
