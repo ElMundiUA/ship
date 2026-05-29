@@ -379,11 +379,21 @@ async def run_bootstrap_for_repo(
         report=rdy.report,
         actor_user_id=actor_user_id,
     )
+    # Phase 5 (2026-05-29): surface the first ticket so the install-PR
+    # merge handler can fire ``maybe_dispatch`` for it directly,
+    # without re-querying Linear for the project's contents. ``None``
+    # on the idempotent-reuse path (existing project — no new tickets
+    # minted; caller decides whether to also walk the existing
+    # backlog).
+    first_ticket_ref = (
+        plan.tickets[0].display_id if plan.tickets else None
+    )
     return {
         "result": "bootstrap_generated",
         "project_url": plan.project_url,
         "project_native_id": plan.project_native_id,
         "ticket_count": len(plan.tickets),
+        "first_ticket_ref": first_ticket_ref,
     }
 
 
