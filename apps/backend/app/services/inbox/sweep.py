@@ -6,9 +6,10 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.app.db.models.agent_surface import Clarification
 from backend.app.db.models.inbox import InboxItem, InboxItemEvent
 
 logger = logging.getLogger(__name__)
@@ -84,10 +85,16 @@ async def sweep_stale_inbox_items(session: AsyncSession) -> int:
         )
     ).scalars().all()
 
+    stale_clarification_ids: list[uuid.UUID] = []
     for item in rows:
         item.status = "dismissed"
         item.resolution = "stale"
         item.resolved_at = now
+        # Keep the legacy source row in step with its mirror so the
+        # ``clarifications`` endpoint stops projecting a dismissed card
+        # as ``open`` (the inbox sweep only touches inbox_items).
+        if item.source_table == "clarifications" and item.source_id:
+            stale_clarification_ids.append(item.source_id)
         session.add(
             InboxItemEvent(
                 item_id=item.id,
@@ -96,6 +103,16 @@ async def sweep_stale_inbox_items(session: AsyncSession) -> int:
                 action="dismissed",
                 payload={"resolution": "stale"},
             )
+        )
+
+    if stale_clarification_ids:
+        await session.execute(
+            update(Clarification)
+            .where(
+                Clarification.id.in_(stale_clarification_ids),
+                Clarification.status == "open",
+            )
+            .values(status="stale", updated_at=now)
         )
 
     if rows:
