@@ -95,6 +95,10 @@ _STARTERS: Final[dict[str, StarterWorkflow]] = {
             id="ship-agent-run",
             install_target=".github/workflows/ship-agent-run.yml",
         ),
+        StarterWorkflow(
+            id="ship-deploy-plan",
+            install_target=".github/workflows/ship-deploy-plan.yml",
+        ),
     )
 }
 

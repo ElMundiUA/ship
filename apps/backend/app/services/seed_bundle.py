@@ -227,7 +227,9 @@ from backend.app.services.tracker_fsm import (
 #         input for ELS-156 file-overlap honour telemetry correlation.
 # ``0.38`` → ``ship-agent-run.yml`` adds optional ``file_overlap_warnings``
 #         dispatch input for ELS-155 dev-dispatch prompt injection.
-BUNDLE_VERSION: str = "0.38"
+# ``0.39`` → Adds ``ship-deploy-plan.yml`` so deployment planning runs
+#         inside GitHub Actions and reuses repo-level LLM secrets.
+BUNDLE_VERSION: str = "0.39"
 
 # First bundle whose ``ship-agent-run.yml`` declares the ``ship_run_id``
 # ``workflow_dispatch`` input. The E16 cron dispatcher must NOT send this
@@ -488,11 +490,12 @@ def compose_seed_files(
     # by tracker_poller) fires this workflow with explicit
     # ``(routine_id, ticket_ref)`` inputs whenever a Linear ticket
     # transitions into an actionable stage; no more cron-on-the-fleet.
-    trigger_entry = starter_workflows.get("ship-agent-run")
-    if trigger_entry is not None:
-        trigger_body = trigger_entry.read_yaml()
-        if trigger_body:
-            _add(trigger_entry.install_target, trigger_body)
+    for workflow_id in ("ship-agent-run", "ship-deploy-plan"):
+        trigger_entry = starter_workflows.get(workflow_id)
+        if trigger_entry is not None:
+            trigger_body = trigger_entry.read_yaml()
+            if trigger_body:
+                _add(trigger_entry.install_target, trigger_body)
 
     # ── Knowledge starters ───────────────────────────────────────
     for path, content in knowledge_files:
