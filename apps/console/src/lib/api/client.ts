@@ -4315,3 +4315,208 @@ export function rerunLocalCiRun(
     { method: "POST", token },
   );
 }
+
+// ---------------------------------------------------------------------------
+// Deploy
+// ---------------------------------------------------------------------------
+
+export type ApiDeploymentStatus =
+  | "pending"
+  | "planning"
+  | "deploying"
+  | "active"
+  | "failed"
+  | "cancelled";
+
+export interface ApiDeployment {
+  id: string;
+  workspace_id: string;
+  repo_id: string;
+  repo_full_name: string | null;
+  provider: string;
+  status: ApiDeploymentStatus;
+  status_detail: string | null;
+  live_url: string | null;
+  healthy: boolean | null;
+  error_message: string | null;
+  /** Coarse failure category; "github_access" = private repo unreachable by DO. */
+  error_kind: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  created_at: string;
+  updated_at: string;
+  plan_summary: string | null;
+}
+
+export function triggerDeploy(
+  workspaceId: string,
+  repoId: string,
+  llm?: { provider?: string; model?: string; apiKey?: string } | null,
+  token?: string,
+): Promise<ApiDeployment> {
+  return apiFetch<ApiDeployment>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/deploy`,
+    {
+      method: "POST",
+      body: llm
+        ? {
+            llm_provider: llm.provider,
+            llm_model: llm.model,
+            llm_api_key: llm.apiKey,
+          }
+        : {},
+      token,
+    },
+  );
+}
+
+export function getDeployment(
+  workspaceId: string,
+  deploymentId: string,
+  token?: string,
+): Promise<ApiDeployment> {
+  return apiFetch<ApiDeployment>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/deployments/${encodeURIComponent(deploymentId)}`,
+    { token },
+  );
+}
+
+export function listWorkspaceDeployments(
+  workspaceId: string,
+  token?: string,
+): Promise<ApiDeployment[]> {
+  return apiFetch<ApiDeployment[]>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/deployments`,
+    { token },
+  );
+}
+
+export interface ApiDeployProvider {
+  provider: string;
+  label: string;
+  connected: boolean;
+  connect_start_path: string | null;
+}
+
+export function listDeployProviders(
+  workspaceId: string,
+  token?: string,
+): Promise<ApiDeployProvider[]> {
+  return apiFetch<ApiDeployProvider[]>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/deploy/providers`,
+    { token },
+  );
+}
+
+export interface ApiDeployPlannerOptions {
+  providers: string[];
+  missing: string[];
+}
+
+export function getDeployPlannerOptions(
+  workspaceId: string,
+  repoId: string,
+  token?: string,
+): Promise<ApiDeployPlannerOptions> {
+  return apiFetch<ApiDeployPlannerOptions>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/deploy/planner-options`,
+    { token },
+  );
+}
+
+export interface ApiDeployPlannerModels {
+  provider: string;
+  models: string[];
+  default_model: string;
+  /** "live" = from the provider API, "fallback" = curated list. */
+  source: string;
+  error: string | null;
+}
+
+export function getDeployPlannerModels(
+  workspaceId: string,
+  repoId: string,
+  provider: string,
+  apiKey?: string,
+  token?: string,
+): Promise<ApiDeployPlannerModels> {
+  return apiFetch<ApiDeployPlannerModels>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/deploy/planner-models`,
+    {
+      method: "POST",
+      token,
+      body: { provider, api_key: apiKey || undefined },
+    },
+  );
+}
+
+export interface ApiDeployPlannerPref {
+  provider: string | null;
+  model: string | null;
+}
+
+/** Persist the repo's deploy-planner preference (provider + model). */
+export function setDeployPlannerPref(
+  workspaceId: string,
+  repoId: string,
+  pref: { provider: string | null; model: string | null },
+  token?: string,
+): Promise<ApiDeployPlannerPref> {
+  return apiFetch<ApiDeployPlannerPref>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/deploy/planner-pref`,
+    { method: "PUT", token, body: pref },
+  );
+}
+
+/** Start the DigitalOcean OAuth connect; returns the URL to redirect to. */
+export function startDigitalOceanConnect(
+  workspaceId: string,
+  returnPath?: string,
+  token?: string,
+): Promise<{ install_url: string; state: string }> {
+  const qs = new URLSearchParams({ workspace_id: workspaceId });
+  if (returnPath) qs.set("return_path", returnPath);
+  return apiFetch<{ install_url: string; state: string }>(
+    `/v1/integrations/digitalocean/install/start?${qs.toString()}`,
+    { method: "POST", token },
+  );
+}
+
+export interface ApiDeployEvent {
+  kind: string;
+  message: string;
+  created_at: string;
+}
+
+export function listAppEvents(
+  workspaceId: string,
+  repoId: string,
+  token?: string,
+): Promise<ApiDeployEvent[]> {
+  return apiFetch<ApiDeployEvent[]>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/deploy/events`,
+    { token },
+  );
+}
+
+export function teardownDeployment(
+  workspaceId: string,
+  repoId: string,
+  token?: string,
+): Promise<{ ok: boolean; deleted_app_id: string | null; removed: number }> {
+  return apiFetch(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/deploy`,
+    { method: "DELETE", token },
+  );
+}
+
+export function listRepoDeployments(
+  workspaceId: string,
+  repoId: string,
+  token?: string,
+): Promise<ApiDeployment[]> {
+  return apiFetch<ApiDeployment[]>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/deployments`,
+    { token },
+  );
+}
