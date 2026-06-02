@@ -1,0 +1,254 @@
+name: Ship · Deploy plan
+
+on:
+  workflow_dispatch:
+    inputs:
+      ship_deployment_id:
+        description: "Ship deployment row id"
+        required: true
+        type: string
+      ship_callback_url:
+        description: "Ship deploy-plan callback URL"
+        required: true
+        type: string
+      ship_deploy_token:
+        description: "One-time callback token"
+        required: true
+        type: string
+      repo_private:
+        description: "Whether the repo is private"
+        required: false
+        default: "false"
+        type: string
+      default_branch:
+        description: "Default branch"
+        required: false
+        default: "main"
+        type: string
+      planner_provider:
+        description: "Preferred LLM provider: openai, anthropic, gemini, mistral"
+        required: false
+        default: ""
+        type: string
+      planner_model:
+        description: "Optional model override"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ship-deploy-plan-${{ inputs.ship_deployment_id }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Build deploy plan
+        env:
+          SHIP_DEPLOYMENT_ID: ${{ inputs.ship_deployment_id }}
+          SHIP_CALLBACK_URL: ${{ inputs.ship_callback_url }}
+          SHIP_DEPLOY_TOKEN: ${{ inputs.ship_deploy_token }}
+          REPO_PRIVATE: ${{ inputs.repo_private }}
+          DEFAULT_BRANCH: ${{ inputs.default_branch }}
+          PLANNER_PROVIDER: ${{ inputs.planner_provider }}
+          PLANNER_MODEL: ${{ inputs.planner_model }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+        run: |
+          node <<'NODE'
+          const fs = require("node:fs");
+          const path = require("node:path");
+
+          const keyFiles = new Set([
+            "requirements.txt", "pyproject.toml", "pipfile", "setup.py", "runtime.txt", ".python-version",
+            "streamlit_app.py", "app.py", "main.py", "wsgi.py", "asgi.py",
+            "package.json", "next.config.js", "next.config.mjs", "next.config.ts", "vite.config.js",
+            "vite.config.ts", "nuxt.config.ts", "svelte.config.js", "angular.json", "server.js", "index.js", ".nvmrc",
+            "dockerfile", "docker-compose.yml", "docker-compose.yaml", "procfile", "app.yaml",
+          ]);
+
+          const schema = {
+            type: "object",
+            additionalProperties: false,
+            required: ["summary", "app_name", "components", "needs_managed_db", "confidence", "warnings"],
+            properties: {
+              summary: { type: "string" },
+              app_name: { type: "string" },
+              components: {
+                type: "array",
+                items: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["name", "kind", "runtime", "source_dir", "dockerfile_path", "build_command", "run_command", "output_dir", "http_port", "routes", "health_check_path", "env", "instance_size"],
+                  properties: {
+                    name: { type: "string" },
+                    kind: { enum: ["service", "static_site", "worker", "job"] },
+                    runtime: { enum: ["python", "node-js", "go", "ruby", "php", "static", "docker"] },
+                    source_dir: { type: "string" },
+                    dockerfile_path: { anyOf: [{ type: "string" }, { type: "null" }] },
+                    build_command: { anyOf: [{ type: "string" }, { type: "null" }] },
+                    run_command: { anyOf: [{ type: "string" }, { type: "null" }] },
+                    output_dir: { anyOf: [{ type: "string" }, { type: "null" }] },
+                    http_port: { anyOf: [{ type: "integer" }, { type: "null" }] },
+                    routes: { type: "array", items: { type: "string" } },
+                    health_check_path: { anyOf: [{ type: "string" }, { type: "null" }] },
+                    env: {
+                      type: "array",
+                      items: {
+                        type: "object",
+                        additionalProperties: false,
+                        required: ["key", "required", "secret", "note"],
+                        properties: {
+                          key: { type: "string" },
+                          required: { type: "boolean" },
+                          secret: { type: "boolean" },
+                          note: { anyOf: [{ type: "string" }, { type: "null" }] },
+                        },
+                      },
+                    },
+                    instance_size: { type: "string" },
+                  },
+                },
+              },
+              needs_managed_db: { anyOf: [{ type: "string" }, { type: "null" }] },
+              confidence: { enum: ["high", "medium", "low"] },
+              warnings: { type: "array", items: { type: "string" } },
+            },
+          };
+
+          function walk(dir, out = []) {
+            for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+              if ([".git", "node_modules", ".next", "dist", "build", ".venv", "vendor"].includes(ent.name)) continue;
+              const p = path.join(dir, ent.name);
+              if (ent.isDirectory()) walk(p, out);
+              else out.push(p);
+              if (out.length > 5000) break;
+            }
+            return out;
+          }
+
+          function collectFiles() {
+            const files = [];
+            let total = 0;
+            for (const p of walk(process.cwd())) {
+              const rel = path.relative(process.cwd(), p).replaceAll(path.sep, "/");
+              if (!keyFiles.has(path.basename(rel).toLowerCase())) continue;
+              const body = fs.readFileSync(p, "utf8").slice(0, 3000);
+              if (total + body.length > 24000 || files.length >= 12) break;
+              files.push(`### FILE: ${rel}\n\`\`\`\n${body}\n\`\`\``);
+              total += body.length;
+            }
+            return files.join("\n\n") || "(no key files found)";
+          }
+
+          function jsonFromText(raw) {
+            const text = String(raw || "").trim().replace(/^```json\s*/i, "").replace(/```$/i, "");
+            try { return JSON.parse(text); } catch {}
+            const start = text.indexOf("{");
+            const end = text.lastIndexOf("}");
+            if (start >= 0 && end > start) return JSON.parse(text.slice(start, end + 1));
+            throw new Error("model returned no JSON object");
+          }
+
+          async function post(body) {
+            const res = await fetch(process.env.SHIP_CALLBACK_URL, {
+              method: "POST",
+              headers: {
+                "content-type": "application/json",
+                authorization: `Bearer ${process.env.SHIP_DEPLOY_TOKEN}`,
+              },
+              body: JSON.stringify(body),
+            });
+            if (!res.ok) throw new Error(`Ship callback failed ${res.status}: ${await res.text()}`);
+          }
+
+          const system = "You are a senior release engineer. Return only JSON matching the schema. Infer build/run commands, component kind, runtime, health check path, port 8080 for services, and required env var names. Never invent secret values.";
+          const user = `Repository: ${process.env.GITHUB_REPOSITORY}
+Private: ${process.env.REPO_PRIVATE}
+Default branch: ${process.env.DEFAULT_BRANCH}
+
+Key file contents:
+${collectFiles()}
+
+Return only a DeployPlan JSON object matching this schema:
+${JSON.stringify(schema)}`;
+
+          async function openai() {
+            const model = process.env.PLANNER_MODEL || "gpt-4o";
+            const res = await fetch("https://api.openai.com/v1/chat/completions", {
+              method: "POST",
+              headers: { authorization: `Bearer ${process.env.OPENAI_API_KEY}`, "content-type": "application/json" },
+              body: JSON.stringify({ model, temperature: 0, max_tokens: 2048, response_format: { type: "json_object" }, messages: [{ role: "system", content: system }, { role: "user", content: user }] }),
+            });
+            if (!res.ok) throw new Error(`OpenAI ${res.status}: ${await res.text()}`);
+            return jsonFromText((await res.json()).choices?.[0]?.message?.content);
+          }
+
+          async function anthropic() {
+            const model = process.env.PLANNER_MODEL || "claude-sonnet-4-6";
+            const res = await fetch("https://api.anthropic.com/v1/messages", {
+              method: "POST",
+              headers: { "x-api-key": process.env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+              body: JSON.stringify({ model, max_tokens: 2048, temperature: 0, system, messages: [{ role: "user", content: user }] }),
+            });
+            if (!res.ok) throw new Error(`Anthropic ${res.status}: ${await res.text()}`);
+            return jsonFromText((await res.json()).content?.map((p) => p.text || "").join("\n"));
+          }
+
+          async function gemini() {
+            const model = process.env.PLANNER_MODEL || "gemini-flash-latest";
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(process.env.GEMINI_API_KEY)}`;
+            const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: `${system}\n\n${user}` }] }], generationConfig: { temperature: 0, maxOutputTokens: 2048, responseMimeType: "application/json" } }) });
+            if (!res.ok) throw new Error(`Gemini ${res.status}: ${await res.text()}`);
+            return jsonFromText((await res.json()).candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("\n"));
+          }
+
+          async function mistral() {
+            const model = process.env.PLANNER_MODEL || "mistral-small-latest";
+            const res = await fetch("https://api.mistral.ai/v1/chat/completions", {
+              method: "POST",
+              headers: { authorization: `Bearer ${process.env.MISTRAL_API_KEY}`, "content-type": "application/json" },
+              body: JSON.stringify({ model, temperature: 0, max_tokens: 2048, response_format: { type: "json_object" }, messages: [{ role: "system", content: system }, { role: "user", content: user }] }),
+            });
+            if (!res.ok) throw new Error(`Mistral ${res.status}: ${await res.text()}`);
+            return jsonFromText((await res.json()).choices?.[0]?.message?.content);
+          }
+
+          (async () => {
+            try {
+              const requested = (process.env.PLANNER_PROVIDER || "").toLowerCase();
+              const available = {
+                openai: Boolean(process.env.OPENAI_API_KEY),
+                anthropic: Boolean(process.env.ANTHROPIC_API_KEY),
+                gemini: Boolean(process.env.GEMINI_API_KEY),
+                mistral: Boolean(process.env.MISTRAL_API_KEY),
+              };
+              if (requested && !available[requested]) {
+                throw new Error(`Selected planner provider '${requested}' has no matching GitHub secret.`);
+              }
+              let plan;
+              if (requested === "openai" || (!requested && available.openai)) plan = await openai();
+              else if (requested === "anthropic" || (!requested && available.anthropic)) plan = await anthropic();
+              else if (requested === "gemini" || (!requested && available.gemini)) plan = await gemini();
+              else if (requested === "mistral" || (!requested && available.mistral)) plan = await mistral();
+              else throw new Error("No LLM GitHub secret found. Set OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, or MISTRAL_API_KEY.");
+              await post({ status: "succeeded", plan });
+            } catch (err) {
+              await post({ status: "failed", error: err instanceof Error ? err.message : String(err) });
+              process.exit(1);
+            }
+          })();
+          NODE

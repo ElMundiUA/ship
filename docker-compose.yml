@@ -113,6 +113,21 @@ services:
       SHIP_ALLOW_LOCAL_AUTH0_CALLBACKS: ${SHIP_ALLOW_LOCAL_AUTH0_CALLBACKS:-}
       SHIP_PUBLIC_URL: ${SHIP_PUBLIC_URL:-http://localhost:8100}
       SHIP_CONSOLE_URL: ${SHIP_CONSOLE_URL:-http://localhost:3001}
+      # Deploy feature — DigitalOcean OAuth (App Platform provider).
+      DIGITALOCEAN_CLIENT_ID: ${DIGITALOCEAN_CLIENT_ID:-}
+      DIGITALOCEAN_CLIENT_SECRET: ${DIGITALOCEAN_CLIENT_SECRET:-}
+      DIGITALOCEAN_OAUTH_SCOPES: ${DIGITALOCEAN_OAUTH_SCOPES:-read write}
+      DIGITALOCEAN_TOKEN_REFRESH_HOURS: ${DIGITALOCEAN_TOKEN_REFRESH_HOURS:-24}
+      # Deploy planner LLM (prod uses OPENAI/ANTHROPIC above; the Gemini
+      # fallback is local-dev only and stays off unless explicitly enabled).
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Extra deploy-planner vendor — also powers the live model dropdown
+      # in the New deployment modal (services.deploy.model_catalog).
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+      AGENT_VENDOR: ${AGENT_VENDOR:-openai}
+      DEPLOY_PLANNER_GEMINI_API_KEY: ${DEPLOY_PLANNER_GEMINI_API_KEY:-}
+      DEPLOY_PLANNER_GEMINI_MODEL: ${DEPLOY_PLANNER_GEMINI_MODEL:-gemini-2.5-flash}
+      DEPLOY_PLANNER_ALLOW_DEV_FALLBACK: ${DEPLOY_PLANNER_ALLOW_DEV_FALLBACK:-false}
       AUTH0_DOMAIN: ${AUTH0_DOMAIN:-}
       AUTH0_AUDIENCE: ${AUTH0_AUDIENCE:-}
       AUTH0_ISSUER: ${AUTH0_ISSUER:-}

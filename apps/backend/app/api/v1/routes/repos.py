@@ -96,6 +96,10 @@ class ActivatedRepoOut(BaseModel):
     # so the client doesn't need a separate meta endpoint.
     installed_bundle_version: str | None = None
     current_bundle_version: str = _BUNDLE_VERSION
+    # Persisted deploy-planner preference (wizard sets it, deploy modal
+    # prefills + edits it). ``NULL`` → backend default at deploy time.
+    deploy_planner_provider: str | None = None
+    deploy_planner_model: str | None = None
 
 
 class RepoActivateIn(BaseModel):
@@ -187,6 +191,8 @@ def _row_to_out(row: WorkspaceRepo) -> ActivatedRepoOut:
         preset=row.preset,
         installed_bundle_version=row.installed_bundle_version,
         current_bundle_version=_BUNDLE_VERSION,
+        deploy_planner_provider=row.deploy_planner_provider,
+        deploy_planner_model=row.deploy_planner_model,
     )
 
 
@@ -1989,6 +1995,27 @@ async def disconnect_repo(
                     )
                 )
             ).scalars().all()
+        )
+
+    # Orphan-billing guard: tear down any live cloud deployment for this repo
+    # BEFORE the cascade drops its deployment rows — otherwise the DO app keeps
+    # running and billing. Best-effort; reconcile cron is the backstop.
+    try:
+        from backend.app.services.deploy.teardown import teardown_repo_app
+
+        res = await teardown_repo_app(
+            session, workspace_id, repo_id, delete_rows=False
+        )
+        if res.failed_app_ids:
+            logger.warning(
+                "repo %s disconnect: cloud app(s) not torn down (%s) — "
+                "reconcile cron will retry",
+                repo_id,
+                res.failed_app_ids,
+            )
+    except Exception:  # noqa: BLE001 — never block repo disconnect
+        logger.exception(
+            "repo %s disconnect: deploy teardown raised; continuing", repo_id
         )
 
     # Routine.repo_id is ON DELETE CASCADE, so deleting the WorkspaceRepo

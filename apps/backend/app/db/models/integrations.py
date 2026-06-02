@@ -242,6 +242,21 @@ class WorkspaceRepo(Base):
         String(16), nullable=True
     )
 
+    # Persisted deploy-planner preference (set in the onboarding wizard,
+    # editable from the New deployment modal). ``deploy_planner_provider``
+    # is one of openai/anthropic/gemini/mistral; ``deploy_planner_model``
+    # is a native model id (or rolling alias like ``gemini-flash-latest``).
+    # Both nullable: ``NULL`` → fall back to the backend's
+    # ``PROVIDER_DEFAULT_MODEL`` at deploy time. The deploy modal prefills
+    # from these and writes them back when the operator changes the model,
+    # so the next deploy starts from the last choice.
+    deploy_planner_provider: Mapped[str | None] = mapped_column(
+        String(32), nullable=True
+    )
+    deploy_planner_model: Mapped[str | None] = mapped_column(
+        String(128), nullable=True
+    )
+
     created_at: Mapped[datetime] = _ts_created()
     updated_at: Mapped[datetime] = _ts_updated()
 
@@ -263,6 +278,7 @@ class NativeIntegrationProvider:
     NOTION = "notion"
     LINEAR = "linear"
     GITLAB = "gitlab"
+    DIGITALOCEAN = "digitalocean"
 
     ALL: tuple[str, ...] = (
         GITHUB,
@@ -271,6 +287,7 @@ class NativeIntegrationProvider:
         NOTION,
         LINEAR,
         GITLAB,
+        DIGITALOCEAN,
     )
 
 
@@ -323,7 +340,7 @@ class NativeIntegrationInstallation(Base):
         ),
         CheckConstraint(
             "provider IN ('github', 'azure_devops', 'atlassian', "
-            "'notion', 'linear', 'gitlab')",
+            "'notion', 'linear', 'gitlab', 'digitalocean')",
             name="ck_native_integration_installations_provider",
         ),
         CheckConstraint(

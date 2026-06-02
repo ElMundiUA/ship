@@ -28,6 +28,8 @@ from backend.app.api.v1.routes import (
     config,
     dashboard,
     dashboard_live_system,
+    deploy,
+    digitalocean_oauth,
     dashboard_priorities,
     distiller,
     github_app,
@@ -119,6 +121,17 @@ api_router.include_router(linear_oauth.router)
 api_router.include_router(linear_webhook.router)
 # Notion OAuth (pilot Day 2 — tracker WOW flow). Same shape as Linear.
 api_router.include_router(notion_oauth.router)
+# Deploy routes — trigger + poll deployments (DO App Platform first provider).
+# POST /v1/workspaces/{ws}/repos/{id}/deploy
+# GET  /v1/workspaces/{ws}/deployments/{id}
+# GET  /v1/workspaces/{ws}/repos/{id}/deployments
+api_router.include_router(deploy.router)
+
+# DigitalOcean OAuth (deploy provider — App Platform). Same install/start
+# + install/callback shape as Notion; callback is public so DO's browser
+# redirect can hit it without a session. Writes only native_integration
+# rows (deploy provider, not a tracker) and persists the refresh token.
+api_router.include_router(digitalocean_oauth.router)
 # Telegram bot adapter (group ↔ workspace bridge). Console-facing
 # endpoints only — bind preview/confirm + linked-groups list/delete.
 # The bot worker process talks to ``/v1/workspaces/{ws}/chat/stream``
