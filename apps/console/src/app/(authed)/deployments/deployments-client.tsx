@@ -215,6 +215,10 @@ export default function DeploymentsClient({ workspaceId }: { workspaceId: string
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [modalRepoId, setModalRepoId] = useState<string | null>(null);
+  const [modalInitialStep, setModalInitialStep] = useState(0);
+  // Set when we land back from the DigitalOcean OAuth connect (returnPath
+  // deep-link); the wizard reopens at the DO step once data has loaded.
+  const [pendingConnectRepo, setPendingConnectRepo] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -279,8 +283,38 @@ export default function DeploymentsClient({ workspaceId }: { workspaceId: string
     };
   }, [deployments, pollInFlight]);
 
+  // Coming back from the DigitalOcean OAuth connect (returnPath deep-link sets
+  // ?deployConnect=<repoId>): remember the repo, then strip the one-shot params
+  // so a refresh doesn't reopen the wizard.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const repo = params.get("deployConnect");
+    if (!repo) return;
+    setPendingConnectRepo(repo);
+    params.delete("deployConnect");
+    params.delete("digitalocean");
+    const qs = params.toString();
+    window.history.replaceState(
+      null,
+      "",
+      window.location.pathname + (qs ? `?${qs}` : ""),
+    );
+  }, []);
+
+  // Reopen the wizard at the DigitalOcean step once repos/providers have
+  // loaded — so it shows "Connected" rather than briefly flashing "Not
+  // connected" while providers are still in flight.
+  useEffect(() => {
+    if (!pendingConnectRepo || loading) return;
+    setModalRepoId(pendingConnectRepo);
+    setModalInitialStep(DEPLOY_STEPS.indexOf("digitalocean"));
+    setModalOpen(true);
+    setPendingConnectRepo(null);
+  }, [pendingConnectRepo, loading]);
+
   const handleRedeploy = (repoId: string) => {
     setModalRepoId(repoId);
+    setModalInitialStep(0);
     setModalOpen(true);
   };
 
@@ -336,6 +370,7 @@ export default function DeploymentsClient({ workspaceId }: { workspaceId: string
         <button
           onClick={() => {
             setModalRepoId(null);
+            setModalInitialStep(0);
             setModalOpen(true);
           }}
           className="rounded-full bg-blue-600 px-4 py-1.5 text-xs font-semibold text-white transition hover:bg-blue-500"
@@ -377,6 +412,7 @@ export default function DeploymentsClient({ workspaceId }: { workspaceId: string
           repos={repos}
           providers={providers}
           initialRepoId={modalRepoId}
+          initialStep={modalInitialStep}
           reposWithLiveApp={
             new Set(
               deployments
@@ -1010,6 +1046,7 @@ function NewDeploymentModal({
   repos,
   providers,
   initialRepoId,
+  initialStep = 0,
   reposWithLiveApp,
   onClose,
   onDeployed,
@@ -1019,6 +1056,9 @@ function NewDeploymentModal({
   repos: ApiActivatedRepo[];
   providers: ApiDeployProvider[];
   initialRepoId: string | null;
+  // Step to open on (index into DEPLOY_STEPS). Used to land back on the
+  // DigitalOcean step after the OAuth connect round-trip.
+  initialStep?: number;
   // repo ids that already have a deployed DO app — DigitalOcean clearly has
   // access to those, so we suppress the "needs access" private-repo warning.
   reposWithLiveApp: Set<string>;
@@ -1048,7 +1088,7 @@ function NewDeploymentModal({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Wizard step index into DEPLOY_STEPS.
-  const [step, setStep] = useState(0);
+  const [step, setStep] = useState(initialStep);
 
   const doProvider = providers.find((p) => p.provider === "digitalocean");
   const connected = doProvider?.connected ?? false;
@@ -1245,10 +1285,15 @@ function NewDeploymentModal({
     setBusy(true);
     setError(null);
     try {
+      // Return to THIS deploy flow after OAuth: the callback redirects to
+      // this path with ?digitalocean=connected, and the Deployments page
+      // reopens the wizard at the DigitalOcean step (now "Connected") — no
+      // more getting stranded on the Integrations page.
+      const returnPath = `/deployments?ws=${enc(workspaceId)}&deployConnect=${enc(repoId)}`;
       const res = await fetch(`/api/deploy/connect`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ workspaceId }),
+        body: JSON.stringify({ workspaceId, returnPath }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -1256,9 +1301,11 @@ function NewDeploymentModal({
         return;
       }
       const data: { install_url: string } = await res.json();
-      // New tab so this wizard (step + repo + planner choice) survives.
-      // On return, the focus listener flips DigitalOcean to "Connected".
-      window.open(data.install_url, "_blank", "noopener,noreferrer");
+      // Prefer a new tab (keeps this wizard alive); if the browser blocks the
+      // popup, fall back to same-tab navigation. Either way the OAuth return
+      // lands back on the wizard at the DigitalOcean step, connected.
+      const win = window.open(data.install_url, "_blank", "noopener,noreferrer");
+      if (!win) window.location.href = data.install_url;
     } catch (e) {
       setError(String(e));
     } finally {
