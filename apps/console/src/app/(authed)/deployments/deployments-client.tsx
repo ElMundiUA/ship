@@ -362,6 +362,13 @@ export default function DeploymentsClient({ workspaceId }: { workspaceId: string
           repos={repos}
           providers={providers}
           initialRepoId={modalRepoId}
+          reposWithLiveApp={
+            new Set(
+              deployments
+                .filter((d) => d.live_url || d.status === "active")
+                .map((d) => d.repo_id),
+            )
+          }
           onClose={() => setModalOpen(false)}
           onDeployed={(dep) => {
             setDeployments((prev) => [dep, ...prev]);
@@ -923,6 +930,7 @@ function NewDeploymentModal({
   repos,
   providers,
   initialRepoId,
+  reposWithLiveApp,
   onClose,
   onDeployed,
   onProvidersChanged,
@@ -931,6 +939,9 @@ function NewDeploymentModal({
   repos: ApiActivatedRepo[];
   providers: ApiDeployProvider[];
   initialRepoId: string | null;
+  // repo ids that already have a deployed DO app — DigitalOcean clearly has
+  // access to those, so we suppress the "needs access" private-repo warning.
+  reposWithLiveApp: Set<string>;
   onClose: () => void;
   onDeployed: (dep: ApiDeployment) => void;
   onProvidersChanged: (p: ApiDeployProvider[]) => void;
@@ -1236,6 +1247,24 @@ function NewDeploymentModal({
           ? plannerReady
           : true;
   const deployReady = connected && plannerReady && !!repoId;
+  // One-line reason the primary button is disabled, so a non-dev isn't left
+  // staring at a greyed-out button with no idea what's missing.
+  const plannerBlock = manualLlm
+    ? "Enter your LLM API key to continue"
+    : "Add an LLM key for this repo (or switch to a manual key)";
+  let blockReason: string | null = null;
+  if (isLastStep) {
+    if (!repoId) blockReason = "Pick a repository first";
+    else if (!connected) blockReason = "Connect DigitalOcean to deploy";
+    else if (!plannerReady) blockReason = plannerBlock;
+  } else if (stepKey === "repo") {
+    if (repos.length === 0) blockReason = "No repos connected to this workspace yet";
+    else if (!repoId) blockReason = "Pick a repository to continue";
+  } else if (stepKey === "digitalocean") {
+    if (!connected) blockReason = "Connect DigitalOcean to continue";
+  } else if (stepKey === "planner") {
+    if (!plannerReady) blockReason = plannerBlock;
+  }
 
   return (
     <div
@@ -1490,12 +1519,17 @@ function NewDeploymentModal({
                 </span>
               </div>
             </div>
-            {selectedPrivate && (
+            {selectedPrivate && !reposWithLiveApp.has(repoId) && (
               <PrivateRepoHelp
                 repoFullName={selectedRepo?.full_name ?? null}
                 variant="warn"
               />
             )}
+            <p className="text-[11px] leading-snug text-white/40">
+              Deploy creates or updates your app on DigitalOcean and starts a
+              build — usually 2–4 minutes. Watch progress, logs, and health on
+              the card.
+            </p>
           </div>
         )}
 
@@ -1542,6 +1576,9 @@ function NewDeploymentModal({
             </button>
           )}
         </div>
+        {blockReason && (
+          <p className="mt-2 text-right text-[11px] text-white/40">{blockReason}</p>
+        )}
       </div>
     </div>
   );
