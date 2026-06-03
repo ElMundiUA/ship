@@ -270,6 +270,11 @@ class ApiDeploymentOut(BaseModel):
     rolled_back_from_id: str | None = None
     rolled_back_from_version: int | None = None
     can_provider_rollback: bool = False
+    # Git commit this version shipped (pinned at deploy time, best-effort).
+    commit_sha: str | None = None
+    commit_message: str | None = None
+    commit_author: str | None = None
+    committed_at: str | None = None
     # Full stored planner output for operator/debug visibility. Secret env
     # values are masked before returning.
     plan_debug: dict[str, Any] | None = None
@@ -546,6 +551,10 @@ def _to_out(d: Deployment, *, repo_full_name: str | None = None) -> ApiDeploymen
         status=d.status,
         provider_ref=d.provider_ref if isinstance(d.provider_ref, dict) else None,
     )
+    commit = (
+        d.provider_ref.get("commit") if isinstance(d.provider_ref, dict) else None
+    )
+    commit = commit if isinstance(commit, dict) else {}
     return ApiDeploymentOut(
         id=str(d.id),
         workspace_id=str(d.workspace_id),
@@ -576,6 +585,10 @@ def _to_out(d: Deployment, *, repo_full_name: str | None = None) -> ApiDeploymen
             else None
         ),
         can_provider_rollback=can_provider_rollback,
+        commit_sha=commit.get("sha"),
+        commit_message=commit.get("message"),
+        commit_author=commit.get("author_name"),
+        committed_at=commit.get("committed_at"),
         plan_debug=_plan_debug_out(d.plan),
         plan_components=_plan_components_out(d.plan),
         estimated_monthly_usd=estimated_monthly_usd,
@@ -1026,6 +1039,11 @@ async def trigger_deploy(
         await session.flush()
         return await _to_out_async(session, dep)
 
+    # Pin this version to the branch HEAD commit (best-effort) so the Versions
+    # tab shows what code each version shipped. Manual path only for now; the
+    # Actions-planner path would capture it in the plan-result callback.
+    commit = await gw.get_branch_commit(repo_ref, repo.default_branch or "main")
+
     await _submit_to_digitalocean(
         session=session,
         dep=dep,
@@ -1033,6 +1051,10 @@ async def trigger_deploy(
         token=token,
         deploy_plan=deploy_plan,
     )
+    if commit and commit.get("sha") and isinstance(dep.provider_ref, dict):
+        dep.provider_ref = {**dep.provider_ref, "commit": commit}
+        dep.updated_at = datetime.now(timezone.utc)
+        await session.flush()
     return await _to_out_async(session, dep)
 
 

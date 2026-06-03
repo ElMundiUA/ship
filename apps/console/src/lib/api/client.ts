@@ -4353,6 +4353,11 @@ export interface ApiDeployment {
   rolled_back_from_id: string | null;
   rolled_back_from_version: number | null;
   can_provider_rollback: boolean;
+  /** Git commit this version shipped (pinned at deploy, best-effort). */
+  commit_sha: string | null;
+  commit_message: string | null;
+  commit_author: string | null;
+  committed_at: string | null;
   /** Full stored planner output with secret env values masked. */
   plan_debug: Record<string, unknown> | null;
   /** Per-component breakdown of the planner's DeployPlan (secret env values masked). */

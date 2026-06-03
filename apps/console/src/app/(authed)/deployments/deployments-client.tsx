@@ -866,9 +866,13 @@ function AppCard({
                       <span className="min-w-0 flex-1 truncate text-white/40">
                         {d.error_message
                           ? `· ${d.error_message}`
-                          : d.plan_summary
-                            ? `· ${d.plan_summary}`
-                            : ""}
+                          : d.commit_sha
+                            ? `· ${d.commit_sha.slice(0, 7)}${
+                                d.commit_message ? ` ${d.commit_message}` : ""
+                              }`
+                            : d.plan_summary
+                              ? `· ${d.plan_summary}`
+                              : ""}
                       </span>
                       {isCurrent ? (
                         <span className="whitespace-nowrap rounded bg-white/10 px-1.5 py-0.5 text-[10px] text-white/50">
