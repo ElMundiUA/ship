@@ -18,6 +18,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   ApiActivatedRepo,
+  ApiDeployComponent,
   ApiDeployment,
   ApiDeploymentStatus,
   ApiDeployProvider,
@@ -178,6 +179,51 @@ interface AppGroup {
   provider: string;
   current: ApiDeployment;
   history: ApiDeployment[];
+}
+
+// Human-readable diff of two versions' planned components (from → to). Used in
+// the Versions tab so you can see what a rollback/rebuild would change before
+// committing to it. Pure client-side over plan_components (secrets shown as •••).
+function planDiffLines(
+  from: ApiDeployComponent[],
+  to: ApiDeployComponent[],
+): string[] {
+  const lines: string[] = [];
+  const fromByName = new Map(from.map((c) => [c.name, c]));
+  const toByName = new Map(to.map((c) => [c.name, c]));
+  for (const c of from)
+    if (!toByName.has(c.name)) lines.push(`− ${c.name} (${c.kind}) removed`);
+  for (const c of to)
+    if (!fromByName.has(c.name)) lines.push(`+ ${c.name} (${c.kind}) added`);
+  for (const c of to) {
+    const p = fromByName.get(c.name);
+    if (!p) continue;
+    const cmp = (label: string, a?: unknown, b?: unknown) => {
+      if (String(a ?? "") !== String(b ?? ""))
+        lines.push(`${c.name}: ${label} ${a ?? "—"} → ${b ?? "—"}`);
+    };
+    cmp("runtime", p.runtime, c.runtime);
+    cmp("port", p.http_port, c.http_port);
+    cmp("source_dir", p.source_dir, c.source_dir);
+    cmp("dockerfile", p.dockerfile_path, c.dockerfile_path);
+    cmp("health", p.health_check_path, c.health_check_path);
+    cmp("routes", (p.routes ?? []).join(","), (c.routes ?? []).join(","));
+    const pEnv = new Map((p.env ?? []).map((e) => [e.key, e]));
+    for (const e of p.env ?? [])
+      if (!(c.env ?? []).some((x) => x.key === e.key))
+        lines.push(`${c.name}: env ${e.key} removed`);
+    for (const e of c.env ?? []) {
+      const pe = pEnv.get(e.key);
+      const bv = e.secret ? "•••" : (e.value ?? "—");
+      if (!pe) {
+        lines.push(`${c.name}: env ${e.key} = ${bv} added`);
+        continue;
+      }
+      const av = pe.secret ? "•••" : (pe.value ?? "—");
+      if (av !== bv) lines.push(`${c.name}: env ${e.key} ${av} → ${bv}`);
+    }
+  }
+  return lines;
 }
 
 function groupByApp(deps: ApiDeployment[]): AppGroup[] {
@@ -472,6 +518,8 @@ function AppCard({
   const [redeployingId, setRedeployingId] = useState<string | null>(null);
   const [rollingBackId, setRollingBackId] = useState<string | null>(null);
   const [versionError, setVersionError] = useState<string | null>(null);
+  // Which prior version's "what changed vs current" diff is expanded.
+  const [diffVersionId, setDiffVersionId] = useState<string | null>(null);
   const cur = group.current;
   const inFlight = !isTerminal(cur.status);
 
@@ -792,8 +840,9 @@ function AppCard({
                   return (
                     <li
                       key={d.id}
-                      className="flex items-center gap-2 rounded-md border border-white/5 bg-white/[0.02] px-2 py-1.5 text-xs"
+                      className="rounded-md border border-white/5 bg-white/[0.02] px-2 py-1.5 text-xs"
                     >
+                     <div className="flex items-center gap-2">
                       <span className="font-mono text-[10px] text-white/40">
                         v{versionNo}
                       </span>
@@ -864,8 +913,51 @@ function AppCard({
                               {redeployingId === d.id ? "Rebuilding…" : "Rebuild plan"}
                             </button>
                           )}
+                          {hasPlan && cur.plan_components.length > 0 && (
+                            <button
+                              onClick={() =>
+                                setDiffVersionId(
+                                  diffVersionId === d.id ? null : d.id,
+                                )
+                              }
+                              className="whitespace-nowrap rounded border border-white/15 px-2 py-0.5 text-[10px] font-semibold text-white/55 transition hover:bg-white/[0.06]"
+                            >
+                              {diffVersionId === d.id ? "hide diff" : "diff"}
+                            </button>
+                          )}
                         </span>
                       )}
+                     </div>
+                      {diffVersionId === d.id &&
+                        (() => {
+                          const lines = planDiffLines(
+                            d.plan_components,
+                            cur.plan_components,
+                          );
+                          return (
+                            <div className="mt-1.5 border-t border-white/5 pt-1.5">
+                              <p className="text-[10px] text-white/35">
+                                Changes from v{versionNo} → current:
+                              </p>
+                              {lines.length === 0 ? (
+                                <p className="mt-0.5 text-[10px] text-white/40">
+                                  No plan changes.
+                                </p>
+                              ) : (
+                                <ul className="mt-0.5 space-y-0.5">
+                                  {lines.map((ln, idx) => (
+                                    <li
+                                      key={idx}
+                                      className="font-mono text-[10px] text-white/55"
+                                    >
+                                      {ln}
+                                    </li>
+                                  ))}
+                                </ul>
+                              )}
+                            </div>
+                          );
+                        })()}
                     </li>
                   );
                 })}

@@ -45,7 +45,11 @@ WIP) + `37002f6c` (remove test fixtures → standalone repos).
   DigitalOcean read this repo" panel (Authorize DigitalOcean → / make public →
   Redeploy); the red error row is suppressed for that kind so it reads as a
   step, not a failure. (PrivateRepoHelp lost its variant; only reactive now.)
-- ⏳ (2) plan/spec diff between versions — pairs with versioning (read-only).
+- ✅ **(2) plan/spec diff between versions** — DONE. Each prior version in the
+  Versions tab has a **`diff`** toggle showing what changed vs current
+  (components added/removed; per-component runtime/port/source_dir/dockerfile/
+  health/routes/env changes; secrets shown as •••). Pure client-side over
+  `plan_components` (`planDiffLines`). Read-only.
 - ⏳ (3) per-version logs (each version row → its deployment_id via logs endpoint).
 - ⏳ (4) commit-pinned versions (store commit_sha/msg/author at deploy in provider_ref).
 - ⏳ (5) cost fallback to `GET /v2/apps/tiers/instance_sizes`.
