@@ -71,30 +71,22 @@ const repoVisibilityUrl = (fullName: string | null) =>
   fullName ? `https://github.com/${fullName}/settings` : "https://github.com";
 
 /**
- * Recovery panel for the "private repo, DigitalOcean can't reach it" case.
- * Offers the two real fixes: authorize DO's GitHub app, or make the repo
- * public. Used both proactively (modal, before deploy) and reactively
- * (app card, after a github_access failure).
+ * "One more step" panel shown when a deploy couldn't read a private repo
+ * (error_kind === "github_access"). Deliberately framed as a natural next
+ * step, NOT an error: we can't pre-check whether DigitalOcean has repo access,
+ * so the deploy itself is the check — and when it needs access, this is just
+ * the next click (authorize, or make public, then redeploy). Calm blue tone,
+ * no red. Only used reactively now (no proactive pre-deploy warning).
  */
-function PrivateRepoHelp({
-  repoFullName,
-  variant,
-}: {
-  repoFullName: string | null;
-  variant: "warn" | "error";
-}) {
-  const tone =
-    variant === "error"
-      ? "border-red-500/30 bg-red-500/10"
-      : "border-yellow-500/30 bg-yellow-500/10";
+function PrivateRepoHelp({ repoFullName }: { repoFullName: string | null }) {
   return (
-    <div className={`rounded-lg border ${tone} px-3 py-2.5 text-xs`}>
+    <div className="rounded-lg border border-blue-500/30 bg-blue-500/[0.07] px-3 py-2.5 text-xs">
       <p className="font-semibold text-white/90">
-        Private repo — DigitalOcean needs access
+        One more step — let DigitalOcean read this repo
       </p>
       <p className="mt-1 text-white/55">
-        To deploy a private repo, DigitalOcean must be authorized to read it.
-        Pick one:
+        It&apos;s private, so DigitalOcean needs read access to build it. One
+        click, then redeploy:
       </p>
       <div className="mt-2 flex flex-wrap gap-2">
         <a
@@ -103,7 +95,7 @@ function PrivateRepoHelp({
           rel="noopener noreferrer"
           className="rounded-md bg-blue-600 px-2.5 py-1.5 text-[11px] font-semibold text-white transition hover:bg-blue-500"
         >
-          Authorize on GitHub →
+          Authorize DigitalOcean →
         </a>
         <a
           href={repoVisibilityUrl(repoFullName)}
@@ -115,9 +107,8 @@ function PrivateRepoHelp({
         </a>
       </div>
       <p className="mt-2 text-[10px] text-white/35">
-        {variant === "warn"
-          ? "Already authorized? Just hit Deploy below — that's the check. If DigitalOcean still can't read the repo, you'll get a clear error to retry."
-          : "Authorize (or make it public), then deploy again — the deploy itself confirms access."}
+        Authorizing opens GitHub (you&apos;re already signed in there). Once
+        DigitalOcean has access, hit Redeploy — that&apos;s the whole fix.
       </p>
     </div>
   );
@@ -437,13 +428,6 @@ export default function DeploymentsClient({ workspaceId }: { workspaceId: string
           providers={providers}
           initialRepoId={modalRepoId}
           initialStep={modalInitialStep}
-          reposWithLiveApp={
-            new Set(
-              deployments
-                .filter((d) => d.live_url || d.status === "active")
-                .map((d) => d.repo_id),
-            )
-          }
           onClose={() => setModalOpen(false)}
           onDeployed={(dep) => {
             setDeployments((prev) => [dep, ...prev]);
@@ -754,7 +738,7 @@ function AppCard({
                   </div>
                 </Row>
               )}
-              {cur.error_message && (
+              {cur.error_message && cur.error_kind !== "github_access" && (
                 <Row label="Error">
                   <span className="block whitespace-pre-line text-red-400">
                     {cur.error_message}
@@ -777,10 +761,7 @@ function AppCard({
               )}
               {cur.error_kind === "github_access" && (
                 <div className="mt-1">
-                  <PrivateRepoHelp
-                    repoFullName={cur.repo_full_name}
-                    variant="error"
-                  />
+                  <PrivateRepoHelp repoFullName={cur.repo_full_name} />
                 </div>
               )}
             </dl>
@@ -1130,7 +1111,6 @@ function NewDeploymentModal({
   providers,
   initialRepoId,
   initialStep = 0,
-  reposWithLiveApp,
   onClose,
   onDeployed,
   onProvidersChanged,
@@ -1142,9 +1122,6 @@ function NewDeploymentModal({
   // Step to open on (index into DEPLOY_STEPS). Used to land back on the
   // DigitalOcean step after the OAuth connect round-trip.
   initialStep?: number;
-  // repo ids that already have a deployed DO app — DigitalOcean clearly has
-  // access to those, so we suppress the "needs access" private-repo warning.
-  reposWithLiveApp: Set<string>;
   onClose: () => void;
   onDeployed: (dep: ApiDeployment) => void;
   onProvidersChanged: (p: ApiDeployProvider[]) => void;
@@ -1176,7 +1153,6 @@ function NewDeploymentModal({
   const doProvider = providers.find((p) => p.provider === "digitalocean");
   const connected = doProvider?.connected ?? false;
   const selectedRepo = repos.find((r) => r.id === repoId) ?? null;
-  const selectedPrivate = selectedRepo?.private ?? false;
   // Saved per-repo planner preference — prefills the picker and is the
   // baseline the persist-on-change guard compares against.
   const prefProvider = selectedRepo?.deploy_planner_provider ?? "";
@@ -1739,12 +1715,10 @@ function NewDeploymentModal({
                 </span>
               </div>
             </div>
-            {selectedPrivate && !reposWithLiveApp.has(repoId) && (
-              <PrivateRepoHelp
-                repoFullName={selectedRepo?.full_name ?? null}
-                variant="warn"
-              />
-            )}
+            {/* No proactive "needs access" warning — we can't pre-check DO's
+                repo access, and the deploy itself is the check. If it can't
+                read a private repo, the card shows the calm "one more step"
+                authorize panel (error_kind === "github_access"). */}
             <p className="text-[11px] leading-snug text-white/40">
               Deploy creates or updates your app on DigitalOcean and starts a
               build — usually 2–4 minutes. Watch progress, logs, and health on
