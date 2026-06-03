@@ -53,17 +53,20 @@ WIP) + `37002f6c` (remove test fixtures → standalone repos).
 - ✅ **(3) per-version logs** — DONE. Each version row has a **`logs`** link
   that points the Logs tab at THAT version's deployment (BUILD/DEPLOY/RUN);
   a "view current →" reset returns to the live one. (`logsDeploymentId` state.)
-- ⏭️ (4) commit-pinned versions — NOT STARTED (heavier: backend deploy path).
-  Plan: at deploy time fetch branch HEAD via `GitHubCodeHost`, store
-  `commit_sha/message/author/committed_at` in `provider_ref` (no migration),
-  expose on `ApiDeploymentOut`, show in the Versions row. Live-verify on a deploy.
-- ⏭️ (5) cost fallback — NOT STARTED. When `propose` returns no cost, fetch
-  `GET /v2/apps/tiers/instance_sizes` and sum component instance prices; show as
-  the estimate. Backend, read-only to DO.
+- ✅ **(4) commit-pinned versions** — DONE `274d3f1a`. Manual deploy now fetches
+  branch HEAD via `GitHubCodeHost.get_branch_commit` (sha/msg/author/date),
+  stores it in `provider_ref.commit` (no migration), exposes
+  `commit_*` on `ApiDeploymentOut`, Versions row shows short-sha + message.
+  **Follow-up:** capture commit on the Actions-planner path (plan-result callback);
+  native-rollback version could copy the rolled-back-to version's commit.
+- ✅ **(5) cost fallback** — DONE `3b2da0fc`. `client.instance_sizes` +
+  `instance_price_map` + adapter `_estimate_spec_cost`; used when
+  `propose_monthly_cost` is None. Still DO's own published prices.
 
-**Autonomous run stopped here (clean point).** Delivered steps 1-3 + checkpointed
-Codex's work; steps 4-5 above are the next pickups. 13 local commits, push still
-held (vvlad git re-auth needed).
+**Autonomous run COMPLETE — all 5 solo items done (steps 1-5).** 14 local commits
+ahead of `origin/vv-deployments`, push still HELD (vvlad git re-auth needed:
+`WonnaBeCodeFather` 403s `ElMundiUA/ship`). All tsc clean, backend rebuilt +
+healthy, Codex's 10 tests still green.
 
 **Needs vvlad:** live deploy/rollback/teardown tests · push (git re-auth) ·
 Actions re-seed for old repos (so the workflow emits `connections`) · secrets-gate design.
