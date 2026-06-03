@@ -56,7 +56,16 @@ const DEPLOY_STEP_LABELS: Record<DeployStep, string> = {
 // deploys (DO uses a `github` source that needs this grant). We can't do
 // it headless — GitHub mandates the user consent — but this is one click
 // to the right place.
-const DO_GITHUB_INSTALL_URL = "https://cloud.digitalocean.com/apps/github/install";
+//
+// IMPORTANT: link to GitHub's OWN install page for the DigitalOcean app, NOT
+// `cloud.digitalocean.com/apps/github/install`. The latter requires an active
+// DigitalOcean *web session* in the browser and returns a raw
+// `{"id":"Unauthorized"}` 401 when there isn't one (Ship's DO connection is a
+// backend OAuth token — a different auth context, it doesn't log the browser
+// into DO's site). The github.com URL just needs the user's GitHub session
+// (which they already have) and lands them on the repo-grant screen directly.
+const DO_GITHUB_INSTALL_URL =
+  "https://github.com/apps/digitalocean/installations/new";
 const repoVisibilityUrl = (fullName: string | null) =>
   fullName ? `https://github.com/${fullName}/settings` : "https://github.com";
 
@@ -392,6 +401,31 @@ function AppCard({
   const cur = group.current;
   const inFlight = !isTerminal(cur.status);
 
+  // Emulate polling for the brief post-deploy settle window only: when a
+  // deployment just went active but health hasn't turned green yet (DNS/TLS/
+  // cold start), auto re-check a few times with backoff so the card flips to
+  // "ok" on its own — without the continuous polling we deliberately removed.
+  // Stops the moment health is known-good; the last attempt is past the
+  // backend's 180s grace, so a genuinely-down app still ends up "failing".
+  // (onRecheck is an inline arrow recreated each render, so we read it via a
+  // ref to keep this effect from resetting its timers every render.)
+  const onRecheckRef = useRef(onRecheck);
+  onRecheckRef.current = onRecheck;
+  useEffect(() => {
+    if (cur.status !== "active" || cur.healthy === true) return;
+    let cancelled = false;
+    const delaysMs = [20000, 50000, 95000, 150000, 210000];
+    const timers = delaysMs.map((d) =>
+      setTimeout(() => {
+        if (!cancelled) onRecheckRef.current();
+      }, d),
+    );
+    return () => {
+      cancelled = true;
+      timers.forEach(clearTimeout);
+    };
+  }, [cur.id, cur.status, cur.healthy]);
+
   const doDelete = async () => {
     setDeleting(true);
     setDeleteError(null);
@@ -464,6 +498,17 @@ function AppCard({
                     : cur.healthy === false
                       ? "health failing"
                       : "health …"}
+                </span>
+              </>
+            )}
+            {cur.estimated_monthly_usd != null && (
+              <>
+                <span>·</span>
+                <span
+                  className="text-white/60"
+                  title="DigitalOcean's own estimate for this app's spec (approximate)"
+                >
+                  ≈ ${cur.estimated_monthly_usd.toFixed(0)}/mo
                 </span>
               </>
             )}
@@ -555,9 +600,65 @@ function AppCard({
                 </Row>
               )}
               {cur.plan_summary && <Row label="Plan">{cur.plan_summary}</Row>}
+              {cur.estimated_monthly_usd != null && (
+                <Row label="Est. cost">
+                  <span className="text-white/70">
+                    ≈ ${cur.estimated_monthly_usd.toFixed(2)}/mo
+                  </span>
+                  <span className="ml-2 text-white/30">
+                    DigitalOcean&rsquo;s estimate for this spec (approximate)
+                  </span>
+                </Row>
+              )}
+              {cur.plan_components.length > 0 && (
+                <Row label="Components">
+                  <div className="space-y-1.5">
+                    {cur.plan_components.map((c) => (
+                      <div
+                        key={c.name}
+                        className="rounded-md border border-white/10 bg-white/[0.02] px-2 py-1.5"
+                      >
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="text-xs font-medium text-white">{c.name}</span>
+                          <span className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-white/60">
+                            {c.kind}
+                          </span>
+                          {c.source_dir && (
+                            <span className="font-mono text-[10px] text-white/45">{c.source_dir}</span>
+                          )}
+                          {c.runtime && (
+                            <span className="text-[10px] text-white/45">· {c.runtime}</span>
+                          )}
+                          {c.http_port != null && (
+                            <span className="text-[10px] text-white/45">· :{c.http_port}</span>
+                          )}
+                          {c.routes.length > 0 && (
+                            <span className="text-[10px] text-white/45">· {c.routes.join(", ")}</span>
+                          )}
+                        </div>
+                        {c.env.length > 0 && (
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            {c.env.map((e) => (
+                              <span
+                                key={e.key}
+                                className="rounded bg-white/[0.04] px-1.5 py-0.5 font-mono text-[10px] text-white/55"
+                              >
+                                {e.key}
+                                {e.secret ? "=•••" : e.value ? `=${e.value}` : ""}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </Row>
+              )}
               {cur.error_message && (
                 <Row label="Error">
-                  <span className="text-red-400">{cur.error_message}</span>
+                  <span className="whitespace-pre-line text-red-400">
+                    {cur.error_message}
+                  </span>
                 </Row>
               )}
               {cur.error_kind === "github_access" && (

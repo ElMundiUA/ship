@@ -4346,6 +4346,22 @@ export interface ApiDeployment {
   created_at: string;
   updated_at: string;
   plan_summary: string | null;
+  /** Per-component breakdown of the planner's DeployPlan (secret env values masked). */
+  plan_components: ApiDeployComponent[];
+  /** DigitalOcean's own monthly cost estimate (USD) for this spec, or null. */
+  estimated_monthly_usd: number | null;
+}
+
+export interface ApiDeployComponent {
+  name: string;
+  kind: string;
+  runtime: string | null;
+  source_dir: string | null;
+  http_port: number | null;
+  routes: string[];
+  health_check_path: string | null;
+  dockerfile_path: string | null;
+  env: { key: string; value: string | null; secret: boolean; required: boolean }[];
 }
 
 export function triggerDeploy(
