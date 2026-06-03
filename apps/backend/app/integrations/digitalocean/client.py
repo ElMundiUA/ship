@@ -209,6 +209,30 @@ async def get_deployment(
     return data["deployment"]
 
 
+async def deployment_logs(
+    app_id: str,
+    deployment_id: str,
+    *,
+    log_type: str,
+    token: str,
+    client: httpx.AsyncClient | None = None,
+) -> dict[str, Any]:
+    """GET /v2/apps/{app_id}/deployments/{did}/logs?type=BUILD|DEPLOY|RUN.
+
+    Returns DO's log pointer payload — ``{"historic_urls": [...]}`` for
+    BUILD/DEPLOY (presigned archive URLs) or ``{"url", "live_url"}`` for RUN
+    (a proxy snapshot + websocket). The caller fetches the actual text from
+    those URLs.
+    """
+    return await _request(
+        "GET",
+        f"/apps/{app_id}/deployments/{deployment_id}/logs",
+        token=token,
+        params={"type": log_type},
+        client=client,
+    )
+
+
 def app_live_url(app: dict[str, Any]) -> str | None:
     """Extract the public URL from an app object."""
     return app.get("live_url") or app.get("default_ingress") or None
@@ -239,6 +263,7 @@ __all__ = [
     "get_app",
     "get_deployment",
     "get_latest_deployment",
+    "deployment_logs",
     "is_failed",
     "is_terminal",
     "propose_app",

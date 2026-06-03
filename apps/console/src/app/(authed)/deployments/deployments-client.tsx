@@ -21,6 +21,7 @@ import type {
   ApiDeployment,
   ApiDeploymentStatus,
   ApiDeployProvider,
+  DeployLogType,
 } from "@/lib/api/client";
 
 const POLL_MS = 3000;
@@ -374,7 +375,7 @@ export default function DeploymentsClient({ workspaceId }: { workspaceId: string
   );
 }
 
-type CardTab = "overview" | "history" | "activity" | "settings";
+type CardTab = "overview" | "history" | "activity" | "logs" | "settings";
 
 function AppCard({
   workspaceId,
@@ -537,7 +538,7 @@ function AppCard({
       {expanded && (
         <div className="border-t border-white/10 px-4 py-3">
           <nav className="mb-3 inline-flex rounded-lg border border-white/10 bg-white/[0.02] p-0.5 text-[11px] font-semibold">
-            {(["overview", "history", "activity", "settings"] as CardTab[]).map((t) => (
+            {(["overview", "history", "activity", "logs", "settings"] as CardTab[]).map((t) => (
               <button
                 key={t}
                 onClick={() => setTab(t)}
@@ -693,6 +694,10 @@ function AppCard({
             <ActivityFeed workspaceId={workspaceId} repoId={group.repoId} />
           )}
 
+          {tab === "logs" && (
+            <LogsPanel workspaceId={workspaceId} deploymentId={cur.id} />
+          )}
+
           {tab === "settings" && (
             <div className="space-y-4">
               <p className="text-xs text-white/40">
@@ -751,6 +756,101 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
     <div className="flex gap-3">
       <dt className="w-16 flex-shrink-0 text-white/35">{label}</dt>
       <dd className="min-w-0 flex-1 break-words text-white/80">{children}</dd>
+    </div>
+  );
+}
+
+const LOG_STREAMS: DeployLogType[] = ["BUILD", "DEPLOY", "RUN"];
+
+// Logs tab: pulls one DigitalOcean log stream (build / deploy / runtime) for
+// the current deployment, server-fetched + ANSI-stripped, so devs (and Ship's
+// own fix agents) can read failures without leaving the console.
+function LogsPanel({
+  workspaceId,
+  deploymentId,
+}: {
+  workspaceId: string;
+  deploymentId: string;
+}) {
+  const [stream, setStream] = useState<DeployLogType>("BUILD");
+  const [text, setText] = useState("");
+  const [truncated, setTruncated] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = useCallback(
+    async (t: DeployLogType) => {
+      setLoading(true);
+      setErr(null);
+      try {
+        const r = await fetch(
+          `/api/deployment/logs?ws=${enc(workspaceId)}&id=${enc(deploymentId)}&type=${t}`,
+        );
+        if (!r.ok) {
+          setErr("Couldn’t load logs — try refresh.");
+          setText("");
+          return;
+        }
+        const j = await r.json();
+        setText(typeof j.text === "string" ? j.text : "");
+        setTruncated(!!j.truncated);
+      } catch {
+        setErr("Couldn’t load logs — try refresh.");
+        setText("");
+      } finally {
+        setLoading(false);
+      }
+    },
+    [workspaceId, deploymentId],
+  );
+
+  useEffect(() => {
+    load(stream);
+  }, [stream, load]);
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2">
+        <div className="inline-flex rounded-lg border border-white/10 bg-white/[0.02] p-0.5 text-[11px] font-semibold">
+          {LOG_STREAMS.map((t) => (
+            <button
+              key={t}
+              onClick={() => setStream(t)}
+              className={
+                stream === t
+                  ? "rounded-md bg-white/15 px-2.5 py-1 capitalize text-white"
+                  : "rounded-md px-2.5 py-1 capitalize text-white/50 hover:text-white"
+              }
+            >
+              {t.toLowerCase()}
+            </button>
+          ))}
+        </div>
+        <button
+          onClick={() => load(stream)}
+          disabled={loading}
+          className="text-[11px] text-white/40 underline underline-offset-2 transition hover:text-white disabled:opacity-50"
+        >
+          refresh
+        </button>
+        {loading && <span className="text-[11px] text-white/40">loading…</span>}
+      </div>
+      {truncated && (
+        <p className="text-[10px] text-amber-200/70">
+          Showing the latest portion (log truncated).
+        </p>
+      )}
+      {err ? (
+        <p className="text-xs text-red-400">{err}</p>
+      ) : text.trim() ? (
+        <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-white/10 bg-black/40 p-3 text-[11px] leading-relaxed text-white/70">
+          {text}
+        </pre>
+      ) : (
+        <p className="text-xs text-white/35">
+          {loading ? "" : "No logs for this stream yet."}
+        </p>
+      )}
     </div>
   );
 }

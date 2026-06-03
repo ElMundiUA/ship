@@ -61,6 +61,7 @@ from backend.app.services.deploy.health import (
     probe,
     probe_with_grace,
 )
+from backend.app.services.deploy.logs import LOG_TYPES, fetch_deploy_logs
 from backend.app.services.deploy.teardown import teardown_repo_app
 from backend.app.db.models.deploy import DeploymentEventKind
 from backend.app.services.deploy.plan import DeployPlan
@@ -1039,6 +1040,55 @@ async def get_deployment(
 
     names = await _repo_name_map(session, [dep.repo_id])
     return _to_out(dep, repo_full_name=names.get(dep.repo_id))
+
+
+class ApiDeployLogsOut(BaseModel):
+    type: str
+    text: str
+    truncated: bool = False
+
+
+@router.get(
+    "/workspaces/{workspace_id}/deployments/{deployment_id}/logs",
+    response_model=ApiDeployLogsOut,
+)
+async def get_deployment_logs(
+    workspace_id: uuid.UUID,
+    deployment_id: uuid.UUID,
+    type: str = "BUILD",
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> ApiDeployLogsOut:
+    """Fetch one log stream (BUILD/DEPLOY/RUN) for a deployment from DO.
+
+    Read-only and best-effort: returns empty text if DO has no log for that
+    stream yet (or the pointer expired), rather than erroring.
+    """
+    log_type = (type or "BUILD").upper()
+    if log_type not in LOG_TYPES:
+        raise HTTPException(status_code=400, detail="type must be BUILD, DEPLOY, or RUN")
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
+    dep = await session.get(Deployment, deployment_id)
+    if dep is None or dep.workspace_id != workspace_id:
+        raise HTTPException(status_code=404, detail="Deployment not found")
+
+    ref = dep.provider_ref or {}
+    app_id, dep_ref = ref.get("app_id"), ref.get("deployment_id")
+    if not app_id or not dep_ref:
+        # No DO app/deployment yet (e.g. failed before submit, or the
+        # Actions-planning path) — there are simply no provider logs to show.
+        return ApiDeployLogsOut(type=log_type, text="", truncated=False)
+
+    token = await get_do_token(session, workspace_id)
+    if not token:
+        raise HTTPException(
+            status_code=409,
+            detail="DigitalOcean is not connected for this workspace.",
+        )
+    text, truncated = await fetch_deploy_logs(
+        app_id, dep_ref, log_type=log_type, token=token
+    )
+    return ApiDeployLogsOut(type=log_type, text=text, truncated=truncated)
 
 
 @router.get(

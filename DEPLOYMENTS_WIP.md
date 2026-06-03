@@ -175,13 +175,15 @@ This is the live-confirm pass for everything above. Steps for vvlad:
     private-repo help, error states. Goal: a non-dev can get through it
     without head-scratching. Audit for noise / hidden state / dead ends.
 
-11. **Full log trace in Ship** (build + deploy + runtime), esp. on failure.
-    DO exposes per-deployment log URLs via its API — fetch + render them in
-    the AppCard (new "Logs" tab alongside Overview/History/Activity/Settings),
-    so devs don't have to leave Ship for the DO dashboard. Natural extension:
-    pipe a failed deploy's logs to a **Ship agent that diagnoses + opens a fix
-    PR** (on-brand — Ship's whole thing is agents fixing things via PRs).
-    [TBD — confirm with vvlad if worth it / scope.]
+11. ✅ **Full log trace in Ship** (build + deploy + runtime) — DONE (viewer).
+    New "Logs" tab in the AppCard fetches DO's BUILD/DEPLOY/RUN streams for the
+    current deployment, server-side (`services/deploy/logs.py` →
+    `do.deployment_logs`; presigned BUILD/DEPLOY archives + RUN proxy snapshot),
+    ANSI-stripped and tailed to 200k chars. Endpoint
+    `GET /workspaces/{ws}/deployments/{id}/logs?type=BUILD|DEPLOY|RUN`; Next
+    proxy `/api/deployment/logs`. Verified against live monorepotest logs.
+    **Still open (idea, confirm scope):** pipe a *failed* deploy's logs to a
+    **Ship agent that diagnoses + opens a fix PR** (on-brand). [TBD with vvlad.]
 
 12. **Test fixtures** (`deploy-test-fixtures/`, DONE this session) — three
     deliberately janky-but-working projects to stress the planner. vvlad lifts

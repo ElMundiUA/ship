@@ -4397,6 +4397,26 @@ export function getDeployment(
   );
 }
 
+export type DeployLogType = "BUILD" | "DEPLOY" | "RUN";
+
+export interface ApiDeployLogs {
+  type: string;
+  text: string;
+  truncated: boolean;
+}
+
+export function getDeploymentLogs(
+  workspaceId: string,
+  deploymentId: string,
+  type: DeployLogType,
+  token?: string,
+): Promise<ApiDeployLogs> {
+  return apiFetch<ApiDeployLogs>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/deployments/${encodeURIComponent(deploymentId)}/logs?type=${type}`,
+    { token },
+  );
+}
+
 export function listWorkspaceDeployments(
   workspaceId: string,
   token?: string,
