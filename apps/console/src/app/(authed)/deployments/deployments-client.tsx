@@ -657,9 +657,23 @@ function AppCard({
               )}
               {cur.error_message && (
                 <Row label="Error">
-                  <span className="whitespace-pre-line text-red-400">
+                  <span className="block whitespace-pre-line text-red-400">
                     {cur.error_message}
                   </span>
+                  {/* Offer the logs only for failures that actually reached
+                      DigitalOcean (a build/deploy/runtime problem). The
+                      GitHub/Actions failure kinds never created a DO app, so
+                      there'd be nothing to show — don't dead-end the user. */}
+                  {(cur.error_kind == null ||
+                    cur.error_kind === "build_failed" ||
+                    cur.error_kind === "health_check_failed") && (
+                    <button
+                      onClick={() => setTab("logs")}
+                      className="mt-1 inline-block text-[11px] text-white/40 underline underline-offset-2 transition hover:text-white"
+                    >
+                      View build / deploy logs →
+                    </button>
+                  )}
                 </Row>
               )}
               {cur.error_kind === "github_access" && (
