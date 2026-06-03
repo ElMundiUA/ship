@@ -1997,9 +1997,9 @@ async def disconnect_repo(
             ).scalars().all()
         )
 
-    # Orphan-billing guard: tear down any live cloud deployment for this repo
-    # BEFORE the cascade drops its deployment rows — otherwise the DO app keeps
-    # running and billing. Best-effort; reconcile cron is the backstop.
+    # Orphan-billing guard: tear down live cloud deployments BEFORE the cascade
+    # drops deployment rows. This is billing-critical, so disconnect is blocked
+    # if provider teardown cannot be confirmed.
     try:
         from backend.app.services.deploy.teardown import teardown_repo_app
 
@@ -2007,16 +2007,27 @@ async def disconnect_repo(
             session, workspace_id, repo_id, delete_rows=False
         )
         if res.failed_app_ids:
-            logger.warning(
-                "repo %s disconnect: cloud app(s) not torn down (%s) — "
-                "reconcile cron will retry",
-                repo_id,
-                res.failed_app_ids,
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=(
+                    "Could not delete this repo's cloud app. "
+                    "Repo disconnect was stopped so billing handles are not lost."
+                ),
             )
-    except Exception:  # noqa: BLE001 — never block repo disconnect
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
         logger.exception(
-            "repo %s disconnect: deploy teardown raised; continuing", repo_id
+            "repo %s disconnect: deploy teardown raised; blocking disconnect",
+            repo_id,
         )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=(
+                "Could not confirm cloud teardown for this repo. "
+                "Repo disconnect was stopped so billing handles are not lost."
+            ),
+        ) from exc
 
     # Routine.repo_id is ON DELETE CASCADE, so deleting the WorkspaceRepo
     # row also drops every Routine bound to it, which cascades to
@@ -3290,5 +3301,3 @@ async def propose_repo_config(
         pr_number=result.pr_number,
         branch=result.branch,
     )
-
-

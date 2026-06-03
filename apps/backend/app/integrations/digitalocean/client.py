@@ -10,6 +10,8 @@ Endpoints used:
   GET  /v2/apps/{app_id}                    — read app state + live_url
   GET  /v2/apps/{app_id}/deployments        — list deployments (newest first)
   GET  /v2/apps/{app_id}/deployments/{did}  — single deployment detail
+  POST /v2/apps/{app_id}/rollback/validate  — validate rollback target
+  POST /v2/apps/{app_id}/rollback           — rollback to a deployment
 
 DO App Platform deployment phases (DeploymentPhase):
   UNKNOWN / PENDING_BUILD / BUILDING / PENDING_DEPLOY / DEPLOYING
@@ -209,6 +211,42 @@ async def get_deployment(
     return data["deployment"]
 
 
+async def validate_rollback(
+    app_id: str,
+    deployment_id: str,
+    *,
+    token: str,
+    skip_pin: bool = True,
+    client: httpx.AsyncClient | None = None,
+) -> dict[str, Any]:
+    """POST /v2/apps/{app_id}/rollback/validate."""
+    return await _request(
+        "POST",
+        f"/apps/{app_id}/rollback/validate",
+        token=token,
+        json={"deployment_id": deployment_id, "skip_pin": skip_pin},
+        client=client,
+    )
+
+
+async def rollback_app(
+    app_id: str,
+    deployment_id: str,
+    *,
+    token: str,
+    skip_pin: bool = True,
+    client: httpx.AsyncClient | None = None,
+) -> dict[str, Any]:
+    """POST /v2/apps/{app_id}/rollback."""
+    return await _request(
+        "POST",
+        f"/apps/{app_id}/rollback",
+        token=token,
+        json={"deployment_id": deployment_id, "skip_pin": skip_pin},
+        client=client,
+    )
+
+
 async def deployment_logs(
     app_id: str,
     deployment_id: str,
@@ -268,4 +306,6 @@ __all__ = [
     "is_terminal",
     "propose_app",
     "propose_monthly_cost",
+    "rollback_app",
+    "validate_rollback",
 ]

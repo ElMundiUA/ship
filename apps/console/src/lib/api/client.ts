@@ -4326,7 +4326,8 @@ export type ApiDeploymentStatus =
   | "deploying"
   | "active"
   | "failed"
-  | "cancelled";
+  | "cancelled"
+  | "deleted";
 
 export interface ApiDeployment {
   id: string;
@@ -4346,6 +4347,14 @@ export interface ApiDeployment {
   created_at: string;
   updated_at: string;
   plan_summary: string | null;
+  version: number | null;
+  redeployed_from_id: string | null;
+  redeployed_from_version: number | null;
+  rolled_back_from_id: string | null;
+  rolled_back_from_version: number | null;
+  can_provider_rollback: boolean;
+  /** Full stored planner output with secret env values masked. */
+  plan_debug: Record<string, unknown> | null;
   /** Per-component breakdown of the planner's DeployPlan (secret env values masked). */
   plan_components: ApiDeployComponent[];
   /** DigitalOcean's own monthly cost estimate (USD) for this spec, or null. */
@@ -4404,6 +4413,17 @@ export function redeployVersion(
 ): Promise<ApiDeployment> {
   return apiFetch<ApiDeployment>(
     `/v1/workspaces/${encodeURIComponent(workspaceId)}/deployments/${encodeURIComponent(deploymentId)}/redeploy`,
+    { method: "POST", body: {}, token },
+  );
+}
+
+export function rollbackVersion(
+  workspaceId: string,
+  deploymentId: string,
+  token?: string,
+): Promise<ApiDeployment> {
+  return apiFetch<ApiDeployment>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/deployments/${encodeURIComponent(deploymentId)}/rollback`,
     { method: "POST", body: {}, token },
   );
 }
@@ -4550,7 +4570,12 @@ export function teardownDeployment(
   workspaceId: string,
   repoId: string,
   token?: string,
-): Promise<{ ok: boolean; deleted_app_id: string | null; removed: number }> {
+): Promise<{
+  ok: boolean;
+  deleted_app_ids: string[];
+  removed: number;
+  soft_deleted: number;
+}> {
   return apiFetch(
     `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/deploy`,
     { method: "DELETE", token },

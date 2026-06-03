@@ -8,6 +8,7 @@ Lifecycle
 ``active``     → deployment live, health check passed
 ``failed``     → provider returned ERROR/CANCELED or health check failed
 ``cancelled``  → user cancelled
+``deleted``    → provider app was intentionally deleted; row kept for audit
 
 The ``provider_ref`` JSONB stores whatever the provider adapter returned
 (DO app_id, deployment_id, region, spec_name) so the status-poller knows
@@ -46,11 +47,12 @@ class DeploymentStatus:
     ACTIVE = "active"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    DELETED = "deleted"
 
     ALL: tuple[str, ...] = (
-        PENDING, PLANNING, DEPLOYING, ACTIVE, FAILED, CANCELLED
+        PENDING, PLANNING, DEPLOYING, ACTIVE, FAILED, CANCELLED, DELETED
     )
-    TERMINAL: tuple[str, ...] = (ACTIVE, FAILED, CANCELLED)
+    TERMINAL: tuple[str, ...] = (ACTIVE, FAILED, CANCELLED, DELETED)
 
 
 class DeploymentEventKind:

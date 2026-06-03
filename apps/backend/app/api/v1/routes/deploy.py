@@ -23,6 +23,7 @@ import secrets
 import time
 import uuid
 from datetime import datetime, timezone
+from typing import Any
 
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Path, status
@@ -64,7 +65,7 @@ from backend.app.services.deploy.health import (
 from backend.app.services.deploy.logs import LOG_TYPES, fetch_deploy_logs
 from backend.app.services.deploy.teardown import teardown_repo_app
 from backend.app.db.models.deploy import DeploymentEventKind
-from backend.app.services.deploy.plan import DeployPlan
+from backend.app.services.deploy.plan import DeployConnection, DeployPlan
 from backend.app.services.deploy.llm import PlannerLLMCredentials
 from backend.app.services.deploy.model_catalog import (
     PROVIDER_DEFAULT_MODEL,
@@ -73,6 +74,13 @@ from backend.app.services.deploy.model_catalog import (
 from backend.app.services.deploy.planner import DeployPlanningError, plan_deployment
 from backend.app.services.deploy.providers.digitalocean import (
     DigitalOceanAppPlatform,
+)
+from backend.app.services.deploy.providers.base import ProviderRef
+from backend.app.services.deploy.providers.capabilities import can_native_rollback
+from backend.app.services.deploy.providers.operations import (
+    ProviderOperationUnsupported,
+    get_provider_token,
+    rollback_provider_deployment,
 )
 from backend.app.services.repo_intel import get_current_intel, _load_install
 
@@ -256,6 +264,15 @@ class ApiDeploymentOut(BaseModel):
     created_at: str
     updated_at: str
     plan_summary: str | None
+    version: int | None = None
+    redeployed_from_id: str | None = None
+    redeployed_from_version: int | None = None
+    rolled_back_from_id: str | None = None
+    rolled_back_from_version: int | None = None
+    can_provider_rollback: bool = False
+    # Full stored planner output for operator/debug visibility. Secret env
+    # values are masked before returning.
+    plan_debug: dict[str, Any] | None = None
     # Per-component breakdown from the stored DeployPlan, so the console can
     # show what the planner decided (name · kind · source_dir · runtime + env).
     plan_components: list[ApiDeployComponentOut] = []
@@ -350,6 +367,169 @@ def _plan_components_out(plan: dict | None) -> list[ApiDeployComponentOut]:
     return out
 
 
+def _plan_debug_out(plan: dict | None) -> dict[str, Any] | None:
+    """Return the stored DeployPlan with secret env values masked."""
+    if not isinstance(plan, dict):
+        return None
+    out: dict[str, Any] = dict(plan)
+    components: list[dict[str, Any]] = []
+    for c in plan.get("components") or []:
+        if not isinstance(c, dict):
+            continue
+        comp = dict(c)
+        envs: list[dict[str, Any]] = []
+        for e in c.get("env") or []:
+            if not isinstance(e, dict):
+                continue
+            env = dict(e)
+            if bool(env.get("secret")):
+                env["value"] = None
+            envs.append(env)
+        comp["env"] = envs
+        components.append(comp)
+    out["components"] = components
+    return out
+
+
+_FRONTEND_API_ENV_MARKERS = ("api", "backend", "server", "base", "url")
+
+
+def _frontend_api_route(plan: DeployPlan) -> str | None:
+    """Pick the public route prefix a browser frontend should use for the API."""
+    for c in plan.components:
+        if c.kind != "service":
+            continue
+        routes = [str(r) for r in (c.routes or []) if r and r != "/"]
+        if not routes:
+            continue
+        health = (c.health_check_path or "").rstrip("/")
+        for route in routes:
+            if route.rstrip("/") != health:
+                return route.rstrip("/")
+        return routes[0].rstrip("/")
+    return None
+
+
+def _connection_target_value(conn: DeployConnection) -> str:
+    if conn.value and conn.value.strip():
+        return conn.value.strip().rstrip("/")
+    path = "/" + conn.public_base_path.strip("/")
+    return "$APP_URL" if path == "/" else "$APP_URL" + path
+
+
+def _find_component(plan: DeployPlan, name: str):
+    return next((c for c in plan.components if c.name == name), None)
+
+
+def _infer_frontend_api_env_key(component) -> str | None:
+    for ev in component.env or []:
+        key = ev.key.lower()
+        if any(marker in key for marker in _FRONTEND_API_ENV_MARKERS):
+            return ev.key
+    return None
+
+
+def _normalize_do_frontend_api_base(plan: DeployPlan) -> DeployPlan:
+    """Repair frontend API-base envs for DO route-prefix routing.
+
+    The Actions planner can return "$APP_URL" for a frontend's backend base.
+    On DigitalOcean, a backend routed at "/api" is publicly reached at
+    "$APP_URL/api", while DO strips "/api" before forwarding to the service.
+    Normalize this before storing the plan and before building the DO spec so
+    both backend-planned and Actions-planned deploys behave the same.
+    """
+    out = plan.model_copy(deep=True)
+    connections = list(out.connections or [])
+    if not connections:
+        route = _frontend_api_route(out)
+        if route:
+            frontend = next((c for c in out.components if c.kind == "static_site"), None)
+            backend = next((c for c in out.components if c.kind == "service"), None)
+            if frontend and backend:
+                env_key = _infer_frontend_api_env_key(frontend)
+                connections.append(
+                    DeployConnection(
+                        from_component=frontend.name,
+                        to_component=backend.name,
+                        env_key=env_key,
+                        public_base_path=route,
+                        value="$APP_URL" + route,
+                    )
+                )
+                out.connections = connections
+    if not connections:
+        return plan
+    changed = False
+    for conn in connections:
+        frontend = _find_component(out, conn.from_component)
+        if not frontend or frontend.kind != "static_site" or not conn.env_key:
+            continue
+        target = _connection_target_value(conn)
+        for ev in frontend.env or []:
+            if ev.key != conn.env_key:
+                continue
+            if ev.secret:
+                continue
+            current = (ev.value or "").strip().rstrip("/")
+            if current == "" or current.startswith("$APP_URL"):
+                ev.value = target
+                conn.value = target
+                changed = True
+    return out if changed or out.connections else plan
+
+
+async def _deployment_version_map(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    repo_id: uuid.UUID,
+    provider: str,
+) -> dict[uuid.UUID, int]:
+    rows = (
+        await session.execute(
+            select(Deployment.id)
+            .where(
+                Deployment.workspace_id == workspace_id,
+                Deployment.repo_id == repo_id,
+                Deployment.provider == provider,
+            )
+            .order_by(Deployment.created_at.asc())
+        )
+    ).scalars().all()
+    return {dep_id: i + 1 for i, dep_id in enumerate(rows)}
+
+
+async def _to_out_async(
+    session: AsyncSession,
+    d: Deployment,
+    *,
+    repo_full_name: str | None = None,
+) -> ApiDeploymentOut:
+    versions = await _deployment_version_map(
+        session,
+        workspace_id=d.workspace_id,
+        repo_id=d.repo_id,
+        provider=d.provider,
+    )
+    out = _to_out(d, repo_full_name=repo_full_name)
+    out.version = versions.get(d.id)
+    source = (d.provider_ref or {}).get("redeployed_from_id")
+    if isinstance(source, str):
+        out.redeployed_from_id = source
+        try:
+            out.redeployed_from_version = versions.get(uuid.UUID(source))
+        except ValueError:
+            out.redeployed_from_version = None
+    rollback_source = (d.provider_ref or {}).get("rolled_back_from_id")
+    if isinstance(rollback_source, str):
+        out.rolled_back_from_id = rollback_source
+        try:
+            out.rolled_back_from_version = versions.get(uuid.UUID(rollback_source))
+        except ValueError:
+            out.rolled_back_from_version = None
+    return out
+
+
 def _to_out(d: Deployment, *, repo_full_name: str | None = None) -> ApiDeploymentOut:
     plan_summary = None
     if d.plan:
@@ -361,6 +541,11 @@ def _to_out(d: Deployment, *, repo_full_name: str | None = None) -> ApiDeploymen
         raw_cost = d.provider_ref.get("estimated_monthly_usd")
         if isinstance(raw_cost, (int, float)):
             estimated_monthly_usd = float(raw_cost)
+    can_provider_rollback = can_native_rollback(
+        provider=d.provider,
+        status=d.status,
+        provider_ref=d.provider_ref if isinstance(d.provider_ref, dict) else None,
+    )
     return ApiDeploymentOut(
         id=str(d.id),
         workspace_id=str(d.workspace_id),
@@ -378,6 +563,20 @@ def _to_out(d: Deployment, *, repo_full_name: str | None = None) -> ApiDeploymen
         created_at=d.created_at.isoformat(),
         updated_at=d.updated_at.isoformat(),
         plan_summary=plan_summary,
+        redeployed_from_id=(
+            str(d.provider_ref.get("redeployed_from_id"))
+            if isinstance(d.provider_ref, dict)
+            and d.provider_ref.get("redeployed_from_id")
+            else None
+        ),
+        rolled_back_from_id=(
+            str(d.provider_ref.get("rolled_back_from_id"))
+            if isinstance(d.provider_ref, dict)
+            and d.provider_ref.get("rolled_back_from_id")
+            else None
+        ),
+        can_provider_rollback=can_provider_rollback,
+        plan_debug=_plan_debug_out(d.plan),
         plan_components=_plan_components_out(d.plan),
         estimated_monthly_usd=estimated_monthly_usd,
     )
@@ -553,6 +752,7 @@ async def _submit_to_digitalocean(
     repo: WorkspaceRepo,
     token: str,
     deploy_plan: DeployPlan,
+    redeployed_from_id: uuid.UUID | None = None,
 ) -> None:
     existing_app_id: str | None = None
     prior = (
@@ -563,6 +763,7 @@ async def _submit_to_digitalocean(
                 Deployment.repo_id == dep.repo_id,
                 Deployment.provider == "digitalocean",
                 Deployment.id != dep.id,
+                Deployment.status != DS.DELETED,
             )
             .order_by(Deployment.created_at.desc())
         )
@@ -573,6 +774,7 @@ async def _submit_to_digitalocean(
             existing_app_id = aid
             break
 
+    deploy_plan = _normalize_do_frontend_api_base(deploy_plan)
     dep.plan = deploy_plan.model_dump()
     dep.status = DS.DEPLOYING
     dep.updated_at = datetime.now(timezone.utc)
@@ -618,6 +820,8 @@ async def _submit_to_digitalocean(
         "deployment_id": provider_ref.deployment_id,
         **provider_ref.extra,
     }
+    if redeployed_from_id is not None:
+        dep.provider_ref["redeployed_from_id"] = str(redeployed_from_id)
     dep.updated_at = datetime.now(timezone.utc)
     await _event(
         session, dep, DeploymentEventKind.DEPLOYED,
@@ -729,7 +933,7 @@ async def trigger_deploy(
                 "Ship's GitHub App lacks Actions access on this repo.",
             )
             await session.flush()
-            return _to_out(dep)
+            return await _to_out_async(session, dep)
         if _DEPLOY_PLAN_WORKFLOW in files:
             planner_token = _mint_deploy_token(dep.id, settings)
             dep.provider_ref = {"planner_token_hash": _hash_token(planner_token)}
@@ -781,7 +985,7 @@ async def trigger_deploy(
                     "Could not start the deploy planner workflow.",
                 )
                 await session.flush()
-            return _to_out(dep)
+            return await _to_out_async(session, dep)
         dep.status = DS.FAILED
         dep.error_message = (
             "Deploy planner workflow is not installed in this repo. "
@@ -794,7 +998,7 @@ async def trigger_deploy(
             "Deploy planner workflow is not installed in this repo.",
         )
         await session.flush()
-        return _to_out(dep)
+        return await _to_out_async(session, dep)
 
     owner, _, name = (repo.full_name or "").partition("/")
     repo_ref = RepoRef(kind="github", owner=owner, repo=name)
@@ -820,7 +1024,7 @@ async def trigger_deploy(
             "Could not analyze the repo for deployment.",
         )
         await session.flush()
-        return _to_out(dep)
+        return await _to_out_async(session, dep)
 
     await _submit_to_digitalocean(
         session=session,
@@ -829,7 +1033,7 @@ async def trigger_deploy(
         token=token,
         deploy_plan=deploy_plan,
     )
-    return _to_out(dep)
+    return await _to_out_async(session, dep)
 
 
 @router.get(
@@ -972,7 +1176,7 @@ async def report_deploy_plan_result(
         settings=settings,
     )
     if dep.status in DS.TERMINAL or dep.status == DS.DEPLOYING:
-        return _to_out(dep)
+        return await _to_out_async(session, dep)
     if payload.status != "succeeded" or payload.plan is None:
         dep.status = DS.FAILED
         dep.error_message = payload.error or "Deploy planner workflow failed."
@@ -983,7 +1187,7 @@ async def report_deploy_plan_result(
             "Could not analyze the repo for deployment.",
         )
         await session.flush()
-        return _to_out(dep)
+        return await _to_out_async(session, dep)
 
     repo = await session.get(WorkspaceRepo, dep.repo_id)
     if repo is None:
@@ -995,7 +1199,7 @@ async def report_deploy_plan_result(
         dep.finished_at = datetime.now(timezone.utc)
         dep.updated_at = datetime.now(timezone.utc)
         await session.flush()
-        return _to_out(dep)
+        return await _to_out_async(session, dep)
 
     await _submit_to_digitalocean(
         session=session,
@@ -1004,7 +1208,7 @@ async def report_deploy_plan_result(
         token=token,
         deploy_plan=payload.plan,
     )
-    return _to_out(dep)
+    return await _to_out_async(session, dep)
 
 
 @router.get(
@@ -1039,7 +1243,7 @@ async def get_deployment(
             await session.flush()
 
     names = await _repo_name_map(session, [dep.repo_id])
-    return _to_out(dep, repo_full_name=names.get(dep.repo_id))
+    return await _to_out_async(session, dep, repo_full_name=names.get(dep.repo_id))
 
 
 @router.post(
@@ -1052,12 +1256,12 @@ async def redeploy_version(
     auth: AuthContext = Depends(get_current_auth),
     session: AsyncSession = Depends(get_session),
 ) -> ApiDeploymentOut:
-    """Re-deploy a previous version by REUSING its stored plan (rollback).
+    """Rebuild a previous version by reusing its stored Ship plan.
 
     Unlike the wizard's "Redeploy" (which re-plans), this re-applies the exact
     plan that ``deployment_id`` captured — no LLM, deterministic — and submits
     it to the SAME DigitalOcean app (``_submit_to_digitalocean`` finds the prior
-    app_id). So you can roll back to any earlier version verbatim.
+    app_id). This is a rebuild, not provider artifact rollback.
     """
     await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
     src = await session.get(Deployment, deployment_id)
@@ -1096,10 +1300,108 @@ async def redeploy_version(
     # (and DEPLOY_FAILED on failure) — emitting DEPLOYED up front would be both
     # premature and a duplicate.
     await _submit_to_digitalocean(
-        session=session, dep=dep, repo=repo, token=token, deploy_plan=deploy_plan
+        session=session,
+        dep=dep,
+        repo=repo,
+        token=token,
+        deploy_plan=deploy_plan,
+        redeployed_from_id=src.id,
     )
     names = await _repo_name_map(session, [dep.repo_id])
-    return _to_out(dep, repo_full_name=names.get(dep.repo_id))
+    return await _to_out_async(session, dep, repo_full_name=names.get(dep.repo_id))
+
+
+@router.post(
+    "/workspaces/{workspace_id}/deployments/{deployment_id}/rollback",
+    response_model=ApiDeploymentOut,
+    status_code=202,
+)
+async def rollback_version(
+    workspace_id: uuid.UUID,
+    deployment_id: uuid.UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> ApiDeploymentOut:
+    """Roll back the live app via the provider's native rollback primitive."""
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+    src = await session.get(Deployment, deployment_id)
+    if src is None or src.workspace_id != workspace_id:
+        raise HTTPException(status_code=404, detail="Deployment not found")
+    src_ref = src.provider_ref or {}
+    app_id = src_ref.get("app_id")
+    target_deployment_id = src_ref.get("deployment_id")
+    if not app_id or not target_deployment_id:
+        raise HTTPException(
+            status_code=400,
+            detail="This version has no provider deployment id to roll back to.",
+        )
+    if src.status != DS.ACTIVE:
+        raise HTTPException(
+            status_code=400,
+            detail="Only successful active versions can be used as rollback targets.",
+        )
+
+    try:
+        token = await get_provider_token(session, workspace_id, src.provider)
+    except ProviderOperationUnsupported as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not token:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{src.provider} is not connected for this workspace.",
+        )
+
+    try:
+        rollback = await rollback_provider_deployment(
+            token=token,
+            ref=ProviderRef(
+                provider=src.provider,
+                app_id=app_id,
+                deployment_id=target_deployment_id,
+            ),
+        )
+    except HTTPException:
+        raise
+    except ProviderOperationUnsupported as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    now = datetime.now(timezone.utc)
+    dep = Deployment(
+        workspace_id=workspace_id,
+        repo_id=src.repo_id,
+        provider=src.provider,
+        status=DS.DEPLOYING,
+        status_detail=rollback.status_detail,
+        plan=src.plan or {},
+        provider_ref={
+            "provider": rollback.ref.provider,
+            "app_id": rollback.ref.app_id,
+            "deployment_id": rollback.ref.deployment_id,
+            "rolled_back_from_id": str(src.id),
+            "rolled_back_from_provider_deployment_id": target_deployment_id,
+            "rollback_kind": "provider",
+        },
+        started_at=now,
+        updated_at=now,
+    )
+    if src_ref.get("estimated_monthly_usd") is not None:
+        dep.provider_ref["estimated_monthly_usd"] = src_ref.get(
+            "estimated_monthly_usd"
+        )
+    session.add(dep)
+    await session.flush()
+    await _event(
+        session,
+        dep,
+        DeploymentEventKind.DEPLOYED,
+        "Rollback started on provider.",
+    )
+    names = await _repo_name_map(session, [dep.repo_id])
+    return await _to_out_async(session, dep, repo_full_name=names.get(dep.repo_id))
 
 
 class ApiDeployLogsOut(BaseModel):
@@ -1171,7 +1473,10 @@ async def list_workspace_deployments(
         )
     ).scalars().all()
     names = await _repo_name_map(session, [r.repo_id for r in rows])
-    return [_to_out(r, repo_full_name=names.get(r.repo_id)) for r in rows]
+    return [
+        await _to_out_async(session, r, repo_full_name=names.get(r.repo_id))
+        for r in rows
+    ]
 
 
 @router.get(
@@ -1198,7 +1503,7 @@ async def list_repo_deployments(
             .limit(20)
         )
     ).scalars().all()
-    return [_to_out(r, repo_full_name=repo.full_name) for r in rows]
+    return [await _to_out_async(session, r, repo_full_name=repo.full_name) for r in rows]
 
 
 class ApiDeployEvent(BaseModel):
@@ -1240,8 +1545,8 @@ async def teardown_deploy(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Tear down an app: really delete it from DigitalOcean (stops billing)
-    and remove its deployment rows. Idempotent — a DO 404 means it's already
-    gone. Admin only.
+    and soft-delete its deployment rows. Idempotent — a DO 404 means it's
+    already gone. Admin only.
     """
     await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
     await _require_repo(session, workspace_id, repo_id)
@@ -1258,6 +1563,7 @@ async def teardown_deploy(
         "ok": True,
         "deleted_app_ids": result.deleted_app_ids,
         "removed": result.rows_removed,
+        "soft_deleted": result.rows_soft_deleted,
     }
 
 

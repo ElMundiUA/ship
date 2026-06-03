@@ -181,9 +181,11 @@ _SYSTEM_PROMPT: Final[str] = (
     "secret values.\n"
     "5. CONNECTIVITY. Reason about how the deployed app wires together:\n"
     "   a. ENV CONTRACT — derive it from the SOURCE CODE (process.env.*, "
-    "import.meta.env.*), do NOT rely on a .env file existing. Declare every "
-    "env var the code reads. Set a 'value' ONLY for non-secret deploy "
-    "config you can infer; leave secrets' value null for the operator.\n"
+    "import.meta.env.*), do NOT rely on a .env file existing; repos usually "
+    "will not contain one. A .env.example may hint at names, but source code "
+    "is authoritative. Declare every env var the code reads. Set a 'value' "
+    "ONLY for non-secret deploy config you can infer; leave secrets' value "
+    "null for the operator.\n"
     "   b. BIND — a container must listen on 0.0.0.0, not localhost. If the "
     "service reads its host from env (HOST/HOSTNAME/BIND_ADDR/ADDRESS), set "
     "that env value '0.0.0.0'; set the bind port env to http_port. If the "
@@ -194,11 +196,19 @@ _SYSTEM_PROMPT: Final[str] = (
     "hardcoded URL used as the API/backend base, whatever it is called "
     "(VITE_API_URL, BACKEND_URL, API_BASE, SERVER_URL — and even misspelled "
     "variants). Read the frontend source to find it. Point that env's value "
-    "at the special token '$APP_URL' (the deployed app's own public URL) so "
-    "the browser hits the same domain, and route the backend so that URL "
-    "reaches it. A frontend must NEVER ship pointing at localhost/127.0.0.1 "
+    "at the special token '$APP_URL' plus the backend's PUBLIC route prefix "
+    "so the browser hits the same domain and the backend route. Example: if "
+    "the backend component is routed at '/api', set the frontend API-base env "
+    "to '$APP_URL/api'; if the backend route is '/', use '$APP_URL'. A frontend "
+    "must NEVER ship pointing at localhost/127.0.0.1 "
     "— if it hardcodes a loopback URL with no env override, add a 'warnings' "
     "entry.\n"
+    "   d. CONNECTIONS — also write the same relationship into top-level "
+    "'connections': from_component=<frontend>, to_component=<backend>, "
+    "env_key=<the frontend env var if one exists>, public_base_path=<backend "
+    "public route such as '/api'>, value='$APP_URL' plus that path, and "
+    "preserve_path_prefix=false unless the backend source itself mounts that "
+    "public prefix.\n"
     "6. If a signal is missing or ambiguous, lower 'confidence' and add a "
     "'warnings' entry explaining what you assumed. Never set 'value' for "
     "secret env vars.\n"
@@ -428,6 +438,13 @@ def _render_user_prompt(
 _LOOPBACK_URL_RE = re.compile(r"https?://(?:localhost|127\.0\.0\.1)(?::\d+)?", re.I)
 
 
+def _app_url_value_has_route(value: str, route: str) -> bool:
+    route = "/" + route.strip("/")
+    expected = "$APP_URL" + route
+    val = value.strip().rstrip("/")
+    return val == expected or val.startswith(expected + "/")
+
+
 def _verify_plan(
     plan: DeployPlan, files: dict[str, str], paths: list[str]
 ) -> list[str]:
@@ -483,6 +500,35 @@ def _verify_plan(
                 f"point at localhost. Set the frontend's API-base env value "
                 f"to the token '$APP_URL' (or, if it's hardcoded with no env, "
                 f"add a 'warnings' entry)"
+            )
+    service_routes = [
+        r
+        for c in plan.components
+        if c.kind == "service"
+        for r in (c.routes or [])
+        if r and r != "/"
+    ]
+    app_url_values = [
+        getattr(ev, "value", None) or ""
+        for c in plan.components
+        if c.kind == "static_site"
+        for ev in (c.env or [])
+        if "$APP_URL" in ((getattr(ev, "value", None) or ""))
+    ]
+    if app_url_values and service_routes:
+        if not any(
+            _app_url_value_has_route(value, route)
+            for value in app_url_values
+            for route in service_routes
+        ):
+            route = service_routes[0]
+            source = f"frontend source ({loopback_files[0]})" if loopback_files else "frontend env"
+            issues.append(
+                f"the {source} addresses a backend routed at '{route}', but "
+                f"the plan wires the frontend to '$APP_URL' without the route "
+                f"prefix. Set the frontend API-base env value to "
+                f"'$APP_URL{route}' so the browser calls the backend instead "
+                f"of the root static site"
             )
     return issues
 

@@ -115,11 +115,28 @@ jobs:
                           key: { type: "string" },
                           required: { type: "boolean" },
                           secret: { type: "boolean" },
+                          value: { anyOf: [{ type: "string" }, { type: "null" }] },
                           note: { anyOf: [{ type: "string" }, { type: "null" }] },
                         },
                       },
                     },
                     instance_size: { type: "string" },
+                  },
+                },
+              },
+              connections: {
+                type: "array",
+                items: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["from_component", "to_component", "env_key", "public_base_path", "value", "preserve_path_prefix"],
+                  properties: {
+                    from_component: { type: "string" },
+                    to_component: { type: "string" },
+                    env_key: { anyOf: [{ type: "string" }, { type: "null" }] },
+                    public_base_path: { type: "string" },
+                    value: { anyOf: [{ type: "string" }, { type: "null" }] },
+                    preserve_path_prefix: { type: "boolean" },
                   },
                 },
               },
@@ -175,7 +192,7 @@ jobs:
             if (!res.ok) throw new Error(`Ship callback failed ${res.status}: ${await res.text()}`);
           }
 
-          const system = "You are a senior release engineer. Return only JSON matching the schema. Infer build/run commands, component kind, runtime, health check path, port 8080 for services, and required env var names. Never invent secret values.";
+          const system = "You are a senior release engineer. Return only JSON matching the schema. Infer build/run commands, component kind, runtime, health check path, port 8080 for services, and required env var names. Never invent secret values. Do not rely on a checked-in .env; repos usually will not contain one. Use source code as truth and .env.example only as a hint. For browser frontend to backend API calls, set the frontend API-base env value to $APP_URL plus the backend public route prefix (for example $APP_URL/api), and also record that relationship in top-level connections.";
           const user = `Repository: ${process.env.GITHUB_REPOSITORY}
 Private: ${process.env.REPO_PRIVATE}
 Default branch: ${process.env.DEFAULT_BRANCH}

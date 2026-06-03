@@ -116,6 +116,38 @@ class DeployComponent(BaseModel):
     )
 
 
+class DeployConnection(BaseModel):
+    """A runtime/browser connection between deployed components.
+
+    This makes frontend->backend wiring explicit instead of burying it inside
+    an env var guess. Provider adapters can render the same connection using
+    their own URL syntax and routing rules.
+    """
+
+    from_component: str = Field(description="Component that initiates calls.")
+    to_component: str = Field(description="Component that receives calls.")
+    env_key: str | None = Field(
+        default=None,
+        description="Frontend/backend base env var to set, if the source uses one.",
+    )
+    public_base_path: str = Field(
+        default="/",
+        description="Public path prefix for the target component, e.g. '/api'.",
+    )
+    value: str | None = Field(
+        default=None,
+        description="Provider-neutral env value, e.g. '$APP_URL/api'.",
+    )
+    preserve_path_prefix: bool = Field(
+        default=False,
+        description=(
+            "True when the target app code expects to receive the public path "
+            "prefix. DigitalOcean normally strips route prefixes before "
+            "forwarding."
+        ),
+    )
+
+
 class DeployPlan(BaseModel):
     """The full plan for deploying a repository to a cloud provider."""
 
@@ -128,6 +160,13 @@ class DeployPlan(BaseModel):
     )
     components: list[DeployComponent] = Field(
         description="One or more deployable components."
+    )
+    connections: list[DeployConnection] = Field(
+        default_factory=list,
+        description=(
+            "Explicit component wiring, especially browser frontend -> backend "
+            "API base URLs. Do not rely on a checked-in .env; infer from source."
+        ),
     )
     needs_managed_db: str | None = Field(
         default=None,
@@ -154,6 +193,7 @@ __all__ = [
     "ComponentKind",
     "Confidence",
     "DeployComponent",
+    "DeployConnection",
     "DeployPlan",
     "EnvVarSpec",
     "Runtime",

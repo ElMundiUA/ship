@@ -43,19 +43,24 @@ already exists on the card (`PrivateRepoHelp variant="error"`) — restyle it as
 step, and remove/soften the proactive one in the Deploy step.
 
 **Other open options (vvlad to pick):** plan/spec diff between versions (pairs
-with versioning) · #3 route/prefix coherence (planner depth) · run the 3
-`deploy-test-fixtures/` repos (vvlad doing this himself).
+with versioning) · run the 3 `deploy-test-fixtures/` repos (vvlad doing this
+himself).
 
-**Confirmed live today:** frontend↔backend connectivity works (the healthcheck
-button hit the backend → planner `$APP_URL` wiring validated); health-probe path
-fixed (`/api/health`, monorepotest healthy=True). Actions-parity is DEFERRED to
-the very end (vvlad: the "climax" once the full manual flow is closed).
+**Confirmed live today:** frontend↔backend connectivity works on the janky
+monorepo after route-prefix normalization (`VITE_BACKEND_BASE=$APP_URL/api`).
+The old failure was frontend calling `/healthz` on the root static site and
+getting HTML. Health-probe path fixed too (`/api/healthz` / `/api/health` style
+external path, DO strips the route prefix internally). Actions-parity is now
+partially covered by the shared submit-time normalization; the workflow prompt
+was also updated to emit `connections`, but already-seeded repos need re-seed
+before the workflow itself learns the new schema/prompt.
 
 ## ✅ Done this autonomous session — NEEDS VVLAD REVIEW (hand-test, NOT committed)
 All of the below is in the working tree on `vv-deployments`, **uncommitted**.
-Backend was rebuilt (`docker compose build ship-server`) and unit-checked;
-console `tsc --noEmit` is clean. The *live* visual + real-DO confirmations are
-intentionally left for vvlad (see "Phase 5" below).
+Backend was rebuilt (`docker compose up -d --build ship-server`) and
+unit-checked; console `next build` passes with existing warnings. The *live*
+visual + real-DO confirmations are intentionally left for vvlad where noted
+(see "Phase 5" below).
 
 1. **Plan breakdown in the UI** (`deployments-client.tsx` Components row +
    `deploy.py` `ApiDeployComponentOut` / `_plan_components_out`). The AppCard
@@ -85,6 +90,35 @@ intentionally left for vvlad (see "Phase 5" below).
    - NOTE: `propose_monthly_cost` reads `app_cost` (DO's documented field) with
      a couple of fallbacks. Confirm against a real propose response during the
      first deploy — if DO's field name differs, add it to `_COST_KEYS`.
+5. **Planner connectivity contract + DO route-prefix normalization**
+   (`services/deploy/plan.py`, `planner.py`, `deploy.py`,
+   `ship-deploy-plan.yml`). `DeployPlan` now has top-level `connections`
+   (`from_component`, `to_component`, `env_key`, `public_base_path`, `value`,
+   `preserve_path_prefix`) so frontend→backend wiring is explicit instead of
+   inferred only from env names. The planner prompt explicitly says repos
+   normally do **not** contain `.env`; source code is authoritative and
+   `.env.example` is only a hint. Before saving/submitting to DO, Ship
+   normalizes frontend API-base envs using `connections` or a deterministic
+   static-site→service fallback: `$APP_URL` + backend public route (e.g.
+   `$APP_URL/api`). This covers both manual planner and Actions planner paths.
+6. **Raw plan visibility** (`deploy.py` `plan_debug` + Console `Plan` tab).
+   Each deployment card now exposes the stored DeployPlan JSON with secret env
+   values masked, so operators can verify `connections`, routes, env values,
+   and health paths without guessing from provider behavior.
+7. **Version recovery paths are split clearly.** `Rollback` now uses
+   DigitalOcean's native app rollback API against the target version's stored
+   provider `deployment_id` and creates a new Ship version marked
+   `rollback to vN`. `Rebuild plan` keeps the older deterministic behavior:
+   reuse the saved DeployPlan and build again on the same DO app.
+8. **Billing-safe delete semantics.** Explicit Delete now soft-deletes
+   deployment rows (`status=deleted`, provider `app_id` retained) only after
+   DigitalOcean app delete succeeds. Repo disconnect / workspace delete now
+   block if DO teardown cannot be confirmed, so Ship does not cascade away the
+   rows/token needed to stop a still-billing app.
+9. **Provider lifecycle boundary.** Native rollback/delete/credential dispatch
+   now lives under `services/deploy/providers/` (`operations.py`,
+   `capabilities.py`, provider adapter methods). Routes and generic teardown no
+   longer call DO rollback/delete REST helpers directly.
 
 - **Test fixtures** under `deploy-test-fixtures/` (see step 12). Three janky-but-
   working projects to stress the planner; for vvlad to split into their own repos.
@@ -184,27 +218,26 @@ This is the live-confirm pass for everything above. Steps for vvlad:
 
 ## Next steps (rough order)
 1. ✅/verify the connectivity fix (redeploy monorepotest).
-2. ✅ **Deploy versioning** — DONE. The History tab is now a **Versions** tab:
+2. ✅ **Deploy versioning + true provider rollback** — DONE. The History tab is now a **Versions** tab:
    each deploy is a numbered version (v1 = oldest) with status · time · cost ·
-   plan summary, the latest tagged "current". **Rollback**: `Redeploy` on any
-   earlier version calls `POST /workspaces/{ws}/deployments/{id}/redeploy`,
-   which REUSES that version's stored plan verbatim (no LLM re-plan) and
-   re-applies it to the SAME DO app (`_submit_to_digitalocean` finds the prior
-   app_id). Console: `redeployVersion` + Next proxy `/api/deploy/redeploy`.
-   Verified: stored plans round-trip into `DeployPlan`; route registered +
-   auth-gated. **Live rollback execution still needs a real test (vvlad).**
-   Possible later polish: plan/spec diff between versions (see Ideas).
-3. **Route/prefix coherence** — couple routing (`/api`, `preserve_path_prefix`)
-   with the wired URL so frontend↔backend paths always match.
+   plan summary, the latest tagged "current". **Rollback** calls
+   `POST /workspaces/{ws}/deployments/{id}/rollback`, validates the target with
+   DO, then executes DO native rollback with `{ deployment_id, skip_pin: true }`.
+   New rows carry `rolled_back_from_id` and render as `current · rollback to vN`.
+   **Rebuild plan** remains available via `/redeploy`; it reuses Ship's stored
+   DeployPlan and builds again, with rows marked `rebuilt from vN`.
+3. ✅ **Route/prefix coherence — base DONE.** Planner now has explicit
+   `connections`; submit-time DO normalization rewrites frontend API-base envs
+   to `$APP_URL/<service-route>` (e.g. `$APP_URL/api`) and ignores health-only
+   routes. Still-open deeper case: `preserve_path_prefix=true` when backend
+   source itself expects the public prefix.
 4. **Internal wiring** — server→server, `DATABASE_URL`, queues (internal
    hostnames, not `$APP_URL`).
-5. **Actions-workflow parity (DO AFTER the manual path is solid — see the
-   ⚠️ callout at top).** `ship-deploy-plan.yml` has its own inline
-   schema/prompt and is behind the backend planner. Port EVERY improvement:
-   monorepo detection (file tree + manifest layout), step-by-step connectivity
-   prompt, `HOST=0.0.0.0`, root-relative `dockerfile_path`, `$APP_URL` wiring,
-   verify-guard equivalent, model defaults. Then bump the seed bundle version
-   and re-seed repos so the Actions path matches the manual one.
+5. **Actions-workflow parity (partial).** `ship-deploy-plan.yml` schema/prompt
+   now includes env `value` and top-level `connections`, and backend submit-time
+   normalization protects both manual and Actions paths. Still needed before
+   calling it done: bump the seed bundle version and re-seed repos so already
+   installed workflow files get the updated inline planner.
 6. ✅ **Show the plan in the UI** — DONE this session (Components row). Possible
    polish later: collapse long env lists, show on the Deploy step pre-submit.
 7. ✅ **Health-probe grace period** — DONE this session (`probe_with_grace`).

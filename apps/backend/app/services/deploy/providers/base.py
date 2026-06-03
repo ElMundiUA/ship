@@ -40,6 +40,14 @@ class DeploymentStatus:
     error_message: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class ProviderRollbackResult:
+    """Result of a provider-native rollback operation."""
+
+    ref: ProviderRef
+    status_detail: str | None = None
+
+
 class DeployProvider(Protocol):
     """Minimal interface every deploy-target adapter must implement.
 
@@ -77,4 +85,4 @@ class DeployProvider(Protocol):
         ...
 
 
-__all__ = ["DeploymentStatus", "DeployProvider", "ProviderRef"]
+__all__ = ["DeploymentStatus", "DeployProvider", "ProviderRef", "ProviderRollbackResult"]

@@ -25,7 +25,7 @@ import type {
 } from "@/lib/api/client";
 
 const POLL_MS = 3000;
-const TERMINAL: ApiDeploymentStatus[] = ["active", "failed", "cancelled"];
+const TERMINAL: ApiDeploymentStatus[] = ["active", "failed", "cancelled", "deleted"];
 const isTerminal = (s: ApiDeploymentStatus) => TERMINAL.includes(s);
 const enc = encodeURIComponent;
 const PLANNER_LABELS: Record<string, string> = {
@@ -140,11 +140,13 @@ function errText(body: unknown, status: number): string {
 
 function statusTone(s: ApiDeploymentStatus) {
   if (s === "active") return "text-emerald-400";
+  if (s === "deleted") return "text-white/45";
   if (s === "failed" || s === "cancelled") return "text-red-400";
   return "text-yellow-400";
 }
 function statusDot(s: ApiDeploymentStatus) {
   if (s === "active") return "bg-emerald-400";
+  if (s === "deleted") return "bg-white/35";
   if (s === "failed" || s === "cancelled") return "bg-red-400";
   return "bg-yellow-400 animate-pulse";
 }
@@ -156,6 +158,7 @@ function statusLabel(s: ApiDeploymentStatus, detail: string | null) {
     active: "Active",
     failed: "Failed",
     cancelled: "Cancelled",
+    deleted: "Deleted",
   };
   return map[s] ?? s;
 }
@@ -166,6 +169,15 @@ function relTime(iso: string) {
   const h = Math.floor(m / 60);
   if (h < 24) return `${h}h ago`;
   return `${Math.floor(h / 24)}d ago`;
+}
+
+function planDebugJson(dep: ApiDeployment): string {
+  const plan =
+    dep.plan_debug ?? {
+      summary: dep.plan_summary,
+      components: dep.plan_components,
+    };
+  return JSON.stringify(plan, null, 2);
 }
 
 interface AppGroup {
@@ -332,6 +344,18 @@ export default function DeploymentsClient({ workspaceId }: { workspaceId: string
     return true;
   };
 
+  const handleRollbackVersion = async (deploymentId: string): Promise<boolean> => {
+    const res = await fetch(`/api/deploy/rollback`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ workspaceId, deploymentId }),
+    });
+    if (!res.ok) return false;
+    const dep: ApiDeployment = await res.json();
+    setDeployments((prev) => [dep, ...prev]);
+    return true;
+  };
+
   const handleRecheck = async (id: string) => {
     const fresh = await refreshOne(id);
     if (fresh) setDeployments((prev) => prev.map((d) => (d.id === id ? fresh : d)));
@@ -344,8 +368,7 @@ export default function DeploymentsClient({ workspaceId }: { workspaceId: string
       body: JSON.stringify({ workspaceId, repoId }),
     });
     if (res.ok) {
-      // Drop every deployment row for this repo — its card disappears.
-      setDeployments((prev) => prev.filter((d) => d.repo_id !== repoId));
+      await fetchList();
       return true;
     }
     return false;
@@ -399,6 +422,7 @@ export default function DeploymentsClient({ workspaceId }: { workspaceId: string
               onToggle={() => toggle(g.key)}
               onRedeploy={() => handleRedeploy(g.repoId)}
               onRedeployVersion={handleRedeployVersion}
+              onRollbackVersion={handleRollbackVersion}
               onRecheck={() => handleRecheck(g.current.id)}
               onDelete={() => handleDelete(g.repoId)}
             />
@@ -433,7 +457,7 @@ export default function DeploymentsClient({ workspaceId }: { workspaceId: string
   );
 }
 
-type CardTab = "overview" | "versions" | "activity" | "logs" | "settings";
+type CardTab = "overview" | "plan" | "versions" | "activity" | "logs" | "settings";
 
 function AppCard({
   workspaceId,
@@ -442,6 +466,7 @@ function AppCard({
   onToggle,
   onRedeploy,
   onRedeployVersion,
+  onRollbackVersion,
   onRecheck,
   onDelete,
 }: {
@@ -451,6 +476,7 @@ function AppCard({
   onToggle: () => void;
   onRedeploy: () => void;
   onRedeployVersion: (deploymentId: string) => Promise<boolean>;
+  onRollbackVersion: (deploymentId: string) => Promise<boolean>;
   onRecheck: () => void;
   onDelete: () => Promise<boolean>;
 }) {
@@ -460,6 +486,7 @@ function AppCard({
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [redeployingId, setRedeployingId] = useState<string | null>(null);
+  const [rollingBackId, setRollingBackId] = useState<string | null>(null);
   const [versionError, setVersionError] = useState<string | null>(null);
   const cur = group.current;
   const inFlight = !isTerminal(cur.status);
@@ -528,6 +555,16 @@ function AppCard({
             <span className={`text-[11px] font-semibold ${statusTone(cur.status)}`}>
               {statusLabel(cur.status, cur.status_detail)}
             </span>
+            {cur.redeployed_from_version != null && (
+              <span className="whitespace-nowrap rounded bg-white/10 px-1.5 py-0.5 text-[10px] text-white/50">
+                rebuilt from v{cur.redeployed_from_version}
+              </span>
+            )}
+            {cur.rolled_back_from_version != null && (
+              <span className="whitespace-nowrap rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] text-emerald-300">
+                rollback to v{cur.rolled_back_from_version}
+              </span>
+            )}
             {cur.live_url && (
               <a
                 href={cur.live_url}
@@ -600,7 +637,7 @@ function AppCard({
       {expanded && (
         <div className="border-t border-white/10 px-4 py-3">
           <nav className="mb-3 inline-flex rounded-lg border border-white/10 bg-white/[0.02] p-0.5 text-[11px] font-semibold">
-            {(["overview", "versions", "activity", "logs", "settings"] as CardTab[]).map((t) => (
+            {(["overview", "plan", "versions", "activity", "logs", "settings"] as CardTab[]).map((t) => (
               <button
                 key={t}
                 onClick={() => setTab(t)}
@@ -752,9 +789,9 @@ function AppCard({
           {tab === "versions" && (
             <div className="space-y-2">
               <p className="text-[11px] text-white/35">
-                Every deploy is a version. Roll back to any earlier one — it
-                re-applies that version&apos;s exact saved plan (no re-planning)
-                to the same app.
+                Every deploy is a version. Rollback uses DigitalOcean&apos;s
+                native rollback to the exact prior provider deployment. Rebuild
+                plan re-applies Ship&apos;s saved plan and builds again.
               </p>
               {versionError && (
                 <p className="text-[11px] text-red-400">{versionError}</p>
@@ -762,12 +799,15 @@ function AppCard({
               <ul className="space-y-1.5">
                 {group.history.map((d, i) => {
                   // history is newest-first; number oldest = v1.
-                  const versionNo = group.history.length - i;
+                  const versionNo = d.version ?? group.history.length - i;
                   const isCurrent = i === 0;
                   const hasPlan =
                     d.plan_components.length > 0 || !!d.plan_summary;
+                  const actionBusy = redeployingId !== null || rollingBackId !== null;
                   const canRollback =
-                    hasPlan && isTerminal(d.status) && redeployingId === null;
+                    d.can_provider_rollback && !isCurrent && !actionBusy;
+                  const canRebuild =
+                    hasPlan && isTerminal(d.status) && !isCurrent && !actionBusy;
                   return (
                     <li
                       key={d.id}
@@ -800,30 +840,73 @@ function AppCard({
                       {isCurrent ? (
                         <span className="whitespace-nowrap rounded bg-white/10 px-1.5 py-0.5 text-[10px] text-white/50">
                           current
+                          {d.rolled_back_from_version != null
+                            ? ` · rollback to v${d.rolled_back_from_version}`
+                            : ""}
+                          {d.redeployed_from_version != null
+                            ? ` · rebuilt from v${d.redeployed_from_version}`
+                            : ""}
                         </span>
                       ) : (
-                        canRollback && (
-                          <button
-                            onClick={async () => {
-                              setRedeployingId(d.id);
-                              setVersionError(null);
-                              const ok = await onRedeployVersion(d.id);
-                              if (!ok)
-                                setVersionError(
-                                  "Couldn’t redeploy that version — try again.",
-                                );
-                              setRedeployingId(null);
-                            }}
-                            className="whitespace-nowrap rounded border border-white/15 px-2 py-0.5 text-[10px] font-semibold text-white/70 transition hover:bg-white/[0.06] disabled:opacity-50"
-                          >
-                            {redeployingId === d.id ? "Redeploying…" : "Redeploy"}
-                          </button>
-                        )
+                        <span className="flex flex-shrink-0 items-center gap-1">
+                          {canRollback && (
+                            <button
+                              onClick={async () => {
+                                setRollingBackId(d.id);
+                                setVersionError(null);
+                                const ok = await onRollbackVersion(d.id);
+                                if (!ok)
+                                  setVersionError(
+                                    "Couldn’t roll back to that version — try again.",
+                                  );
+                                setRollingBackId(null);
+                              }}
+                              className="whitespace-nowrap rounded border border-emerald-500/30 px-2 py-0.5 text-[10px] font-semibold text-emerald-300 transition hover:bg-emerald-500/10 disabled:opacity-50"
+                            >
+                              {rollingBackId === d.id ? "Rolling back…" : "Rollback"}
+                            </button>
+                          )}
+                          {canRebuild && (
+                            <button
+                              onClick={async () => {
+                                setRedeployingId(d.id);
+                                setVersionError(null);
+                                const ok = await onRedeployVersion(d.id);
+                                if (!ok)
+                                  setVersionError(
+                                    "Couldn’t rebuild that plan — try again.",
+                                  );
+                                setRedeployingId(null);
+                              }}
+                              className="whitespace-nowrap rounded border border-white/15 px-2 py-0.5 text-[10px] font-semibold text-white/70 transition hover:bg-white/[0.06] disabled:opacity-50"
+                            >
+                              {redeployingId === d.id ? "Rebuilding…" : "Rebuild plan"}
+                            </button>
+                          )}
+                        </span>
                       )}
                     </li>
                   );
                 })}
               </ul>
+            </div>
+          )}
+
+          {tab === "plan" && (
+            <div className="space-y-2">
+              <p className="text-[11px] text-white/35">
+                Stored planner output for this deployment. Secret env values are
+                masked.
+              </p>
+              {cur.plan_debug || cur.plan_components.length > 0 ? (
+                <pre className="max-h-96 overflow-auto rounded-md border border-white/10 bg-black/30 p-3 font-mono text-[11px] leading-relaxed text-white/65">
+                  {planDebugJson(cur)}
+                </pre>
+              ) : (
+                <p className="text-xs text-white/40">
+                  No planner output stored for this deployment.
+                </p>
+              )}
             </div>
           )}
 

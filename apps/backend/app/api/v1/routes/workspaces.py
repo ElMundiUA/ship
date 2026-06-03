@@ -570,27 +570,35 @@ async def delete_workspace(
     )
     await session.flush()
 
-    # Orphan-billing guard: tear down any live cloud deployments BEFORE the
-    # cascade drops their rows + the provider token. Best-effort — we don't
-    # hold workspace deletion hostage to the provider being up; the deploy
-    # reconcile cron is the backstop for anything that fails here.
+    # Orphan-billing guard: tear down live cloud deployments BEFORE the cascade
+    # drops their rows + provider token. This is billing-critical, so workspace
+    # deletion is blocked if provider teardown cannot be confirmed.
     try:
         from backend.app.services.deploy.teardown import teardown_workspace_apps
 
         res = await teardown_workspace_apps(session, workspace_id)
         if res.failed_app_ids:
-            logging.getLogger(__name__).warning(
-                "workspace %s delete: %d cloud app(s) not torn down (%s) — "
-                "reconcile cron will retry",
-                workspace_id,
-                len(res.failed_app_ids),
-                res.failed_app_ids,
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=(
+                    "Could not delete all cloud apps for this workspace. "
+                    "Workspace deletion was stopped so billing handles are not lost."
+                ),
             )
-    except Exception:  # noqa: BLE001 — never block workspace deletion
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
         logging.getLogger(__name__).exception(
-            "workspace %s delete: deploy teardown raised; continuing",
+            "workspace %s delete: deploy teardown raised; blocking delete",
             workspace_id,
         )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=(
+                "Could not confirm cloud teardown for this workspace. "
+                "Workspace deletion was stopped so billing handles are not lost."
+            ),
+        ) from exc
 
     await session.delete(workspace)
     await session.flush()

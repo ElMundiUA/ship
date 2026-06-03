@@ -199,18 +199,18 @@ Concrete steps for the next session:
       `instance_size_slug` validity, health-check timing for Streamlit cold start.
 - [ ] Remove leftover screenshot PNGs in repo root created during testing.
 
-## Phase L — Lifecycle: Stop / Delete (real teardown)  🔜 DESIGN
+## Phase L — Lifecycle: Stop / Delete (real teardown)  ✅ DONE
 Problem: a deployed DO app keeps running (and billing) until explicitly
 removed. App Platform has **no pause** — deleting the app is the only way to
 stop it. Right now a dummy app is live with no UI to remove it.
 Best practices (bake in):
 - **Delete** = `DELETE /v2/apps/{id}` (building block `client.delete_app` added)
-  → stops billing + removes the card. **Stop** (optional) = same DO delete but
-  keep the row as `stopped` so "turn back on" = redeploy.
+  → stops billing + keeps the card/history as `deleted`. **Stop** (optional) =
+  same DO delete but keep the row as `stopped` so "turn back on" = redeploy.
 - **Destructive confirm** (two-step button or type-the-name) — irreversible.
 - **Idempotent**: treat DO 404 as "already gone"; DO is the source of truth,
   our rows are a cache.
-- **Soft-delete for audit**: `deleted_at` + status, hide card, keep "who/when".
+- **Soft-delete for audit**: `deleted_at` + status, keep provider handles.
 - **RBAC**: admin only.
 - ⚠️ **Orphan-billing risk (HIGH):** deactivating a repo / deleting a workspace
   cascades our rows but leaves the DO app running and billing. Hook teardown
@@ -222,19 +222,21 @@ Build order: (1) per-app Delete button (Settings tab) + `delete_app` route,
 
 **(1) DONE 2026-06-01 — verified live.** `client.delete_app` (DELETE /v2/apps/{id});
 backend `DELETE /v1/workspaces/{ws}/repos/{repo_id}/deploy` (admin, idempotent on
-DO 404, removes rows only after DO delete succeeds so we never orphan a billing
-app); console static route `/api/deploy/teardown` + a two-step confirm "Delete"
-button in the card Settings tab. Verified: deleted the live app → DB rows = 0,
-**DO API returns 404 for the app id** (really gone, billing stopped).
+DO 404, soft-deletes rows only after DO delete succeeds so we never orphan a
+billing app and never lose the provider `app_id`); console static route
+`/api/deploy/teardown` + a two-step confirm "Delete" button in the card
+Settings tab. Verified: deleted the live app → DO API returns 404 for the app
+id (really gone, billing stopped); current behavior keeps DB rows as `deleted`.
 **(2) DONE 2026-06-01 — orphan-billing hooks.** Shared `services/deploy/
 teardown.py` (`teardown_repo_app`, `teardown_workspace_apps`, idempotent on DO
-404, only drops rows after the DO delete succeeds). Wired best-effort BEFORE
-the cascade in: **workspace delete** (`workspaces.delete_workspace`) and
-**repo disconnect** (`repos.disconnect_repo`). The deploy DELETE route now
-reuses `teardown_repo_app` too. Hooks never block deletion if DO is down —
-failures are logged for the reconcile cron to retry. Verified imports + clean
-boot; reuses the same DO-delete path proven live in (1). Live destructive test
-(actually disconnect/delete) deferred to avoid burning DO/LLM resources.
+404, soft-deletes rows after the DO delete succeeds). Wired BEFORE the cascade
+in: **workspace delete** (`workspaces.delete_workspace`) and **repo disconnect**
+(`repos.disconnect_repo`). These hooks now block deletion/disconnect if DO
+teardown cannot be confirmed, so provider handles are not lost while an app may
+still be billing. The deploy DELETE route reuses `teardown_repo_app` too.
+Provider-specific lifecycle calls are dispatched through
+`services/deploy/providers/operations.py`; DO rollback/delete REST details stay
+inside the DigitalOcean adapter/client, not in route handlers.
 
 **(3) DONE 2026-06-01 — reconcile cron + activity feed (verified live).**
 - `services/deploy/reconcile.py` + cron `deployments_reconcile`
@@ -256,23 +258,28 @@ boot; reuses the same DO-delete path proven live in (1). Live destructive test
 Phase L (lifecycle/billing) is COMPLETE: explicit Delete, orphan-billing
 hooks, and drift reconcile all done & verified.
 
-## Phase V — Versions (numbered, commit-pinned + 1-click rollback)  🔜 DESIGN
-Make each deploy an immutable **version** the user sees as a friendly number.
-- **Human version number per app**: each deploy increments `v1, v2, v3…` for
-  that (repo, provider). The user deploys and sees "Deployed v3"; rollback =
-  "Roll back to v2" in one click. (Sequential `version` int on the deployment,
-  scoped per app.)
-- Under the hood, pin each version to its git commit: record `commit_sha` +
-  branch + message + author + time (fetch branch HEAD via CodeHostGateway at
-  deploy time). Version = deployment = commit (Vercel/Netlify model).
-- History tab shows versions (short SHA · message · who · when · status); mark
-  the live one. **Rollback** only to versions that reached ACTIVE.
-- Rollback via DO `POST /v2/apps/{id}/rollback` to that version's DO
-  `deployment_id` (cleaner than rebuilding from branch); restore the stored
-  DeployPlan + env contract.
-- Per-version build logs (ties into the Logs tab).
-Needs a small migration: add `commit_sha`, `commit_message`, `committed_by`
-columns to `deployments` (or a `config`/`source` JSONB).
+## Phase V — Versions (numbered, commit-pinned + 1-click rollback)
+**Base versioning and DigitalOcean provider rollback are implemented.**
+- [x] **Human version number per app**: every deploy is shown as `v1, v2,
+  v3…` for that (repo, provider). The console's History tab is now
+  **Versions** with status · time · cost · plan summary · current marker.
+- [x] **Rebuild from a previous version's saved plan**: `Rebuild plan` on an old
+  version calls `POST /deployments/{id}/redeploy`, reuses that version's stored
+  `DeployPlan` with no LLM re-plan, and applies it to the same DO app. New rows
+  carry `redeployed_from_id`; UI renders `rebuilt from vN` so users understand
+  that v6 may be a rebuild of v1's plan.
+- [x] **True DigitalOcean rollback**: `Rollback` on a successful old version
+  calls `POST /deployments/{id}/rollback`, validates with
+  `/v2/apps/{app_id}/rollback/validate`, then rolls back using
+  `/v2/apps/{app_id}/rollback` to that version's DO `deployment_id`
+  (`skip_pin: true`). New rows carry `rolled_back_from_id`; UI renders
+  `current · rollback to vN`.
+- [ ] **Commit-pinned versions**: record `commit_sha` + branch + message +
+  author + time at deploy time (fetch branch HEAD via CodeHostGateway).
+- [ ] **Per-version build logs** tied to immutable versions.
+
+Likely migration: add commit/source metadata to `deployments` (or a
+`source`/`config` JSONB) and keep provider deployment ids per version.
 
 ## Phase 8 — Secrets gate
 - [ ] When the plan declares required/secret env vars, collect values before deploy

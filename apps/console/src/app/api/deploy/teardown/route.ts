@@ -1,6 +1,6 @@
 /**
  * Tear down (delete) an app — really removes it from DigitalOcean (stops
- * billing) and drops its deployment rows.
+ * billing) and soft-deletes its deployment rows for audit.
  * POST /api/deploy/teardown   body: { workspaceId, repoId }
  *
  * Static route on purpose (dynamic routes are shadowed by the next.config

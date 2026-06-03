@@ -35,6 +35,7 @@ from backend.app.services.deploy.providers.base import (
     DeploymentStatus,
     DeployProvider,
     ProviderRef,
+    ProviderRollbackResult,
 )
 
 
@@ -402,6 +403,55 @@ class DigitalOceanAppPlatform:
         except Exception as exc:  # noqa: BLE001
             logger.debug("healthcheck %s failed: %s", full, exc)
             return False
+
+    async def delete_app(self, app_id: str) -> bool:
+        """Delete one DO app. True if gone, including already-404."""
+        try:
+            await do.delete_app(app_id, token=self._token, client=self._client)
+            return True
+        except do.DigitalOceanAPIError as exc:
+            if exc.status == 404:
+                return True
+            logger.warning("DO delete app %s failed: %s", app_id, exc)
+            return False
+        except httpx.HTTPError as exc:
+            logger.warning("DO delete app %s network error: %s", app_id, exc)
+            return False
+
+    async def rollback(self, ref: ProviderRef) -> ProviderRollbackResult:
+        """Roll back the DO app to ``ref.deployment_id`` using DO native rollback."""
+        if not ref.deployment_id:
+            raise ValueError("DigitalOcean rollback requires deployment_id")
+        validation = await do.validate_rollback(
+            ref.app_id,
+            ref.deployment_id,
+            token=self._token,
+            skip_pin=True,
+            client=self._client,
+        )
+        if isinstance(validation, dict) and validation.get("valid") is False:
+            raise ValueError("DigitalOcean says this deployment cannot be rolled back to.")
+        rollback = await do.rollback_app(
+            ref.app_id,
+            ref.deployment_id,
+            token=self._token,
+            skip_pin=True,
+            client=self._client,
+        )
+        dep = (rollback or {}).get("deployment") if isinstance(rollback, dict) else None
+        if not dep:
+            dep = await do.get_latest_deployment(
+                ref.app_id, token=self._token, client=self._client
+            )
+        deployment_id = dep.get("id") if isinstance(dep, dict) else None
+        return ProviderRollbackResult(
+            ref=ProviderRef(
+                provider=_PROVIDER,
+                app_id=ref.app_id,
+                deployment_id=deployment_id,
+            ),
+            status_detail=do.deployment_phase(dep) if dep else None,
+        )
 
 
 __all__ = [
