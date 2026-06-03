@@ -30,21 +30,28 @@ push):**
 - `fcf34ae8` feat: "View logs" link from a failed deploy's error.
 (Already PUSHED earlier: `1f638106` logs viewer, plus the 4 base commits.)
 
-**NEXT TASK (decided, not yet built): reactive "authorize DO" — masked as a
-natural step.** vvlad's call: stop showing the proactive yellow "Private repo —
-DigitalOcean needs access" box (we CAN'T pre-check DO↔GitHub access — no DO API
-for it, GitHub won't reveal DO's install). Instead: when a deploy fails with
-`error_kind == "github_access"`, present it NOT as an error but as a natural
-next step ("One more step — authorize DigitalOcean to read this repo →", calm
-tone, the Authorize button → `github.com/apps/digitalocean/installations/new`,
-then redeploy). Reuse history to suppress for repos DO already read (active /
-build_failed / health_check_failed = DO has access). The reactive recovery box
-already exists on the card (`PrivateRepoHelp variant="error"`) — restyle it as a
-step, and remove/soften the proactive one in the Deploy step.
+## 🤖 Autonomous solo run (vvlad away, approved) — local commits, NO push
+Order: (1) reactive authorize-as-step ✅ → (2) plan/spec diff between versions →
+(3) per-version logs → (4) commit-pinned versions → (5) cost instance-size
+fallback. Each: tsc/unit + local commit + this doc updated. NO live DO deploys,
+NO push (held on vvlad git creds: `WonnaBeCodeFather` 403s `ElMundiUA/ship`).
 
-**Other open options (vvlad to pick):** plan/spec diff between versions (pairs
-with versioning) · run the 3 `deploy-test-fixtures/` repos (vvlad doing this
-himself).
+Checkpointed first: `61e89af0` (Codex native-rollback/normalization/lifecycle
+WIP) + `37002f6c` (remove test fixtures → standalone repos).
+
+- ✅ **(1) Reactive authorize-as-step** — DONE `fb164aba`. Removed the proactive
+  yellow "needs access" box (can't pre-check DO access). On
+  `error_kind=github_access` the card shows a calm blue "One more step — let
+  DigitalOcean read this repo" panel (Authorize DigitalOcean → / make public →
+  Redeploy); the red error row is suppressed for that kind so it reads as a
+  step, not a failure. (PrivateRepoHelp lost its variant; only reactive now.)
+- ⏳ (2) plan/spec diff between versions — pairs with versioning (read-only).
+- ⏳ (3) per-version logs (each version row → its deployment_id via logs endpoint).
+- ⏳ (4) commit-pinned versions (store commit_sha/msg/author at deploy in provider_ref).
+- ⏳ (5) cost fallback to `GET /v2/apps/tiers/instance_sizes`.
+
+**Needs vvlad:** live deploy/rollback/teardown tests · push (git re-auth) ·
+Actions re-seed for old repos (so the workflow emits `connections`) · secrets-gate design.
 
 **Confirmed live today:** frontend↔backend connectivity works on the janky
 monorepo after route-prefix normalization (`VITE_BACKEND_BASE=$APP_URL/api`).
