@@ -284,6 +284,20 @@ export default function DeploymentsClient({ workspaceId }: { workspaceId: string
     setModalOpen(true);
   };
 
+  // Roll back / re-deploy a specific previous version, reusing its stored plan
+  // (no re-planning). The new deployment streams in like any other.
+  const handleRedeployVersion = async (deploymentId: string): Promise<boolean> => {
+    const res = await fetch(`/api/deploy/redeploy`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ workspaceId, deploymentId }),
+    });
+    if (!res.ok) return false;
+    const dep: ApiDeployment = await res.json();
+    setDeployments((prev) => [dep, ...prev]);
+    return true;
+  };
+
   const handleRecheck = async (id: string) => {
     const fresh = await refreshOne(id);
     if (fresh) setDeployments((prev) => prev.map((d) => (d.id === id ? fresh : d)));
@@ -349,6 +363,7 @@ export default function DeploymentsClient({ workspaceId }: { workspaceId: string
               expanded={expanded.has(g.key)}
               onToggle={() => toggle(g.key)}
               onRedeploy={() => handleRedeploy(g.repoId)}
+              onRedeployVersion={handleRedeployVersion}
               onRecheck={() => handleRecheck(g.current.id)}
               onDelete={() => handleDelete(g.repoId)}
             />
@@ -382,7 +397,7 @@ export default function DeploymentsClient({ workspaceId }: { workspaceId: string
   );
 }
 
-type CardTab = "overview" | "history" | "activity" | "logs" | "settings";
+type CardTab = "overview" | "versions" | "activity" | "logs" | "settings";
 
 function AppCard({
   workspaceId,
@@ -390,6 +405,7 @@ function AppCard({
   expanded,
   onToggle,
   onRedeploy,
+  onRedeployVersion,
   onRecheck,
   onDelete,
 }: {
@@ -398,6 +414,7 @@ function AppCard({
   expanded: boolean;
   onToggle: () => void;
   onRedeploy: () => void;
+  onRedeployVersion: (deploymentId: string) => Promise<boolean>;
   onRecheck: () => void;
   onDelete: () => Promise<boolean>;
 }) {
@@ -406,6 +423,8 @@ function AppCard({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [redeployingId, setRedeployingId] = useState<string | null>(null);
+  const [versionError, setVersionError] = useState<string | null>(null);
   const cur = group.current;
   const inFlight = !isTerminal(cur.status);
 
@@ -545,7 +564,7 @@ function AppCard({
       {expanded && (
         <div className="border-t border-white/10 px-4 py-3">
           <nav className="mb-3 inline-flex rounded-lg border border-white/10 bg-white/[0.02] p-0.5 text-[11px] font-semibold">
-            {(["overview", "history", "activity", "logs", "settings"] as CardTab[]).map((t) => (
+            {(["overview", "versions", "activity", "logs", "settings"] as CardTab[]).map((t) => (
               <button
                 key={t}
                 onClick={() => setTab(t)}
@@ -694,21 +713,82 @@ function AppCard({
             </dl>
           )}
 
-          {tab === "history" && (
-            <ul className="space-y-1.5">
-              {group.history.map((d) => (
-                <li key={d.id} className="flex items-center gap-2 text-xs">
-                  <span className={`h-1.5 w-1.5 rounded-full ${statusDot(d.status)}`} />
-                  <span className={`w-20 ${statusTone(d.status)}`}>
-                    {statusLabel(d.status, null)}
-                  </span>
-                  <span className="text-white/40">{relTime(d.created_at)}</span>
-                  {d.error_message && (
-                    <span className="truncate text-white/40">· {d.error_message}</span>
-                  )}
-                </li>
-              ))}
-            </ul>
+          {tab === "versions" && (
+            <div className="space-y-2">
+              <p className="text-[11px] text-white/35">
+                Every deploy is a version. Roll back to any earlier one — it
+                re-applies that version&apos;s exact saved plan (no re-planning)
+                to the same app.
+              </p>
+              {versionError && (
+                <p className="text-[11px] text-red-400">{versionError}</p>
+              )}
+              <ul className="space-y-1.5">
+                {group.history.map((d, i) => {
+                  // history is newest-first; number oldest = v1.
+                  const versionNo = group.history.length - i;
+                  const isCurrent = i === 0;
+                  const hasPlan =
+                    d.plan_components.length > 0 || !!d.plan_summary;
+                  const canRollback =
+                    hasPlan && isTerminal(d.status) && redeployingId === null;
+                  return (
+                    <li
+                      key={d.id}
+                      className="flex items-center gap-2 rounded-md border border-white/5 bg-white/[0.02] px-2 py-1.5 text-xs"
+                    >
+                      <span className="font-mono text-[10px] text-white/40">
+                        v{versionNo}
+                      </span>
+                      <span
+                        className={`h-1.5 w-1.5 rounded-full ${statusDot(d.status)}`}
+                      />
+                      <span className={`w-16 ${statusTone(d.status)}`}>
+                        {statusLabel(d.status, null)}
+                      </span>
+                      <span className="whitespace-nowrap text-white/40">
+                        {relTime(d.created_at)}
+                      </span>
+                      {d.estimated_monthly_usd != null && (
+                        <span className="whitespace-nowrap text-white/30">
+                          ≈ ${d.estimated_monthly_usd.toFixed(0)}/mo
+                        </span>
+                      )}
+                      <span className="min-w-0 flex-1 truncate text-white/40">
+                        {d.error_message
+                          ? `· ${d.error_message}`
+                          : d.plan_summary
+                            ? `· ${d.plan_summary}`
+                            : ""}
+                      </span>
+                      {isCurrent ? (
+                        <span className="whitespace-nowrap rounded bg-white/10 px-1.5 py-0.5 text-[10px] text-white/50">
+                          current
+                        </span>
+                      ) : (
+                        canRollback && (
+                          <button
+                            onClick={async () => {
+                              setRedeployingId(d.id);
+                              setVersionError(null);
+                              const ok = await onRedeployVersion(d.id);
+                              if (!ok)
+                                setVersionError(
+                                  "Couldn’t redeploy that version — try again.",
+                                );
+                              setRedeployingId(null);
+                            }}
+                            className="whitespace-nowrap rounded border border-white/15 px-2 py-0.5 text-[10px] font-semibold text-white/70 transition hover:bg-white/[0.06] disabled:opacity-50"
+                          >
+                            {redeployingId === d.id ? "Redeploying…" : "Redeploy"}
+                          </button>
+                        )
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
           )}
 
           {tab === "activity" && (

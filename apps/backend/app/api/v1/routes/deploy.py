@@ -1042,6 +1042,66 @@ async def get_deployment(
     return _to_out(dep, repo_full_name=names.get(dep.repo_id))
 
 
+@router.post(
+    "/workspaces/{workspace_id}/deployments/{deployment_id}/redeploy",
+    response_model=ApiDeploymentOut,
+)
+async def redeploy_version(
+    workspace_id: uuid.UUID,
+    deployment_id: uuid.UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> ApiDeploymentOut:
+    """Re-deploy a previous version by REUSING its stored plan (rollback).
+
+    Unlike the wizard's "Redeploy" (which re-plans), this re-applies the exact
+    plan that ``deployment_id`` captured — no LLM, deterministic — and submits
+    it to the SAME DigitalOcean app (``_submit_to_digitalocean`` finds the prior
+    app_id). So you can roll back to any earlier version verbatim.
+    """
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+    src = await session.get(Deployment, deployment_id)
+    if src is None or src.workspace_id != workspace_id:
+        raise HTTPException(status_code=404, detail="Deployment not found")
+    if not src.plan:
+        raise HTTPException(
+            status_code=400,
+            detail="This version has no stored plan to redeploy.",
+        )
+    try:
+        deploy_plan = DeployPlan(**src.plan)
+    except Exception:  # noqa: BLE001
+        raise HTTPException(
+            status_code=400, detail="Stored plan for this version is invalid."
+        )
+
+    token = await get_do_token(session, workspace_id)
+    if not token:
+        raise HTTPException(
+            status_code=409,
+            detail="DigitalOcean is not connected for this workspace.",
+        )
+    repo = await _require_repo(session, workspace_id, src.repo_id)
+
+    dep = Deployment(
+        workspace_id=workspace_id,
+        repo_id=src.repo_id,
+        provider=src.provider,
+        status=DS.DEPLOYING,
+        started_at=datetime.now(timezone.utc),
+    )
+    session.add(dep)
+    await session.flush()
+    # No start event here: _submit_to_digitalocean emits DEPLOYED on success
+    # (and DEPLOY_FAILED on failure) — emitting DEPLOYED up front would be both
+    # premature and a duplicate.
+    await _submit_to_digitalocean(
+        session=session, dep=dep, repo=repo, token=token, deploy_plan=deploy_plan
+    )
+    names = await _repo_name_map(session, [dep.repo_id])
+    return _to_out(dep, repo_full_name=names.get(dep.repo_id))
+
+
 class ApiDeployLogsOut(BaseModel):
     type: str
     text: str

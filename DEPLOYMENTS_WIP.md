@@ -140,9 +140,16 @@ This is the live-confirm pass for everything above. Steps for vvlad:
 
 ## Next steps (rough order)
 1. ✅/verify the connectivity fix (redeploy monorepotest).
-2. **Deploy versioning** — history of deploy attempts per app, surface the
-   plan + status per version, allow rollback / re-deploy a previous version.
-   (Today the AppCard already groups by app with a History tab — extend it.)
+2. ✅ **Deploy versioning** — DONE. The History tab is now a **Versions** tab:
+   each deploy is a numbered version (v1 = oldest) with status · time · cost ·
+   plan summary, the latest tagged "current". **Rollback**: `Redeploy` on any
+   earlier version calls `POST /workspaces/{ws}/deployments/{id}/redeploy`,
+   which REUSES that version's stored plan verbatim (no LLM re-plan) and
+   re-applies it to the SAME DO app (`_submit_to_digitalocean` finds the prior
+   app_id). Console: `redeployVersion` + Next proxy `/api/deploy/redeploy`.
+   Verified: stored plans round-trip into `DeployPlan`; route registered +
+   auth-gated. **Live rollback execution still needs a real test (vvlad).**
+   Possible later polish: plan/spec diff between versions (see Ideas).
 3. **Route/prefix coherence** — couple routing (`/api`, `preserve_path_prefix`)
    with the wired URL so frontend↔backend paths always match.
 4. **Internal wiring** — server→server, `DATABASE_URL`, queues (internal

@@ -4397,6 +4397,17 @@ export function getDeployment(
   );
 }
 
+export function redeployVersion(
+  workspaceId: string,
+  deploymentId: string,
+  token?: string,
+): Promise<ApiDeployment> {
+  return apiFetch<ApiDeployment>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/deployments/${encodeURIComponent(deploymentId)}/redeploy`,
+    { method: "POST", body: {}, token },
+  );
+}
+
 export type DeployLogType = "BUILD" | "DEPLOY" | "RUN";
 
 export interface ApiDeployLogs {
