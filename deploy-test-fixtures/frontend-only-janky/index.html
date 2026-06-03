@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Standalone Frontend</title>
+  </head>
+  <body style="font-family: system-ui, sans-serif; padding: 40px; max-width: 640px">
+    <h1>Standalone Frontend</h1>
+    <p>Talking to backend at: <code id="base"></code></p>
+    <button id="btn" style="padding: 8px 16px; font-size: 16px">
+      Check backend health
+    </button>
+    <p>Backend status: <b id="status">idle</b></p>
+    <pre id="detail"></pre>
+    <script type="module" src="/main.js"></script>
+  </body>
+</html>
