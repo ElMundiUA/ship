@@ -7,6 +7,50 @@ deploy planner. Update this as we go (this is the "where are we" doc).
 Deploy **planner robustness** — turning "any repo" into a correct DO App
 Platform deploy without the operator hand-fixing things.
 
+## ⏱ WHERE WE ARE — 2026-06-03 (latest; read this first)
+Live dogfooding the deploy flow with vvlad. Backend rebuilt + tsc clean throughout.
+
+**Local commits ahead of `origin/vv-deployments` (NOT pushed — push HELD on
+vvlad's call until the whole feature is ready; also git creds were on
+`WonnaBeCodeFather` which 403s on `ElMundiUA/ship`, so vvlad must re-auth before
+push):**
+- `571dfdcb` fix: manual LLM key wrongly blocked at Deploy (guard checked repo
+  GitHub-secret keys even in manual mode → "Add an LLM API key…"; now mirrors
+  plannerReady). + clear error on step nav.
+- `00dc1c31` fix: connect returns to the wizard's DigitalOcean step (returnPath
+  deep-link `?deployConnect=<repo>`), not the Integrations page; popup-block →
+  same-tab fallback.
+- `8c02b6fc` feat: deploy versioning — History tab → **Versions** (v#, status,
+  time, cost, plan summary, "current"); **rollback** via
+  `POST /deployments/{id}/redeploy` (reuses a version's stored plan verbatim,
+  same DO app). **Live rollback still needs a real test by vvlad.**
+- `5c82766e` feat: dummy-proof wizard — why-blocked hint under disabled
+  Next/Deploy; "what happens next" microcopy; hide private-repo box when the
+  repo already has a live DO app.
+- `fcf34ae8` feat: "View logs" link from a failed deploy's error.
+(Already PUSHED earlier: `1f638106` logs viewer, plus the 4 base commits.)
+
+**NEXT TASK (decided, not yet built): reactive "authorize DO" — masked as a
+natural step.** vvlad's call: stop showing the proactive yellow "Private repo —
+DigitalOcean needs access" box (we CAN'T pre-check DO↔GitHub access — no DO API
+for it, GitHub won't reveal DO's install). Instead: when a deploy fails with
+`error_kind == "github_access"`, present it NOT as an error but as a natural
+next step ("One more step — authorize DigitalOcean to read this repo →", calm
+tone, the Authorize button → `github.com/apps/digitalocean/installations/new`,
+then redeploy). Reuse history to suppress for repos DO already read (active /
+build_failed / health_check_failed = DO has access). The reactive recovery box
+already exists on the card (`PrivateRepoHelp variant="error"`) — restyle it as a
+step, and remove/soften the proactive one in the Deploy step.
+
+**Other open options (vvlad to pick):** plan/spec diff between versions (pairs
+with versioning) · #3 route/prefix coherence (planner depth) · run the 3
+`deploy-test-fixtures/` repos (vvlad doing this himself).
+
+**Confirmed live today:** frontend↔backend connectivity works (the healthcheck
+button hit the backend → planner `$APP_URL` wiring validated); health-probe path
+fixed (`/api/health`, monorepotest healthy=True). Actions-parity is DEFERRED to
+the very end (vvlad: the "climax" once the full manual flow is closed).
+
 ## ✅ Done this autonomous session — NEEDS VVLAD REVIEW (hand-test, NOT committed)
 All of the below is in the working tree on `vv-deployments`, **uncommitted**.
 Backend was rebuilt (`docker compose build ship-server`) and unit-checked;
