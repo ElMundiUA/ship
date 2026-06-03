@@ -50,9 +50,20 @@ WIP) + `37002f6c` (remove test fixtures → standalone repos).
   (components added/removed; per-component runtime/port/source_dir/dockerfile/
   health/routes/env changes; secrets shown as •••). Pure client-side over
   `plan_components` (`planDiffLines`). Read-only.
-- ⏳ (3) per-version logs (each version row → its deployment_id via logs endpoint).
-- ⏳ (4) commit-pinned versions (store commit_sha/msg/author at deploy in provider_ref).
-- ⏳ (5) cost fallback to `GET /v2/apps/tiers/instance_sizes`.
+- ✅ **(3) per-version logs** — DONE. Each version row has a **`logs`** link
+  that points the Logs tab at THAT version's deployment (BUILD/DEPLOY/RUN);
+  a "view current →" reset returns to the live one. (`logsDeploymentId` state.)
+- ⏭️ (4) commit-pinned versions — NOT STARTED (heavier: backend deploy path).
+  Plan: at deploy time fetch branch HEAD via `GitHubCodeHost`, store
+  `commit_sha/message/author/committed_at` in `provider_ref` (no migration),
+  expose on `ApiDeploymentOut`, show in the Versions row. Live-verify on a deploy.
+- ⏭️ (5) cost fallback — NOT STARTED. When `propose` returns no cost, fetch
+  `GET /v2/apps/tiers/instance_sizes` and sum component instance prices; show as
+  the estimate. Backend, read-only to DO.
+
+**Autonomous run stopped here (clean point).** Delivered steps 1-3 + checkpointed
+Codex's work; steps 4-5 above are the next pickups. 13 local commits, push still
+held (vvlad git re-auth needed).
 
 **Needs vvlad:** live deploy/rollback/teardown tests · push (git re-auth) ·
 Actions re-seed for old repos (so the workflow emits `connections`) · secrets-gate design.

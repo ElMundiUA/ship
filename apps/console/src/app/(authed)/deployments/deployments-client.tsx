@@ -520,6 +520,9 @@ function AppCard({
   const [versionError, setVersionError] = useState<string | null>(null);
   // Which prior version's "what changed vs current" diff is expanded.
   const [diffVersionId, setDiffVersionId] = useState<string | null>(null);
+  // Which version the Logs tab is showing (null = current). Lets you read a
+  // past version's build/deploy/run logs, not just the current one.
+  const [logsDeploymentId, setLogsDeploymentId] = useState<string | null>(null);
   const cur = group.current;
   const inFlight = !isTerminal(cur.status);
 
@@ -925,6 +928,15 @@ function AppCard({
                               {diffVersionId === d.id ? "hide diff" : "diff"}
                             </button>
                           )}
+                          <button
+                            onClick={() => {
+                              setLogsDeploymentId(d.id);
+                              setTab("logs");
+                            }}
+                            className="whitespace-nowrap rounded border border-white/15 px-2 py-0.5 text-[10px] font-semibold text-white/55 transition hover:bg-white/[0.06]"
+                          >
+                            logs
+                          </button>
                         </span>
                       )}
                      </div>
@@ -987,9 +999,31 @@ function AppCard({
             <ActivityFeed workspaceId={workspaceId} repoId={group.repoId} />
           )}
 
-          {tab === "logs" && (
-            <LogsPanel workspaceId={workspaceId} deploymentId={cur.id} />
-          )}
+          {tab === "logs" &&
+            (() => {
+              const target =
+                group.history.find((d) => d.id === logsDeploymentId) ?? cur;
+              const isCur = target.id === cur.id;
+              const vno =
+                target.version ??
+                group.history.length - group.history.indexOf(target);
+              return (
+                <div className="space-y-2">
+                  {!isCur && (
+                    <p className="text-[11px] text-white/40">
+                      Logs for v{vno}.{" "}
+                      <button
+                        onClick={() => setLogsDeploymentId(null)}
+                        className="underline underline-offset-2 hover:text-white"
+                      >
+                        view current →
+                      </button>
+                    </p>
+                  )}
+                  <LogsPanel workspaceId={workspaceId} deploymentId={target.id} />
+                </div>
+              );
+            })()}
 
           {tab === "settings" && (
             <div className="space-y-4">
