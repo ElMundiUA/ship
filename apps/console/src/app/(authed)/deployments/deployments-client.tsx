@@ -1318,8 +1318,18 @@ function NewDeploymentModal({
       setError("Pick a repository first.");
       return;
     }
-    if (plannerProviders.length === 0 || !plannerProvider) {
-      setError("Add an LLM API key for this repo before deploying.");
+    // Manual mode is satisfied by a pasted key; repo mode by a repo-configured
+    // key. Mirror `plannerReady` exactly — otherwise a valid manual-key deploy
+    // is wrongly blocked because the repo has no GitHub-secret key.
+    const plannerOk = manualLlm
+      ? plannerApiKey.trim().length > 0 && !!plannerProvider
+      : plannerProviders.length > 0 && !!plannerProvider;
+    if (!plannerOk) {
+      setError(
+        manualLlm
+          ? "Enter your LLM API key before deploying."
+          : "Add an LLM API key for this repo (or paste one manually) before deploying.",
+      );
       return;
     }
     setBusy(true);
@@ -1669,7 +1679,10 @@ function NewDeploymentModal({
         {/* ── Footer · Back / Next / Deploy ───────────────────── */}
         <div className="mt-5 flex items-center justify-between gap-3">
           <button
-            onClick={() => setStep((s) => Math.max(0, s - 1))}
+            onClick={() => {
+              setError(null);
+              setStep((s) => Math.max(0, s - 1));
+            }}
             disabled={step === 0 || busy}
             className="rounded-lg px-3 py-2 text-xs font-semibold text-white/60 transition hover:text-white disabled:cursor-not-allowed disabled:opacity-30"
           >
@@ -1690,7 +1703,11 @@ function NewDeploymentModal({
             </button>
           ) : (
             <button
-              onClick={() => canAdvance && setStep((s) => s + 1)}
+              onClick={() => {
+                if (!canAdvance) return;
+                setError(null);
+                setStep((s) => s + 1);
+              }}
               disabled={!canAdvance}
               className={[
                 "rounded-lg px-5 py-2.5 text-sm font-semibold transition",
