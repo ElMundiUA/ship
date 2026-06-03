@@ -137,6 +137,39 @@ _COST_KEYS: Final[tuple[str, ...]] = (
 )
 
 
+async def instance_sizes(
+    *,
+    token: str,
+    client: httpx.AsyncClient | None = None,
+) -> dict[str, Any]:
+    """GET /v2/apps/tiers/instance_sizes — DO's published per-size monthly
+    prices. Used as a cost fallback when ``/apps/propose`` returns no figure;
+    still DO's OWN numbers (their price list), not an invented formula."""
+    return await _request("GET", "/apps/tiers/instance_sizes", token=token, client=client)
+
+
+def instance_price_map(sizes: dict[str, Any] | None) -> dict[str, float]:
+    """Map ``instance_size_slug`` -> monthly USD from an instance_sizes
+    response. Reads DO's ``usd_per_month`` (falls back to a couple of keys)."""
+    out: dict[str, float] = {}
+    if not isinstance(sizes, dict):
+        return out
+    for entry in sizes.get("instance_sizes") or []:
+        slug = entry.get("slug")
+        if not slug:
+            continue
+        for key in ("usd_per_month", "monthly_price_usd", "price_monthly"):
+            raw = entry.get(key)
+            if raw is None:
+                continue
+            try:
+                out[slug] = float(raw)
+            except (TypeError, ValueError):
+                pass
+            break
+    return out
+
+
 def propose_monthly_cost(propose: dict[str, Any] | None) -> float | None:
     """Pull the monthly USD cost out of a propose response, or None if DO
     didn't return one (then we simply show nothing — no invented number)."""
@@ -306,6 +339,8 @@ __all__ = [
     "is_terminal",
     "propose_app",
     "propose_monthly_cost",
+    "instance_sizes",
+    "instance_price_map",
     "rollback_app",
     "validate_rollback",
 ]

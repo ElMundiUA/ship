@@ -236,6 +236,25 @@ def _build_worker(
     return worker
 
 
+def _estimate_spec_cost(
+    spec: dict[str, Any], price_map: dict[str, float]
+) -> float | None:
+    """Sum DO's per-size monthly prices for a spec's run components (services +
+    workers). Static sites are excluded (DO's free/cheap tier). Returns None if
+    we couldn't price anything (so we show nothing rather than a wrong $0)."""
+    total = 0.0
+    priced = False
+    for key in ("services", "workers"):
+        for comp in spec.get(key, []) or []:
+            slug = comp.get("instance_size_slug")
+            count = comp.get("instance_count", 1) or 1
+            price = price_map.get(slug)
+            if price is not None:
+                total += price * count
+                priced = True
+    return round(total, 2) if priced else None
+
+
 def build_app_spec(
     plan: DeployPlan,
     *,
@@ -319,6 +338,16 @@ class DigitalOceanAppPlatform:
             estimated_monthly_usd = do.propose_monthly_cost(proposal)
         except Exception as exc:  # noqa: BLE001 — cost is non-critical
             logger.info("DO propose (cost estimate) failed, continuing: %s", exc)
+        # Fallback when propose returned no figure: sum DO's PUBLISHED per-size
+        # prices for the spec's run components. Still DO's own numbers.
+        if estimated_monthly_usd is None:
+            try:
+                sizes = await do.instance_sizes(token=self._token, client=self._client)
+                estimated_monthly_usd = _estimate_spec_cost(
+                    spec, do.instance_price_map(sizes)
+                )
+            except Exception as exc:  # noqa: BLE001 — cost is non-critical
+                logger.info("DO instance_sizes cost fallback failed: %s", exc)
         if existing_app_id:
             # Redeploy: update the existing DO app in place (new deployment
             # under the SAME app) rather than spawning a duplicate.
