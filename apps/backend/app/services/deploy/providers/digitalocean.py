@@ -308,6 +308,16 @@ class DigitalOceanAppPlatform:
             private=self._private,
             region=self._region,
         )
+        # Ask DO for ITS OWN monthly cost estimate for this exact spec before we
+        # create/update. Best-effort: a propose failure must never block the
+        # deploy (we just won't have a number to show). We surface DO's figure
+        # as-is — no homemade pricing math.
+        estimated_monthly_usd: float | None = None
+        try:
+            proposal = await do.propose_app(spec, token=self._token, client=self._client)
+            estimated_monthly_usd = do.propose_monthly_cost(proposal)
+        except Exception as exc:  # noqa: BLE001 — cost is non-critical
+            logger.info("DO propose (cost estimate) failed, continuing: %s", exc)
         if existing_app_id:
             # Redeploy: update the existing DO app in place (new deployment
             # under the SAME app) rather than spawning a duplicate.
@@ -327,11 +337,14 @@ class DigitalOceanAppPlatform:
         dep = await do.get_latest_deployment(app_id, token=self._token, client=self._client)
         dep_id = dep["id"] if dep else None
         logger.info("DO app %s, deployment %s", app_id, dep_id)
+        extra: dict[str, Any] = {"spec_name": plan.app_name, "region": self._region}
+        if estimated_monthly_usd is not None:
+            extra["estimated_monthly_usd"] = estimated_monthly_usd
         return ProviderRef(
             provider=_PROVIDER,
             app_id=app_id,
             deployment_id=dep_id,
-            extra={"spec_name": plan.app_name, "region": self._region},
+            extra=extra,
         )
 
     async def status(self, ref: ProviderRef) -> DeploymentStatus:

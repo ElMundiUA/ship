@@ -111,6 +111,48 @@ async def update_app(
     return data["app"]
 
 
+async def propose_app(
+    spec: dict[str, Any],
+    *,
+    token: str,
+    client: httpx.AsyncClient | None = None,
+) -> dict[str, Any]:
+    """POST /v2/apps/propose — validate a spec and get DigitalOcean's OWN cost
+    estimate for it (no deploy). Returns the raw propose response, which
+    includes the monthly cost DO computes for this exact spec. We surface DO's
+    number as-is rather than inventing our own pricing math."""
+    return await _request(
+        "POST", "/apps/propose", token=token, json={"spec": spec}, client=client
+    )
+
+
+# Numeric monthly-cost fields DO has used on the propose response, in order of
+# preference. We read whatever DO gives and never compute our own estimate.
+_COST_KEYS: Final[tuple[str, ...]] = (
+    "app_cost",
+    "monthly_cost",
+    "app_tier_upgrade_cost",
+)
+
+
+def propose_monthly_cost(propose: dict[str, Any] | None) -> float | None:
+    """Pull the monthly USD cost out of a propose response, or None if DO
+    didn't return one (then we simply show nothing — no invented number)."""
+    if not isinstance(propose, dict):
+        return None
+    for key in _COST_KEYS:
+        raw = propose.get(key)
+        if raw is None:
+            continue
+        try:
+            val = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if val > 0:
+            return round(val, 2)
+    return None
+
+
 async def get_app(
     app_id: str,
     *,
@@ -199,4 +241,6 @@ __all__ = [
     "get_latest_deployment",
     "is_failed",
     "is_terminal",
+    "propose_app",
+    "propose_monthly_cost",
 ]

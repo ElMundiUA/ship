@@ -56,7 +56,11 @@ from backend.app.integrations.github.workflows import (
 )
 from backend.app.services.deploy.credentials import get_do_token
 from backend.app.services.deploy.events import list_app_events, record_event
-from backend.app.services.deploy.health import health_check_path, probe
+from backend.app.services.deploy.health import (
+    health_check_path,
+    probe,
+    probe_with_grace,
+)
 from backend.app.services.deploy.teardown import teardown_repo_app
 from backend.app.db.models.deploy import DeploymentEventKind
 from backend.app.services.deploy.plan import DeployPlan
@@ -118,8 +122,117 @@ def _looks_like_github_access_error(raw: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Friendly error translation
+# ---------------------------------------------------------------------------
+# Deploys fail for a handful of recurring, recognisable reasons. Each gets a
+# canonical plain-language message (so a non-dev knows what to do) plus an
+# ``error_kind`` the console can branch on for tailored recovery UI. We don't
+# add a DB column for the kind — instead ``error_kind`` is derived from the
+# stored ``error_message`` by matching a stable lead substring. So the rule is:
+# whatever we store at a failure site MUST contain the matching lead below.
+_ACTIONS_ACCESS_KIND = "actions_access"
+_ACTIONS_ACCESS_LEAD = "can't access GitHub Actions on this repo"
+
+_WORKFLOW_UNREGISTERED_KIND = "workflow_unregistered"
+_WORKFLOW_UNREGISTERED_LEAD = "hasn't registered the deploy planner workflow"
+_WORKFLOW_UNREGISTERED_HINT = (
+    "GitHub hasn't registered the deploy planner workflow on this repo yet, so "
+    "it can't be triggered. Fix: push any commit to the default branch to "
+    "register .github/workflows/ship-deploy-plan.yml (a one-time GitHub "
+    "requirement for workflow_dispatch), or deploy with a manual LLM key "
+    "(plans on the backend, no GitHub Actions needed)."
+)
+
+_WORKFLOW_MISSING_KIND = "workflow_missing"
+_WORKFLOW_MISSING_LEAD = "Deploy planner workflow is not installed"
+
+_BUILD_FAILED_KIND = "build_failed"
+_BUILD_FAILED_LEAD = "failed to build on DigitalOcean"
+_BUILD_FAILED_HINT = (
+    "The app failed to build on DigitalOcean. This is almost always a problem "
+    "in the repo's own build (a wrong Dockerfile path, a missing dependency, "
+    "or a failing build command) rather than Ship/DO config. Open the build "
+    "logs for the failing step."
+)
+
+_HEALTH_FAILED_KIND = "health_check_failed"
+_HEALTH_FAILED_LEAD = "didn't pass DigitalOcean's health checks"
+_HEALTH_FAILED_HINT = (
+    "The container started but didn't pass DigitalOcean's health checks, so "
+    "the deploy was rolled back. Usual causes: the app isn't listening on "
+    "0.0.0.0 or on the expected port, or the health path returns an error. "
+    "Check the runtime logs."
+)
+
+# (lead substring, error_kind) — checked in order; first hit wins.
+_ERROR_KIND_MARKERS: tuple[tuple[str, str], ...] = (
+    (_ACTIONS_ACCESS_LEAD, _ACTIONS_ACCESS_KIND),
+    (_WORKFLOW_UNREGISTERED_LEAD, _WORKFLOW_UNREGISTERED_KIND),
+    (_WORKFLOW_MISSING_LEAD, _WORKFLOW_MISSING_KIND),
+    (_BUILD_FAILED_LEAD, _BUILD_FAILED_KIND),
+    (_HEALTH_FAILED_LEAD, _HEALTH_FAILED_KIND),
+)
+
+
+def _actions_access_hint(status_code: int) -> str:
+    """Ship's GitHub App lacks the Actions permission on this repo."""
+    return (
+        f"Ship's GitHub App can't access GitHub Actions on this repo "
+        f"(HTTP {status_code}), so it can't run the deploy planner workflow. "
+        "Fix: deploy with a manual LLM key (plans without GitHub Actions), or "
+        "grant Ship's GitHub App the Actions permission on this repo and retry."
+    )
+
+
+def _classify_do_failure(raw: str) -> str:
+    """Turn DigitalOcean's raw build/deploy failure text into a friendly,
+    actionable message (preserving DO's detail). Unknown shapes pass through."""
+    low = (raw or "").lower()
+    if any(m in low for m in ("health check", "health-check", "readiness", "did not become healthy", "failed to become healthy")):
+        return f"{_HEALTH_FAILED_HINT}\n\nDigitalOcean said: {raw}"
+    if "build" in low and any(m in low for m in ("fail", "error", "exit", "non-zero", "unable")):
+        return f"{_BUILD_FAILED_HINT}\n\nDigitalOcean said: {raw}"
+    return raw
+
+
+def _error_kind_for(msg: str | None) -> str | None:
+    """Derive ``error_kind`` from a stored ``error_message`` (see note above)."""
+    if not msg:
+        return None
+    if msg == _GITHUB_ACCESS_HINT:
+        return _GITHUB_ACCESS_ERROR_KIND
+    for lead, kind in _ERROR_KIND_MARKERS:
+        if lead in msg:
+            return kind
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Response schemas
 # ---------------------------------------------------------------------------
+
+
+class ApiDeployEnvOut(BaseModel):
+    key: str
+    # Non-secret config values (e.g. HOST=0.0.0.0, VITE_API_URL=$APP_URL) are
+    # shown; secret values are always masked to None — we never echo secrets.
+    value: str | None
+    secret: bool
+    required: bool
+
+
+class ApiDeployComponentOut(BaseModel):
+    """One component of the planner's DeployPlan, for the console breakdown."""
+
+    name: str
+    kind: str
+    runtime: str | None = None
+    source_dir: str | None = None
+    http_port: int | None = None
+    routes: list[str] = []
+    health_check_path: str | None = None
+    dockerfile_path: str | None = None
+    env: list[ApiDeployEnvOut] = []
 
 
 class ApiDeploymentOut(BaseModel):
@@ -142,6 +255,14 @@ class ApiDeploymentOut(BaseModel):
     created_at: str
     updated_at: str
     plan_summary: str | None
+    # Per-component breakdown from the stored DeployPlan, so the console can
+    # show what the planner decided (name · kind · source_dir · runtime + env).
+    plan_components: list[ApiDeployComponentOut] = []
+    # DigitalOcean's OWN monthly cost estimate (USD) for this deploy's spec,
+    # captured at submit via /v2/apps/propose. None if DO didn't return one or
+    # propose wasn't reached. We show DO's figure as-is (approximate), never a
+    # number we computed ourselves.
+    estimated_monthly_usd: float | None = None
 
 
 class TriggerDeployIn(BaseModel):
@@ -192,10 +313,53 @@ class DeployPlannerModelsOut(BaseModel):
     error: str | None = None
 
 
+def _plan_components_out(plan: dict | None) -> list[ApiDeployComponentOut]:
+    """Project the stored DeployPlan's components for the console, masking
+    any secret env values (we never echo secrets back to the UI)."""
+    out: list[ApiDeployComponentOut] = []
+    for c in (plan or {}).get("components", []) or []:
+        if not isinstance(c, dict):
+            continue
+        envs: list[ApiDeployEnvOut] = []
+        for e in c.get("env") or []:
+            if not isinstance(e, dict):
+                continue
+            is_secret = bool(e.get("secret"))
+            envs.append(
+                ApiDeployEnvOut(
+                    key=str(e.get("key") or ""),
+                    value=None if is_secret else (e.get("value") or None),
+                    secret=is_secret,
+                    required=bool(e.get("required")),
+                )
+            )
+        out.append(
+            ApiDeployComponentOut(
+                name=str(c.get("name") or ""),
+                kind=str(c.get("kind") or ""),
+                runtime=c.get("runtime"),
+                source_dir=c.get("source_dir"),
+                http_port=c.get("http_port"),
+                routes=[str(r) for r in (c.get("routes") or [])],
+                health_check_path=c.get("health_check_path"),
+                dockerfile_path=c.get("dockerfile_path"),
+                env=envs,
+            )
+        )
+    return out
+
+
 def _to_out(d: Deployment, *, repo_full_name: str | None = None) -> ApiDeploymentOut:
     plan_summary = None
     if d.plan:
         plan_summary = d.plan.get("summary")
+    # DO's cost estimate rides along in provider_ref (set by the adapter at
+    # submit). We expose ONLY this number, never the rest of provider_ref.
+    estimated_monthly_usd = None
+    if isinstance(d.provider_ref, dict):
+        raw_cost = d.provider_ref.get("estimated_monthly_usd")
+        if isinstance(raw_cost, (int, float)):
+            estimated_monthly_usd = float(raw_cost)
     return ApiDeploymentOut(
         id=str(d.id),
         workspace_id=str(d.workspace_id),
@@ -207,16 +371,14 @@ def _to_out(d: Deployment, *, repo_full_name: str | None = None) -> ApiDeploymen
         live_url=d.live_url,
         healthy=d.healthy,
         error_message=d.error_message,
-        error_kind=(
-            _GITHUB_ACCESS_ERROR_KIND
-            if d.error_message == _GITHUB_ACCESS_HINT
-            else None
-        ),
+        error_kind=_error_kind_for(d.error_message),
         started_at=d.started_at.isoformat() if d.started_at else None,
         finished_at=d.finished_at.isoformat() if d.finished_at else None,
         created_at=d.created_at.isoformat(),
         updated_at=d.updated_at.isoformat(),
         plan_summary=plan_summary,
+        plan_components=_plan_components_out(d.plan),
+        estimated_monthly_usd=estimated_monthly_usd,
     )
 
 
@@ -357,17 +519,25 @@ async def _refresh_deployment_status(
         dep.status = DS.FAILED
         dep.finished_at = dep.finished_at or datetime.now(timezone.utc)
         cause = (do_dep or {}).get("cause") or (do_dep or {}).get("progress") or {}
+        raw_cause: str | None = None
         if isinstance(cause, dict):
-            dep.error_message = cause.get("error_steps") or cause.get("reason")
+            raw_cause = cause.get("error_steps") or cause.get("reason")
         elif isinstance(cause, str):
-            dep.error_message = cause
+            raw_cause = cause
+        dep.error_message = (
+            _classify_do_failure(str(raw_cause)) if raw_cause else None
+        )
     elif phase == do_client.PHASE_ACTIVE:
         dep.status = DS.ACTIVE
         dep.live_url = do_client.app_live_url(app)
         dep.finished_at = dep.finished_at or datetime.now(timezone.utc)
-        # Health check
+        # Health check — grace-aware: a just-active app may not be reachable
+        # for a minute or two (DNS/TLS/cold start); don't flip to "failing"
+        # during the grace window (report pending/None instead).
         if dep.live_url:
-            dep.healthy = await probe(dep.live_url, health_check_path(dep.plan))
+            dep.healthy = await probe_with_grace(
+                dep.live_url, health_check_path(dep.plan), dep.finished_at
+            )
     else:
         dep.status = DS.DEPLOYING
 
@@ -548,13 +718,7 @@ async def trigger_deploy(
                 exc.status_code,
             )
             dep.status = DS.FAILED
-            dep.error_message = (
-                "Ship's GitHub App can't access GitHub Actions on this repo "
-                f"(HTTP {exc.status_code}), so it can't run the deploy "
-                "planner workflow. Fix: deploy with a manual LLM key (plans "
-                "without GitHub Actions), or grant Ship's GitHub App the "
-                "Actions permission on this repo and retry."
-            )
+            dep.error_message = _actions_access_hint(exc.status_code)
             dep.finished_at = datetime.now(timezone.utc)
             dep.updated_at = datetime.now(timezone.utc)
             await _event(
@@ -599,7 +763,16 @@ async def trigger_deploy(
                 )
             except WorkflowDispatchError as exc:
                 dep.status = DS.FAILED
-                dep.error_message = f"GitHub dispatch failed ({exc.status_code}): {exc.message[:256]}"
+                # A 422 on dispatch means GitHub hasn't registered the workflow
+                # yet (workflow_dispatch only works once the file has landed on
+                # the default branch) — the single most common dispatch failure.
+                if exc.status_code == 422:
+                    dep.error_message = _WORKFLOW_UNREGISTERED_HINT
+                else:
+                    dep.error_message = (
+                        f"GitHub couldn't start the deploy planner workflow "
+                        f"(HTTP {exc.status_code}): {exc.message[:256]}"
+                    )
                 dep.finished_at = datetime.now(timezone.utc)
                 dep.updated_at = datetime.now(timezone.utc)
                 await _event(
@@ -856,7 +1029,9 @@ async def get_deployment(
     elif dep.status == DS.ACTIVE and dep.live_url:
         # On-demand health re-check for a live app (health can change after
         # it first went ACTIVE; terminal rows aren't re-polled otherwise).
-        healthy = await probe(dep.live_url, health_check_path(dep.plan))
+        healthy = await probe_with_grace(
+            dep.live_url, health_check_path(dep.plan), dep.finished_at
+        )
         if healthy != dep.healthy:
             dep.healthy = healthy
             dep.updated_at = datetime.now(timezone.utc)
