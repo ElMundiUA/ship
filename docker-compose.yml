@@ -87,6 +87,13 @@ services:
       dockerfile: infra/deploy/backend/Dockerfile
     command: ["uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", "8100", "--log-level", "info"]
     restart: unless-stopped
+    # Resolve via public DNS, not the host resolver. Local/router DNS often
+    # negative-caches freshly-created *.ondigitalocean.app subdomains, which
+    # made the deploy health probe fail ("Name or service not known") on a
+    # perfectly healthy app. Public resolvers see the new subdomain immediately.
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     depends_on:
       postgres:
         condition: service_healthy
