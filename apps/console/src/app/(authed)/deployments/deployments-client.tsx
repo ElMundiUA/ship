@@ -800,7 +800,8 @@ function AppCard({
                       there'd be nothing to show — don't dead-end the user. */}
                   {(cur.error_kind == null ||
                     cur.error_kind === "build_failed" ||
-                    cur.error_kind === "health_check_failed") && (
+                    cur.error_kind === "health_check_failed" ||
+                    cur.error_kind === "git_ref_stale") && (
                     <button
                       onClick={() => setTab("logs")}
                       className="mt-1 inline-block text-[11px] text-white/40 underline underline-offset-2 transition hover:text-white"

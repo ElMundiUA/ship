@@ -173,11 +173,37 @@ _HEALTH_FAILED_HINT = (
     "Check the runtime logs."
 )
 
+# DigitalOcean's GitHub integration caches a branch's tip commit and does NOT
+# re-resolve it on a Ship-triggered redeploy. A force-push / amend rewrites the
+# branch, leaving DO's cache pointing at a rewritten commit that the builder's
+# shallow clone can't find ("error checking out commit: object not found").
+# A plain Redeploy is useless here (DO keeps the stale tip); only a fresh push
+# event refreshes DO. So we tell the user exactly that — push, don't retry.
+_GIT_REF_STALE_KIND = "git_ref_stale"
+_GIT_REF_STALE_LEAD = "couldn't find the commit to deploy"
+_GIT_REF_STALE_HINT = (
+    "DigitalOcean couldn't find the commit to deploy — its GitHub integration "
+    "is stuck on a commit that was rewritten (a force-push / amend on the "
+    "branch). A plain Redeploy won't fix this (DigitalOcean keeps the stale "
+    "commit). Push a NEW commit to the branch with a normal push (not "
+    "--force), then redeploy — that refreshes DigitalOcean. Tip: avoid "
+    "force-pushing the deploy branch."
+)
+# Build-log markers that mean DO tried a commit it can't check out.
+_GIT_REF_STALE_MARKERS = (
+    "error checking out commit",
+    "object not found",
+    "couldn't find remote ref",
+    "reference is not a tree",
+    "failed to checkout",
+)
+
 # (lead substring, error_kind) — checked in order; first hit wins.
 _ERROR_KIND_MARKERS: tuple[tuple[str, str], ...] = (
     (_ACTIONS_ACCESS_LEAD, _ACTIONS_ACCESS_KIND),
     (_WORKFLOW_UNREGISTERED_LEAD, _WORKFLOW_UNREGISTERED_KIND),
     (_WORKFLOW_MISSING_LEAD, _WORKFLOW_MISSING_KIND),
+    (_GIT_REF_STALE_LEAD, _GIT_REF_STALE_KIND),
     (_BUILD_FAILED_LEAD, _BUILD_FAILED_KIND),
     (_HEALTH_FAILED_LEAD, _HEALTH_FAILED_KIND),
 )
@@ -202,6 +228,54 @@ def _classify_do_failure(raw: str) -> str:
     if "build" in low and any(m in low for m in ("fail", "error", "exit", "non-zero", "unable")):
         return f"{_BUILD_FAILED_HINT}\n\nDigitalOcean said: {raw}"
     return raw
+
+
+def _structured_failure_reason(do_dep: dict | None) -> str | None:
+    """Best human reason from a DO deployment's progress steps (e.g.
+    'BuildJobExitNonZero: ...'), falling back to the trigger ``cause``. The
+    structured steps are far more useful than ``cause`` ('app spec updated')."""
+    msgs: list[str] = []
+
+    def walk(steps: Any) -> None:
+        for st in steps or []:
+            r = st.get("reason") if isinstance(st, dict) else None
+            if isinstance(r, dict) and (r.get("message") or r.get("code")):
+                msgs.append(
+                    f"{r.get('code', '')}: {r.get('message', '')}".strip(": ").strip()
+                )
+            if isinstance(st, dict):
+                walk(st.get("steps"))
+
+    walk(((do_dep or {}).get("progress") or {}).get("steps"))
+    if msgs:
+        return " | ".join(dict.fromkeys(msgs))  # dedupe, preserve order
+    cause = (do_dep or {}).get("cause")
+    return cause if isinstance(cause, str) else None
+
+
+async def _do_failure_message(
+    do_dep: dict | None,
+    *,
+    app_id: str | None,
+    dep_id: str | None,
+    token: str,
+) -> str | None:
+    """Friendly message for a FAILED DO deployment. Scans the build log for a
+    stale-commit checkout failure (force-push) first — that needs the log, the
+    structured fields only say a generic 'build job failed'. Otherwise uses the
+    best structured reason, friendly-classified."""
+    if app_id and dep_id:
+        try:
+            text, _ = await fetch_deploy_logs(
+                app_id, dep_id, log_type="BUILD", token=token
+            )
+            low = (text or "").lower()
+            if any(m in low for m in _GIT_REF_STALE_MARKERS):
+                return _GIT_REF_STALE_HINT
+        except Exception as exc:  # noqa: BLE001 — log scan is best-effort
+            logger.info("failure log scan failed for %s: %s", dep_id, exc)
+    raw = _structured_failure_reason(do_dep)
+    return _classify_do_failure(str(raw)) if raw else None
 
 
 def _error_kind_for(msg: str | None) -> str | None:
@@ -731,14 +805,8 @@ async def _refresh_deployment_status(
     if do_client.is_failed(phase):
         dep.status = DS.FAILED
         dep.finished_at = dep.finished_at or datetime.now(timezone.utc)
-        cause = (do_dep or {}).get("cause") or (do_dep or {}).get("progress") or {}
-        raw_cause: str | None = None
-        if isinstance(cause, dict):
-            raw_cause = cause.get("error_steps") or cause.get("reason")
-        elif isinstance(cause, str):
-            raw_cause = cause
-        dep.error_message = (
-            _classify_do_failure(str(raw_cause)) if raw_cause else None
+        dep.error_message = await _do_failure_message(
+            do_dep, app_id=app_id, dep_id=dep_id, token=token
         )
     elif phase == do_client.PHASE_ACTIVE:
         dep.status = DS.ACTIVE
