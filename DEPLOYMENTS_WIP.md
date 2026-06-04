@@ -73,8 +73,28 @@ checkout, surface `git_ref_stale` ("push a NEW commit, not --force, then
 redeploy"). Also replaced the useless `app spec updated` error with DO's
 structured progress reason. Verified against the real stuck deployment.
 **Lesson for the deploy branch: don't force-push it** (corrupts DO's cached ref
-+ breaks shallow clones). Native rollback test still PENDING (the break never
-reached Active — it died at checkout; redo with a normal push).
++ breaks shallow clones).
+
+### Deeper root cause + fix (2026-06-04) — VALIDATED LIVE
+The stale commit wasn't just force-push: **`update_app` (PUT /v2/apps/{id}) does
+NOT re-pull source** — DO reuses its cached branch tip, so Ship-triggered
+redeploys kept building the dead commit (confirmed by DO community thread
+"app-checking-out-wrong-commit-during-build"). Fix `a582809b`: on redeploy of an
+existing app, after the PUT we call `create_deployment(force_build=true)`
+(`POST /v2/apps/{id}/deployments`) which DO documents as pulling the latest
+commit. **Validated live:** after the fix DO built the real HEAD `d3bf8d70`
+(was stuck on `8439544c` across 3 redeploys), went Active.
+
+### Rollback test — PASSED (2026-06-04)
+Native DO rollback completes, serves the correct prior artifact, and the
+rolled-back app renders + its healthcheck button hits the backend (`{"ok":true}`).
+A force-push does NOT block rollback (rollback restores DO's stored build
+artifact, not a git fetch). Note: a brief blank/white screen during a rollback
+is DO swapping the live deployment — a tab loaded in that window shows white
+until refresh (DO behavior, not a Ship bug). The port-change "break" was inert
+(planner injects `VITE_BACKEND_BASE=$APP_URL/api`, overriding the localhost
+fallback — the planner doing its job), so the broken→fixed narrative wasn't
+exercised; rollback machinery itself is proven.
 
 **Autonomous run COMPLETE — all 5 solo items done (steps 1-5).** 14 local commits
 ahead of `origin/vv-deployments`, push still HELD (vvlad git re-auth needed:
