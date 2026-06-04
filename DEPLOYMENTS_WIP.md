@@ -63,6 +63,19 @@ WIP) + `37002f6c` (remove test fixtures → standalone repos).
   `instance_price_map` + adapter `_estimate_spec_cost`; used when
   `propose_monthly_cost` is None. Still DO's own published prices.
 
+### Live dogfood fix (2026-06-04) — stale-commit deploy failures
+Found during the rollback test: vvlad force-pushed `monorepo-janky`; DO's GitHub
+integration cached the old branch tip and kept trying a rewritten commit
+(`error checking out commit: object not found`) across redeploys — a plain
+Redeploy is USELESS (DO holds the stale tip; only a fresh push refreshes it).
+Fix `04d466e6`: on a failed deploy, scan the BUILD log → if it's a stale-commit
+checkout, surface `git_ref_stale` ("push a NEW commit, not --force, then
+redeploy"). Also replaced the useless `app spec updated` error with DO's
+structured progress reason. Verified against the real stuck deployment.
+**Lesson for the deploy branch: don't force-push it** (corrupts DO's cached ref
++ breaks shallow clones). Native rollback test still PENDING (the break never
+reached Active — it died at checkout; redo with a normal push).
+
 **Autonomous run COMPLETE — all 5 solo items done (steps 1-5).** 14 local commits
 ahead of `origin/vv-deployments`, push still HELD (vvlad git re-auth needed:
 `WonnaBeCodeFather` 403s `ElMundiUA/ship`). All tsc clean, backend rebuilt +
