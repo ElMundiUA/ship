@@ -229,7 +229,13 @@ from backend.app.services.tracker_fsm import (
 #         dispatch input for ELS-155 dev-dispatch prompt injection.
 # ``0.39`` → Adds ``ship-deploy-plan.yml`` so deployment planning runs
 #         inside GitHub Actions and reuses repo-level LLM secrets.
-BUNDLE_VERSION: str = "0.39"
+# ``0.40`` → ``ship-deploy-plan.yml`` planner brought to PARITY with the backend
+#         planner (services/deploy/planner.py): byte-identical system prompt,
+#         full file-tree + manifest-layout context, directory-diverse key-file
+#         collection, max_tokens 8192, and a deterministic verify-guard +
+#         corrective retry. Re-seed repos so the Actions path plans as well as
+#         the manual-key path.
+BUNDLE_VERSION: str = "0.40"
 
 # First bundle whose ``ship-agent-run.yml`` declares the ``ship_run_id``
 # ``workflow_dispatch`` input. The E16 cron dispatcher must NOT send this
