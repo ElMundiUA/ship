@@ -1,6 +1,6 @@
 /**
  * Trigger a deployment of a repo.
- * POST /api/deploy   body: { workspaceId, repoId, llmProvider?, llmModel?, llmApiKey? }
+ * POST /api/deploy   body: { workspaceId, repoId, llmProvider?, llmModel?, llmApiKey?, env? }
  */
 
 import { NextResponse } from "next/server";
@@ -22,6 +22,7 @@ export async function POST(request: Request) {
     llmProvider?: string;
     llmModel?: string;
     llmApiKey?: string;
+    env?: { key: string; value: string; secret: boolean }[];
   };
   try {
     body = (await request.json()) as {
@@ -30,6 +31,7 @@ export async function POST(request: Request) {
       llmProvider?: string;
       llmModel?: string;
       llmApiKey?: string;
+      env?: { key: string; value: string; secret: boolean }[];
     };
   } catch {
     return NextResponse.json({ detail: "invalid_json" }, { status: 400 });
@@ -50,7 +52,13 @@ export async function POST(request: Request) {
             apiKey: body.llmApiKey,
           }
         : null;
-    const data = await triggerDeploy(body.workspaceId, body.repoId, llm, token);
+    const data = await triggerDeploy(
+      body.workspaceId,
+      body.repoId,
+      llm,
+      body.env ?? [],
+      token,
+    );
     return NextResponse.json(data, { status: 202 });
   } catch (err) {
     if (err instanceof ApiHttpError) {

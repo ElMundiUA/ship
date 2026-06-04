@@ -1,6 +1,6 @@
 /**
  * Roll back to / re-deploy a previous version by reusing its stored plan.
- * POST /api/deploy/redeploy   body: { workspaceId, deploymentId }
+ * POST /api/deploy/redeploy   body: { workspaceId, deploymentId, env? }
  *
  * Static route (same rationale as /api/deployment): the ids go in the body so
  * this wins over the catch-all rewrite.
@@ -19,11 +19,16 @@ export async function POST(request: Request) {
   if (!isApiConfigured()) {
     return NextResponse.json({ detail: "api_unavailable" }, { status: 503 });
   }
-  let body: { workspaceId?: string; deploymentId?: string };
+  let body: {
+    workspaceId?: string;
+    deploymentId?: string;
+    env?: { key: string; value: string; secret: boolean }[];
+  };
   try {
     body = (await request.json()) as {
       workspaceId?: string;
       deploymentId?: string;
+      env?: { key: string; value: string; secret: boolean }[];
     };
   } catch {
     return NextResponse.json({ detail: "invalid_json" }, { status: 400 });
@@ -36,7 +41,12 @@ export async function POST(request: Request) {
   }
   try {
     const token = (await getSessionToken()) ?? undefined;
-    const data = await redeployVersion(body.workspaceId, body.deploymentId, token);
+    const data = await redeployVersion(
+      body.workspaceId,
+      body.deploymentId,
+      body.env ?? [],
+      token,
+    );
     return NextResponse.json(data, { status: 202 });
   } catch (err) {
     if (err instanceof ApiHttpError) {

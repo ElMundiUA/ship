@@ -97,22 +97,56 @@ def _render_env_value(raw: str) -> str:
     return raw.replace("$APP_URL", "${APP_URL}")
 
 
-def _build_envs(env_specs: list) -> list[dict[str, str]]:
+def _operator_env_map(operator_env: list[dict[str, Any]] | None) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    for raw in operator_env or []:
+        key = str(raw.get("key") or "").strip()
+        if not key:
+            continue
+        value = str(raw.get("value") or "")
+        prefix = f"{key}="
+        if value.strip().startswith(prefix):
+            value = value.strip()[len(prefix) :].strip()
+        out[key] = {
+            "key": key,
+            "value": value,
+            "secret": bool(raw.get("secret")),
+        }
+    return out
+
+
+def _env_entry(key: str, value: str, *, secret: bool) -> dict[str, str]:
+    return {
+        "key": key,
+        "scope": "RUN_AND_BUILD_TIME",
+        "type": "SECRET" if secret else "GENERAL",
+        "value": _render_env_value(value),
+    }
+
+
+def _build_envs(env_specs: list, operator: dict[str, dict[str, Any]]) -> list[dict[str, str]]:
     out = []
     for ev in env_specs or []:
+        op = operator.get(ev.key)
+        if op is not None:
+            if (bool(op.get("secret")) or bool(ev.secret)) and not op.get("value"):
+                continue
+            out.append(
+                _env_entry(
+                    ev.key,
+                    str(op.get("value") or ""),
+                    secret=bool(op.get("secret")) or bool(ev.secret),
+                )
+            )
+            continue
         # Secrets never carry a value here (the operator supplies them via
         # the Ship secret store / DO dashboard). Non-secret config can carry
         # a planner-inferred value — notably HOST=0.0.0.0 so the container
         # binds to all interfaces, and $APP_URL so a frontend reaches the
         # backend on the same domain.
-        value = "" if ev.secret else _render_env_value(getattr(ev, "value", None) or "")
-        entry: dict[str, str] = {
-            "key": ev.key,
-            "scope": "RUN_AND_BUILD_TIME",
-            "type": "SECRET" if ev.secret else "GENERAL",
-            "value": value,
-        }
-        out.append(entry)
+        if ev.secret:
+            continue
+        out.append(_env_entry(ev.key, getattr(ev, "value", None) or "", secret=False))
     return out
 
 
@@ -151,6 +185,7 @@ def _build_service(
     *,
     source_key: str,
     source_dict: dict[str, Any],
+    operator: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
     slug = _RUNTIME_SLUG.get(comp.runtime, comp.runtime)
     svc: dict[str, Any] = {
@@ -177,7 +212,7 @@ def _build_service(
     hc = _build_health_check(comp)
     if hc:
         svc["health_check"] = hc
-    envs = _build_envs(comp.env)
+    envs = _build_envs(comp.env, operator)
     if envs:
         svc["envs"] = envs
     return svc
@@ -188,6 +223,7 @@ def _build_static_site(
     *,
     source_key: str,
     source_dict: dict[str, Any],
+    operator: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
     site: dict[str, Any] = {
         "name": comp.name,
@@ -200,7 +236,7 @@ def _build_static_site(
         site["output_dir"] = comp.output_dir
     routes = comp.routes or ["/"]
     site["routes"] = [{"path": r} for r in routes]
-    envs = _build_envs(comp.env)
+    envs = _build_envs(comp.env, operator)
     if envs:
         site["envs"] = envs
     return site
@@ -211,6 +247,7 @@ def _build_worker(
     *,
     source_key: str,
     source_dict: dict[str, Any],
+    operator: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
     slug = _RUNTIME_SLUG.get(comp.runtime, comp.runtime)
     worker: dict[str, Any] = {
@@ -230,7 +267,7 @@ def _build_worker(
         worker["build_command"] = comp.build_command
     if comp.run_command:
         worker["run_command"] = comp.run_command
-    envs = _build_envs(comp.env)
+    envs = _build_envs(comp.env, operator)
     if envs:
         worker["envs"] = envs
     return worker
@@ -263,8 +300,10 @@ def build_app_spec(
     branch: str,
     private: bool,
     region: str = "nyc",
+    operator_env: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Deterministically translate a :class:`DeployPlan` into a DO app spec."""
+    operator = _operator_env_map(operator_env)
     source_key, source_dict = _build_source(
         repo_clone_url=repo_clone_url,
         branch=branch,
@@ -276,13 +315,36 @@ def build_app_spec(
         "region": region,
     }
     services, static_sites, workers, jobs = [], [], [], []
+    declared_keys: set[str] = set()
     for comp in plan.components:
+        declared_keys.update(ev.key for ev in (comp.env or []))
         if comp.kind == "service":
-            services.append(_build_service(comp, source_key=source_key, source_dict=source_dict))
+            services.append(
+                _build_service(
+                    comp,
+                    source_key=source_key,
+                    source_dict=source_dict,
+                    operator=operator,
+                )
+            )
         elif comp.kind == "static_site":
-            static_sites.append(_build_static_site(comp, source_key=source_key, source_dict=source_dict))
+            static_sites.append(
+                _build_static_site(
+                    comp,
+                    source_key=source_key,
+                    source_dict=source_dict,
+                    operator=operator,
+                )
+            )
         elif comp.kind == "worker":
-            workers.append(_build_worker(comp, source_key=source_key, source_dict=source_dict))
+            workers.append(
+                _build_worker(
+                    comp,
+                    source_key=source_key,
+                    source_dict=source_dict,
+                    operator=operator,
+                )
+            )
         # "job" components — skip for now (no standard App Platform job trigger)
 
     if services:
@@ -291,7 +353,111 @@ def build_app_spec(
         spec["static_sites"] = static_sites
     if workers:
         spec["workers"] = workers
+    app_envs = [
+        _env_entry(key, str(op.get("value") or ""), secret=bool(op.get("secret")))
+        for key, op in operator.items()
+        if key not in declared_keys
+        and (not bool(op.get("secret")) or bool(op.get("value")))
+    ]
+    if app_envs:
+        spec["envs"] = app_envs
     return spec
+
+
+def _env_key(entry: dict[str, Any]) -> str:
+    return str(entry.get("key") or "")
+
+
+def _merge_env_list(
+    desired: list[dict[str, Any]] | None,
+    current: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    desired_out = [dict(e) for e in (desired or []) if _env_key(e)]
+    by_key = {_env_key(e): e for e in desired_out}
+    for cur in current or []:
+        key = _env_key(cur)
+        if not key:
+            continue
+        cur_type = str(cur.get("type") or "").upper()
+        encrypted = isinstance(cur.get("value"), str) and cur["value"].startswith("EV[")
+        if cur_type != "SECRET" and key in by_key:
+            continue
+        if key in by_key:
+            fresh = by_key[key]
+            fresh_value = fresh.get("value")
+            if fresh_value:
+                continue
+            if encrypted:
+                fresh["value"] = cur["value"]
+            continue
+        if cur_type == "SECRET" and encrypted:
+            desired_out.append(dict(cur))
+        elif cur_type == "GENERAL":
+            desired_out.append(dict(cur))
+    return desired_out
+
+
+def _component_bucket(spec: dict[str, Any], key: str) -> dict[str, dict[str, Any]]:
+    return {
+        str(comp.get("name")): comp
+        for comp in (spec.get(key) or [])
+        if isinstance(comp, dict) and comp.get("name")
+    }
+
+
+def merge_current_envs(spec: dict[str, Any], current_spec: dict[str, Any]) -> dict[str, Any]:
+    """Preserve existing DO encrypted secrets on update.
+
+    DigitalOcean secrets are write-only. On PUT, unchanged secrets must be sent
+    back as their EV[1:...] ciphertext; omitting or sending an empty value wipes
+    them.
+    """
+    merged = dict(spec)
+    app_envs = _merge_env_list(merged.get("envs"), current_spec.get("envs"))
+    if app_envs:
+        merged["envs"] = app_envs
+    for bucket in ("services", "static_sites", "workers", "jobs"):
+        current_by_name = _component_bucket(current_spec, bucket)
+        out_components = []
+        for comp in merged.get(bucket) or []:
+            if not isinstance(comp, dict):
+                out_components.append(comp)
+                continue
+            cur = current_by_name.get(str(comp.get("name")))
+            if cur:
+                comp = dict(comp)
+                envs = _merge_env_list(comp.get("envs"), cur.get("envs"))
+                if envs:
+                    comp["envs"] = envs
+            out_components.append(comp)
+        if out_components:
+            merged[bucket] = out_components
+    return merged
+
+
+def spec_env_settings(spec: dict[str, Any]) -> list[dict[str, Any]]:
+    by_key: dict[str, dict[str, Any]] = {}
+
+    def add_many(envs: list[dict[str, Any]] | None) -> None:
+        for env in envs or []:
+            key = _env_key(env)
+            if not key:
+                continue
+            secret = str(env.get("type") or "").upper() == "SECRET"
+            value = env.get("value")
+            by_key[key] = {
+                "key": key,
+                "value": None if secret else (value if isinstance(value, str) else None),
+                "secret": secret,
+                "set": bool(value),
+            }
+
+    add_many(spec.get("envs"))
+    for bucket in ("services", "static_sites", "workers", "jobs"):
+        for comp in spec.get(bucket) or []:
+            if isinstance(comp, dict):
+                add_many(comp.get("envs"))
+    return list(by_key.values())
 
 
 class DigitalOceanAppPlatform:
@@ -319,6 +485,7 @@ class DigitalOceanAppPlatform:
         repo_clone_url: str,
         branch: str,
         existing_app_id: str | None = None,
+        operator_env: list[dict[str, Any]] | None = None,
     ) -> ProviderRef:
         spec = build_app_spec(
             plan,
@@ -327,6 +494,7 @@ class DigitalOceanAppPlatform:
             branch=branch,
             private=self._private,
             region=self._region,
+            operator_env=operator_env,
         )
         # Ask DO for ITS OWN monthly cost estimate for this exact spec before we
         # create/update. Best-effort: a propose failure must never block the
@@ -357,6 +525,10 @@ class DigitalOceanAppPlatform:
             # applying the spec we explicitly create_deployment(force_build) to
             # force a fresh source fetch of the branch's real HEAD.
             logger.info("Updating DO app %s ('%s')", existing_app_id, plan.app_name)
+            current_app = await do.get_app(
+                existing_app_id, token=self._token, client=self._client
+            )
+            spec = merge_current_envs(spec, current_app.get("spec") or {})
             app = await do.update_app(
                 existing_app_id, spec, token=self._token, client=self._client
             )
@@ -380,6 +552,9 @@ class DigitalOceanAppPlatform:
             dep_id = dep["id"] if dep else None
         logger.info("DO app %s, deployment %s", app_id, dep_id)
         extra: dict[str, Any] = {"spec_name": plan.app_name, "region": self._region}
+        env_settings = spec_env_settings(spec)
+        if env_settings:
+            extra["operator_env"] = env_settings
         if estimated_monthly_usd is not None:
             extra["estimated_monthly_usd"] = estimated_monthly_usd
         return ProviderRef(

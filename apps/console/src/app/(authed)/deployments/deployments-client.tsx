@@ -20,6 +20,7 @@ import type {
   ApiActivatedRepo,
   ApiDeployComponent,
   ApiDeployment,
+  ApiDeploymentEnvInput,
   ApiDeploymentStatus,
   ApiDeployProvider,
   DeployLogType,
@@ -43,14 +44,136 @@ const ALL_PLANNER_PROVIDERS = ["gemini", "openai", "anthropic", "mistral"];
 // New-deployment wizard steps, in order. Each gate must pass before the
 // stepper lets the operator advance, so they can't (e.g.) try to authorize
 // GitHub before DigitalOcean is connected.
-const DEPLOY_STEPS = ["repo", "digitalocean", "planner", "deploy"] as const;
+const DEPLOY_STEPS = ["repo", "digitalocean", "env", "planner", "deploy"] as const;
 type DeployStep = (typeof DEPLOY_STEPS)[number];
 const DEPLOY_STEP_LABELS: Record<DeployStep, string> = {
   repo: "Repository",
   digitalocean: "Connect DigitalOcean",
+  env: "Environment",
   planner: "Deploy planner",
   deploy: "Deploy",
 };
+const SECRET_SET_PLACEHOLDER = "•••set";
+
+type EnvDraft = {
+  id: string;
+  key: string;
+  value: string;
+  secret: boolean;
+};
+
+function newEnvRow(seed?: Partial<EnvDraft>): EnvDraft {
+  return {
+    id:
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random()}`,
+    key: "",
+    value: "",
+    secret: false,
+    ...seed,
+  };
+}
+
+function cleanEnvRows(rows: EnvDraft[]): ApiDeploymentEnvInput[] {
+  return rows
+    .map((r) => ({
+      key: r.key.trim(),
+      value:
+        r.secret && r.value === SECRET_SET_PLACEHOLDER
+          ? ""
+          : normalizeEnvValue(r.key, r.value),
+      secret: r.secret,
+    }))
+    .filter((r) => r.key.length > 0);
+}
+
+function normalizeEnvValue(key: string, value: string): string {
+  const trimmedKey = key.trim();
+  const prefix = `${trimmedKey}=`;
+  const raw = value.trim();
+  if (trimmedKey && raw.startsWith(prefix)) return raw.slice(prefix.length).trim();
+  return value;
+}
+
+function looksSecretKey(key: string): boolean {
+  return /(?:SECRET|TOKEN|PASSWORD|PASS|PRIVATE|API_KEY|ACCESS_KEY|DATABASE_URL|DB_URL|DSN)/i.test(
+    key,
+  );
+}
+
+function parseDotEnv(input: string): EnvDraft[] {
+  return input
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith("#"))
+    .map((line) => {
+      const raw = line.startsWith("export ") ? line.slice(7).trim() : line;
+      const idx = raw.indexOf("=");
+      if (idx <= 0) return null;
+      const key = raw.slice(0, idx).trim();
+      let value = raw.slice(idx + 1).trim();
+      if (
+        (value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'"))
+      ) {
+        value = value.slice(1, -1);
+      }
+      return newEnvRow({ key, value, secret: looksSecretKey(key) });
+    })
+    .filter((row): row is EnvDraft => row !== null);
+}
+
+function localEnvWarnings(rows: EnvDraft[]): string[] {
+  const localPattern = /\b(localhost|127\.0\.0\.1|\[::1\]|::1)\b/i;
+  return rows
+    .filter((row) => row.key.trim() && localPattern.test(row.value))
+    .map((row) => `${row.key.trim()} points at a local address`);
+}
+
+function envValueShapeWarnings(rows: EnvDraft[]): string[] {
+  return rows
+    .filter((row) => {
+      const key = row.key.trim();
+      return key && row.value.trim().startsWith(`${key}=`);
+    })
+    .map((row) => `${row.key.trim()} value includes "${row.key.trim()}="`);
+}
+
+function deploymentEnvRowsFrom(
+  operatorEnv: ApiDeployment["operator_env"],
+  planComponents: ApiDeployment["plan_components"],
+): EnvDraft[] {
+  const rows = new Map<string, EnvDraft>();
+  for (const e of operatorEnv ?? []) {
+    rows.set(
+      e.key,
+      newEnvRow({
+        key: e.key,
+        value: e.secret && e.set ? SECRET_SET_PLACEHOLDER : (e.value ?? ""),
+        secret: e.secret,
+      }),
+    );
+  }
+  for (const c of planComponents ?? []) {
+    for (const e of c.env ?? []) {
+      if (rows.has(e.key)) continue;
+      rows.set(
+        e.key,
+        newEnvRow({
+          key: e.key,
+          value: e.secret ? "" : (e.value ?? ""),
+          secret: e.secret,
+        }),
+      );
+    }
+  }
+  return rows.size ? Array.from(rows.values()) : [newEnvRow()];
+}
+
+function deploymentEnvRows(dep: ApiDeployment): EnvDraft[] {
+  return deploymentEnvRowsFrom(dep.operator_env, dep.plan_components);
+}
 
 // DigitalOcean's "connect GitHub" entry point. Sends the operator to DO,
 // which bounces to GitHub's app-authorization screen where they pick which
@@ -265,6 +388,9 @@ export default function DeploymentsClient({ workspaceId }: { workspaceId: string
   const [modalOpen, setModalOpen] = useState(false);
   const [modalRepoId, setModalRepoId] = useState<string | null>(null);
   const [modalInitialStep, setModalInitialStep] = useState(0);
+  const [modalInitialEnvRows, setModalInitialEnvRows] = useState<EnvDraft[] | null>(
+    null,
+  );
   // Set when we land back from the DigitalOcean OAuth connect (returnPath
   // deep-link); the wizard reopens at the DO step once data has loaded.
   const [pendingConnectRepo, setPendingConnectRepo] = useState<string | null>(null);
@@ -366,23 +492,28 @@ export default function DeploymentsClient({ workspaceId }: { workspaceId: string
     if (!pendingConnectRepo || loading) return;
     setModalRepoId(pendingConnectRepo);
     setModalInitialStep(DEPLOY_STEPS.indexOf("digitalocean"));
+    setModalInitialEnvRows(null);
     setModalOpen(true);
     setPendingConnectRepo(null);
   }, [pendingConnectRepo, loading]);
 
-  const handleRedeploy = (repoId: string) => {
+  const handleRedeploy = (repoId: string, current?: ApiDeployment) => {
     setModalRepoId(repoId);
     setModalInitialStep(0);
+    setModalInitialEnvRows(current ? deploymentEnvRows(current) : null);
     setModalOpen(true);
   };
 
   // Roll back / re-deploy a specific previous version, reusing its stored plan
   // (no re-planning). The new deployment streams in like any other.
-  const handleRedeployVersion = async (deploymentId: string): Promise<boolean> => {
+  const handleRedeployVersion = async (
+    deploymentId: string,
+    env?: ApiDeploymentEnvInput[],
+  ): Promise<boolean> => {
     const res = await fetch(`/api/deploy/redeploy`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ workspaceId, deploymentId }),
+      body: JSON.stringify({ workspaceId, deploymentId, env }),
     });
     if (!res.ok) return false;
     const dep: ApiDeployment = await res.json();
@@ -448,6 +579,7 @@ export default function DeploymentsClient({ workspaceId }: { workspaceId: string
           onClick={() => {
             setModalRepoId(null);
             setModalInitialStep(0);
+            setModalInitialEnvRows(null);
             setModalOpen(true);
           }}
           className="rounded-full bg-blue-600 px-4 py-1.5 text-xs font-semibold text-white transition hover:bg-blue-500"
@@ -474,7 +606,7 @@ export default function DeploymentsClient({ workspaceId }: { workspaceId: string
               group={g}
               expanded={expanded.has(g.key)}
               onToggle={() => toggle(g.key)}
-              onRedeploy={() => handleRedeploy(g.repoId)}
+              onRedeploy={() => handleRedeploy(g.repoId, g.current)}
               onRedeployVersion={handleRedeployVersion}
               onRollbackVersion={handleRollbackVersion}
               onRecheck={() => handleRecheck(g.current.id)}
@@ -491,10 +623,12 @@ export default function DeploymentsClient({ workspaceId }: { workspaceId: string
           providers={providers}
           initialRepoId={modalRepoId}
           initialStep={modalInitialStep}
+          initialEnvRows={modalInitialEnvRows}
           onClose={() => setModalOpen(false)}
           onDeployed={(dep) => {
             setDeployments((prev) => [dep, ...prev]);
             setModalRepoId(null);
+            setModalInitialEnvRows(null);
             setModalOpen(false);
           }}
           onProvidersChanged={setProviders}
@@ -522,7 +656,10 @@ function AppCard({
   expanded: boolean;
   onToggle: () => void;
   onRedeploy: () => void;
-  onRedeployVersion: (deploymentId: string) => Promise<boolean>;
+  onRedeployVersion: (
+    deploymentId: string,
+    env?: ApiDeploymentEnvInput[],
+  ) => Promise<boolean>;
   onRollbackVersion: (deploymentId: string) => Promise<boolean>;
   onRecheck: () => void;
   onDelete: () => Promise<boolean>;
@@ -535,6 +672,11 @@ function AppCard({
   const [redeployingId, setRedeployingId] = useState<string | null>(null);
   const [rollingBackId, setRollingBackId] = useState<string | null>(null);
   const [versionError, setVersionError] = useState<string | null>(null);
+  const [envRows, setEnvRows] = useState<EnvDraft[]>(() =>
+    deploymentEnvRows(group.current),
+  );
+  const [envSaving, setEnvSaving] = useState(false);
+  const [envError, setEnvError] = useState<string | null>(null);
   // Which prior version's "what changed vs current" diff is expanded.
   const [diffVersionId, setDiffVersionId] = useState<string | null>(null);
   // Which version the Logs tab is showing (null = current). Lets you read a
@@ -542,6 +684,10 @@ function AppCard({
   const [logsDeploymentId, setLogsDeploymentId] = useState<string | null>(null);
   const cur = group.current;
   const inFlight = !isTerminal(cur.status);
+
+  useEffect(() => {
+    setEnvRows(deploymentEnvRowsFrom(cur.operator_env, cur.plan_components));
+  }, [cur.id, cur.operator_env, cur.plan_components]);
 
   // Emulate polling for the brief post-deploy settle window only: when a
   // deployment just went active but health hasn't turned green yet (DNS/TLS/
@@ -585,6 +731,17 @@ function AppCard({
       onRedeploy();
     } finally {
       setBusy(false);
+    }
+  };
+
+  const saveEnv = async () => {
+    setEnvSaving(true);
+    setEnvError(null);
+    try {
+      const ok = await onRedeployVersion(cur.id, cleanEnvRows(envRows));
+      if (!ok) setEnvError("Couldn’t save env — try again.");
+    } finally {
+      setEnvSaving(false);
     }
   };
 
@@ -1060,10 +1217,29 @@ function AppCard({
 
           {tab === "settings" && (
             <div className="space-y-4">
-              <p className="text-xs text-white/40">
-                Environment variables &amp; domains will live here (secrets gate
-                is on the roadmap).
-              </p>
+              <div className="rounded-lg border border-white/10 bg-white/[0.03] p-3">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <div>
+                    <div className="text-xs font-semibold text-white/80">
+                      Environment
+                    </div>
+                    <p className="mt-0.5 text-[11px] text-white/45">
+                      Saving rebuilds the current plan on the same DigitalOcean app.
+                    </p>
+                  </div>
+                  <button
+                    onClick={saveEnv}
+                    disabled={envSaving || cur.status === "deleted"}
+                    className="rounded-md bg-blue-600 px-3 py-1 text-[11px] font-semibold text-white transition hover:bg-blue-500 disabled:opacity-50"
+                  >
+                    {envSaving ? "Saving…" : "Save & rebuild"}
+                  </button>
+                </div>
+                <EnvEditor rows={envRows} onChange={setEnvRows} />
+                {envError && (
+                  <p className="mt-2 text-[11px] text-red-400">{envError}</p>
+                )}
+              </div>
               {cur.status === "deleted" ? (
                 <div className="rounded-lg border border-white/10 bg-white/[0.02] p-3">
                   <div className="text-xs font-semibold text-white/70">
@@ -1129,6 +1305,146 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
     <div className="flex gap-3">
       <dt className="w-16 flex-shrink-0 text-white/35">{label}</dt>
       <dd className="min-w-0 flex-1 break-words text-white/80">{children}</dd>
+    </div>
+  );
+}
+
+function EnvEditor({
+  rows,
+  onChange,
+}: {
+  rows: EnvDraft[];
+  onChange: (rows: EnvDraft[]) => void;
+}) {
+  const [pasteOpen, setPasteOpen] = useState(false);
+  const [pasteText, setPasteText] = useState("");
+  const warnings = localEnvWarnings(rows);
+  const shapeWarnings = envValueShapeWarnings(rows);
+  const patchRow = (id: string, patch: Partial<EnvDraft>) =>
+    onChange(rows.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+  const importPaste = () => {
+    const parsed = parseDotEnv(pasteText);
+    if (parsed.length === 0) return;
+    const existing = rows.filter((r) => r.key.trim());
+    onChange([...existing, ...parsed]);
+    setPasteText("");
+    setPasteOpen(false);
+  };
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-[11px] text-white/40">
+          Manual values override planner defaults.
+        </p>
+        <button
+          type="button"
+          onClick={() => setPasteOpen((v) => !v)}
+          className="rounded-md border border-white/15 px-2 py-1 text-[11px] font-semibold text-white/65 transition hover:bg-white/[0.06]"
+        >
+          Paste .env
+        </button>
+      </div>
+      {pasteOpen && (
+        <div className="rounded-md border border-white/10 bg-black/20 p-2">
+          <textarea
+            value={pasteText}
+            onChange={(e) => setPasteText(e.target.value)}
+            placeholder={"DATABASE_URL=...\nVITE_API_URL=https://api.example.com"}
+            spellCheck={false}
+            className="min-h-24 w-full resize-y rounded-md border border-white/10 bg-white/[0.04] px-2 py-1.5 font-mono text-xs text-white placeholder:text-white/25 focus:border-blue-500 focus:outline-none"
+          />
+          <div className="mt-2 flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setPasteOpen(false);
+                setPasteText("");
+              }}
+              className="rounded-md px-2 py-1 text-[11px] font-semibold text-white/45 hover:text-white"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={importPaste}
+              disabled={!pasteText.trim()}
+              className="rounded-md bg-blue-600 px-2.5 py-1 text-[11px] font-semibold text-white transition hover:bg-blue-500 disabled:opacity-50"
+            >
+              Import
+            </button>
+          </div>
+        </div>
+      )}
+      {rows.map((row) => (
+        <div key={row.id} className="grid grid-cols-[1fr_1fr_auto_auto] gap-2">
+          <input
+            value={row.key}
+            onChange={(e) => patchRow(row.id, { key: e.target.value })}
+            placeholder="KEY"
+            spellCheck={false}
+            className="min-w-0 rounded-md border border-white/10 bg-white/[0.04] px-2 py-1.5 font-mono text-xs text-white placeholder:text-white/25 focus:border-blue-500 focus:outline-none"
+          />
+          <input
+            type={row.secret ? "password" : "text"}
+            value={row.value}
+            onChange={(e) => patchRow(row.id, { value: e.target.value })}
+            placeholder={row.secret ? "secret value" : "value"}
+            spellCheck={false}
+            className="min-w-0 rounded-md border border-white/10 bg-white/[0.04] px-2 py-1.5 font-mono text-xs text-white placeholder:text-white/25 focus:border-blue-500 focus:outline-none"
+          />
+          <label className="flex items-center gap-1 rounded-md border border-white/10 px-2 text-[11px] text-white/60">
+            <input
+              type="checkbox"
+              checked={row.secret}
+              onChange={(e) => patchRow(row.id, { secret: e.target.checked })}
+            />
+            secret
+          </label>
+          <button
+            type="button"
+            onClick={() => onChange(rows.filter((r) => r.id !== row.id))}
+            className="rounded-md border border-white/10 px-2 text-xs text-white/45 hover:bg-white/[0.06] hover:text-white"
+            aria-label="Remove env row"
+          >
+            ×
+          </button>
+        </div>
+      ))}
+      {warnings.length > 0 && (
+        <div className="rounded-md border border-amber-400/25 bg-amber-400/[0.08] px-2.5 py-2 text-[11px] text-amber-100/90">
+          <p className="font-semibold">Check local env values before deploy</p>
+          <ul className="mt-1 list-disc space-y-0.5 pl-4">
+            {warnings.slice(0, 3).map((w) => (
+              <li key={w}>{w}</li>
+            ))}
+          </ul>
+          <p className="mt-1 text-amber-100/65">
+            Replace localhost URLs with deployed service URLs or provider bindable
+            values.
+          </p>
+        </div>
+      )}
+      {shapeWarnings.length > 0 && (
+        <div className="rounded-md border border-amber-400/25 bg-amber-400/[0.08] px-2.5 py-2 text-[11px] text-amber-100/90">
+          <p className="font-semibold">Value includes the key name</p>
+          <ul className="mt-1 list-disc space-y-0.5 pl-4">
+            {shapeWarnings.slice(0, 3).map((w) => (
+              <li key={w}>{w}</li>
+            ))}
+          </ul>
+          <p className="mt-1 text-amber-100/65">
+            Ship will deploy only the part after “=”. Use Paste .env for full
+            KEY=VALUE lines.
+          </p>
+        </div>
+      )}
+      <button
+        type="button"
+        onClick={() => onChange([...rows, newEnvRow()])}
+        className="rounded-md border border-white/15 px-2.5 py-1 text-[11px] font-semibold text-white/65 transition hover:bg-white/[0.06]"
+      >
+        Add env
+      </button>
     </div>
   );
 }
@@ -1283,6 +1599,7 @@ function NewDeploymentModal({
   providers,
   initialRepoId,
   initialStep = 0,
+  initialEnvRows,
   onClose,
   onDeployed,
   onProvidersChanged,
@@ -1294,6 +1611,7 @@ function NewDeploymentModal({
   // Step to open on (index into DEPLOY_STEPS). Used to land back on the
   // DigitalOcean step after the OAuth connect round-trip.
   initialStep?: number;
+  initialEnvRows?: EnvDraft[] | null;
   onClose: () => void;
   onDeployed: (dep: ApiDeployment) => void;
   onProvidersChanged: (p: ApiDeployProvider[]) => void;
@@ -1313,6 +1631,9 @@ function NewDeploymentModal({
   // GitHub-secret keys can't be read back). Sent with the deploy so the
   // planner actually uses it; never persisted by Ship.
   const [plannerApiKey, setPlannerApiKey] = useState("");
+  const [deployEnvRows, setDeployEnvRows] = useState<EnvDraft[]>(
+    () => initialEnvRows ?? [newEnvRow()],
+  );
   // Manual-LLM mode: bring your own provider + key (e.g. Anthropic) instead
   // of the repo's configured key. Hidden behind a toggle so the common
   // case stays a clean provider + model picker.
@@ -1563,6 +1884,13 @@ function NewDeploymentModal({
       );
       return;
     }
+    if (
+      !manualLlm &&
+      cleanEnvRows(deployEnvRows).some((e) => e.secret && e.value)
+    ) {
+      setError("Secret env values need manual LLM mode for this deploy.");
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -1575,6 +1903,7 @@ function NewDeploymentModal({
           llmProvider: plannerProvider || undefined,
           llmModel: plannerModel.trim() || undefined,
           llmApiKey: plannerApiKey.trim() || undefined,
+          env: cleanEnvRows(deployEnvRows),
         }),
       });
       if (!res.ok) {
@@ -1605,6 +1934,10 @@ function NewDeploymentModal({
   const plannerReady = manualLlm
     ? plannerApiKey.trim().length > 0 && !!plannerProvider
     : plannerProviders.length > 0;
+  const secretEnvNeedsManualPlanner = cleanEnvRows(deployEnvRows).some(
+    (e) => e.secret && e.value,
+  );
+  const envReady = !secretEnvNeedsManualPlanner || manualLlm;
   // Gate: may we move past the current step?
   const canAdvance =
     stepKey === "repo"
@@ -1613,8 +1946,10 @@ function NewDeploymentModal({
         ? connected
         : stepKey === "planner"
           ? plannerReady
+          : stepKey === "env"
+            ? true
           : true;
-  const deployReady = connected && plannerReady && !!repoId;
+  const deployReady = connected && plannerReady && envReady && !!repoId;
   // One-line reason the primary button is disabled, so a non-dev isn't left
   // staring at a greyed-out button with no idea what's missing.
   const plannerBlock = manualLlm
@@ -1625,6 +1960,7 @@ function NewDeploymentModal({
     if (!repoId) blockReason = "Pick a repository first";
     else if (!connected) blockReason = "Connect DigitalOcean to deploy";
     else if (!plannerReady) blockReason = plannerBlock;
+    else if (!envReady) blockReason = "Secret env values need manual LLM mode";
   } else if (stepKey === "repo") {
     if (repos.length === 0) blockReason = "No repos connected to this workspace yet";
     else if (!repoId) blockReason = "Pick a repository to continue";
@@ -1735,7 +2071,30 @@ function NewDeploymentModal({
           </div>
         )}
 
-        {/* ── Step 3 · Deploy planner ─────────────────────────── */}
+        {/* ── Step 3 · Environment ────────────────────────────── */}
+        {stepKey === "env" && (
+          <div className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2">
+            <div className="text-[11px] font-semibold uppercase tracking-wider text-white/45">
+              Environment
+            </div>
+            <p className="mt-1 text-xs text-white/50">
+              Optional. Paste a .env or add key/value rows for secrets and
+              cross-app URLs. The planner will not see secret values.
+            </p>
+            <div className="mt-3">
+              <EnvEditor rows={deployEnvRows} onChange={setDeployEnvRows} />
+            </div>
+            {!envReady && (
+              <p className="mt-2 text-[11px] text-amber-200">
+                Secret values can’t use the async Actions planner path. Switch
+                the planner step to manual LLM mode, or leave the secret value
+                blank and set it later.
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* ── Step 4 · Deploy planner ─────────────────────────── */}
         {stepKey === "planner" && (
           <div className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2">
             <div className="text-[11px] font-semibold uppercase tracking-wider text-white/45">
@@ -1867,7 +2226,7 @@ function NewDeploymentModal({
           </div>
         )}
 
-        {/* ── Step 4 · Deploy ─────────────────────────────────── */}
+        {/* ── Step 5 · Deploy ─────────────────────────────────── */}
         {stepKey === "deploy" && (
           <div className="grid gap-3">
             <div className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white/70">
@@ -1884,6 +2243,12 @@ function NewDeploymentModal({
                   {" · "}
                   {plannerModel.trim() ||
                     `default${plannerModelDefault ? ` (${plannerModelDefault})` : ""}`}
+                </span>
+              </div>
+              <div className="mt-1 flex justify-between gap-2">
+                <span className="text-white/45">Env</span>
+                <span className="text-white">
+                  {cleanEnvRows(deployEnvRows).length || "none"}
                 </span>
               </div>
             </div>

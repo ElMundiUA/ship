@@ -4364,6 +4364,21 @@ export interface ApiDeployment {
   plan_components: ApiDeployComponent[];
   /** DigitalOcean's own monthly cost estimate (USD) for this spec, or null. */
   estimated_monthly_usd: number | null;
+  /** Operator-supplied env metadata; secret values are never returned. */
+  operator_env: ApiDeploymentEnvSetting[];
+}
+
+export interface ApiDeploymentEnvSetting {
+  key: string;
+  value: string | null;
+  secret: boolean;
+  set: boolean;
+}
+
+export interface ApiDeploymentEnvInput {
+  key: string;
+  value: string;
+  secret: boolean;
 }
 
 export interface ApiDeployComponent {
@@ -4382,6 +4397,7 @@ export function triggerDeploy(
   workspaceId: string,
   repoId: string,
   llm?: { provider?: string; model?: string; apiKey?: string } | null,
+  env?: ApiDeploymentEnvInput[],
   token?: string,
 ): Promise<ApiDeployment> {
   return apiFetch<ApiDeployment>(
@@ -4393,8 +4409,9 @@ export function triggerDeploy(
             llm_provider: llm.provider,
             llm_model: llm.model,
             llm_api_key: llm.apiKey,
+            env,
           }
-        : {},
+        : { env },
       token,
     },
   );
@@ -4414,11 +4431,12 @@ export function getDeployment(
 export function redeployVersion(
   workspaceId: string,
   deploymentId: string,
+  env?: ApiDeploymentEnvInput[],
   token?: string,
 ): Promise<ApiDeployment> {
   return apiFetch<ApiDeployment>(
     `/v1/workspaces/${encodeURIComponent(workspaceId)}/deployments/${encodeURIComponent(deploymentId)}/redeploy`,
-    { method: "POST", body: {}, token },
+    { method: "POST", body: { env }, token },
   );
 }
 

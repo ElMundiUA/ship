@@ -304,6 +304,13 @@ class ApiDeployEnvOut(BaseModel):
     required: bool
 
 
+class ApiDeploymentEnvSettingOut(BaseModel):
+    key: str
+    value: str | None = None
+    secret: bool = False
+    set: bool = False
+
+
 class ApiDeployComponentOut(BaseModel):
     """One component of the planner's DeployPlan, for the console breakdown."""
 
@@ -360,12 +367,33 @@ class ApiDeploymentOut(BaseModel):
     # propose wasn't reached. We show DO's figure as-is (approximate), never a
     # number we computed ourselves.
     estimated_monthly_usd: float | None = None
+    operator_env: list[ApiDeploymentEnvSettingOut] = []
+
+
+class OperatorEnvIn(BaseModel):
+    key: str
+    value: str = ""
+    secret: bool = False
 
 
 class TriggerDeployIn(BaseModel):
     llm_provider: str | None = None
     llm_model: str | None = None
     llm_api_key: str | None = None
+    env: list[OperatorEnvIn] = []
+
+
+class RedeployIn(BaseModel):
+    env: list[OperatorEnvIn] = []
+
+
+def _operator_env_value(key: str, value: str) -> str:
+    key = key.strip()
+    raw = value.strip()
+    prefix = f"{key}="
+    if key and raw.startswith(prefix):
+        return raw[len(prefix) :].strip()
+    return value
 
 
 class DeployPlanResultIn(BaseModel):
@@ -629,6 +657,19 @@ def _to_out(d: Deployment, *, repo_full_name: str | None = None) -> ApiDeploymen
         d.provider_ref.get("commit") if isinstance(d.provider_ref, dict) else None
     )
     commit = commit if isinstance(commit, dict) else {}
+    operator_env = []
+    if isinstance(d.provider_ref, dict):
+        for raw in d.provider_ref.get("operator_env") or []:
+            if not isinstance(raw, dict) or not raw.get("key"):
+                continue
+            operator_env.append(
+                ApiDeploymentEnvSettingOut(
+                    key=str(raw["key"]),
+                    value=None if raw.get("secret") else (raw.get("value") or None),
+                    secret=bool(raw.get("secret")),
+                    set=bool(raw.get("set") or raw.get("value")),
+                )
+            )
     return ApiDeploymentOut(
         id=str(d.id),
         workspace_id=str(d.workspace_id),
@@ -666,6 +707,7 @@ def _to_out(d: Deployment, *, repo_full_name: str | None = None) -> ApiDeploymen
         plan_debug=_plan_debug_out(d.plan),
         plan_components=_plan_components_out(d.plan),
         estimated_monthly_usd=estimated_monthly_usd,
+        operator_env=operator_env,
     )
 
 
@@ -834,6 +876,7 @@ async def _submit_to_digitalocean(
     token: str,
     deploy_plan: DeployPlan,
     redeployed_from_id: uuid.UUID | None = None,
+    operator_env: list[OperatorEnvIn] | None = None,
 ) -> None:
     existing_app_id: str | None = None
     prior = (
@@ -873,6 +916,15 @@ async def _submit_to_digitalocean(
             repo_clone_url=clone_url,
             branch=repo.default_branch,
             existing_app_id=existing_app_id,
+            operator_env=[
+                {
+                    "key": e.key.strip(),
+                    "value": _operator_env_value(e.key, e.value),
+                    "secret": e.secret,
+                }
+                for e in (operator_env or [])
+                if e.key.strip()
+            ],
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("DO app creation failed for deployment %s: %s", dep.id, exc)
@@ -901,6 +953,18 @@ async def _submit_to_digitalocean(
         "deployment_id": provider_ref.deployment_id,
         **provider_ref.extra,
     }
+    env_meta = [
+        {
+            "key": e.key.strip(),
+            "value": None if e.secret else _operator_env_value(e.key, e.value),
+            "secret": e.secret,
+            "set": bool(e.value),
+        }
+        for e in (operator_env or [])
+        if e.key.strip()
+    ]
+    if env_meta and "operator_env" not in dep.provider_ref:
+        dep.provider_ref["operator_env"] = env_meta
     if redeployed_from_id is not None:
         dep.provider_ref["redeployed_from_id"] = str(redeployed_from_id)
     dep.updated_at = datetime.now(timezone.utc)
@@ -948,6 +1012,25 @@ async def trigger_deploy(
         raise HTTPException(
             status_code=409,
             detail="Repo has no GitHub installation; cannot read files for planning.",
+        )
+
+    operator_env = [e for e in ((body.env if body else []) or []) if e.key.strip()]
+    if operator_env:
+        logger.info(
+            "deploy: received operator env keys for %s: %s",
+            repo.full_name,
+            ", ".join(e.key.strip() for e in operator_env),
+        )
+    has_plaintext_secret_env = any(e.secret and e.value for e in operator_env)
+    has_manual_planner_key = bool(body and body.llm_api_key and body.llm_provider)
+    if has_plaintext_secret_env and not has_manual_planner_key:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Secret env values can only be sent on a manual-key deploy or a "
+                "rebuild, because the Actions planner path is asynchronous and "
+                "Ship must not store plaintext secrets."
+            ),
         )
 
     # Create Deployment row in PLANNING state
@@ -1018,6 +1101,17 @@ async def trigger_deploy(
         if _DEPLOY_PLAN_WORKFLOW in files:
             planner_token = _mint_deploy_token(dep.id, settings)
             dep.provider_ref = {"planner_token_hash": _hash_token(planner_token)}
+            pending_env = [
+                {
+                    "key": e.key.strip(),
+                    "value": _operator_env_value(e.key, e.value),
+                    "secret": False,
+                }
+                for e in operator_env
+                if e.key.strip() and not e.secret
+            ]
+            if pending_env:
+                dep.provider_ref["pending_operator_env"] = pending_env
             await session.flush()
             # Resolve the model the Actions planner should use. When the
             # operator didn't pick one (modal or saved preference), pin the
@@ -1118,6 +1212,7 @@ async def trigger_deploy(
         repo=repo,
         token=token,
         deploy_plan=deploy_plan,
+        operator_env=operator_env,
     )
     if commit and commit.get("sha") and isinstance(dep.provider_ref, dict):
         dep.provider_ref = {**dep.provider_ref, "commit": commit}
@@ -1297,6 +1392,15 @@ async def report_deploy_plan_result(
         repo=repo,
         token=token,
         deploy_plan=payload.plan,
+        operator_env=[
+            OperatorEnvIn(
+                key=str(e.get("key") or ""),
+                value=str(e.get("value") or ""),
+                secret=False,
+            )
+            for e in ((dep.provider_ref or {}).get("pending_operator_env") or [])
+            if isinstance(e, dict)
+        ],
     )
     return await _to_out_async(session, dep)
 
@@ -1343,6 +1447,7 @@ async def get_deployment(
 async def redeploy_version(
     workspace_id: uuid.UUID,
     deployment_id: uuid.UUID,
+    body: RedeployIn | None = None,
     auth: AuthContext = Depends(get_current_auth),
     session: AsyncSession = Depends(get_session),
 ) -> ApiDeploymentOut:
@@ -1396,6 +1501,7 @@ async def redeploy_version(
         token=token,
         deploy_plan=deploy_plan,
         redeployed_from_id=src.id,
+        operator_env=(body.env if body else []),
     )
     names = await _repo_name_map(session, [dep.repo_id])
     return await _to_out_async(session, dep, repo_full_name=names.get(dep.repo_id))

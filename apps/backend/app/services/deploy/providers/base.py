@@ -63,6 +63,7 @@ class DeployProvider(Protocol):
         repo_clone_url: str,
         branch: str,
         existing_app_id: str | None = None,
+        operator_env: list[dict] | None = None,
     ) -> ProviderRef:
         """Create (or update) the app from ``plan``.
 
