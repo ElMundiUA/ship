@@ -217,16 +217,33 @@ key is a test-only path for now (may be removed later, leaving only Actions). So
 the planner step is intentionally left as-is (vvlad's call). Yesterday's successful
 deploys used the manual key (backend path); today's failure was simply no key.
 
-## ⚠️ DON'T FORGET — sync the Actions pipeline once the manual path is solid
-All planner fixes so far (monorepo detection, `HOST=0.0.0.0`, root-relative
-`dockerfile_path`, `$APP_URL` connectivity, verify-guard + retry, model
-defaults) live in the **backend/manual path** (`services/deploy/planner.py`).
-The **GitHub Actions pipeline** `ship-deploy-plan.yml` has its OWN inline
-schema + prompt and is currently BEHIND. Once the manual version is proven to
-work end-to-end, **port every planner improvement into `ship-deploy-plan.yml`**,
-bump the seed bundle version, and re-seed repos — otherwise the default (no
-manual key) Actions path will produce worse plans than the manual one. This is
-the #1 follow-up; see step 5.
+## ✅ Actions-planner parity — DONE (2026-06-04, commit `d64597e8`)
+`ship-deploy-plan.yml` was brought to parity with the backend planner
+(`services/deploy/planner.py`) so the no-manual-key (Actions) path plans as well
+as the manual path. Verified **statically** (can't run without a real no-key
+deploy):
+- **System prompt byte-for-byte identical** to `planner._SYSTEM_PROMPT` (diffed:
+  3511 bytes both). The planner's "brain" is the same.
+- Full **file tree + manifest-layout map + directory-diverse key-file
+  collection** (expanded basenames incl. frontend entries), 24/3k/48k — mirrors
+  `_collect_key_files`. The workflow reads the checked-out FS (more accurate than
+  the backend's API file list).
+- **max_tokens 8192** (was 2048 → truncated big monorepos).
+- **verify-guard + 3-attempt corrective retry** mirroring `_verify_plan`
+  (dockerfile-exists, source_dir-exists, loopback-not-wired, route-prefix).
+- Model defaults already match `PROVIDER_DEFAULT_MODEL`.
+- Plan is **Pydantic-validated** at `/plan-result` (`DeployPlanResultIn.plan:
+  DeployPlan`), and route normalization / HOST / dockerfile / create_deployment /
+  cost all run on the returned plan at submit — **shared by both paths**.
+- Bumped `BUNDLE_VERSION` 0.39 → **0.40**.
+
+**Remaining deltas (honest):** (a) no backend `RepoIntel` signals in the Actions
+prompt — the full file tree + key files compensate (minor); (b) **commit-pin not
+yet on the Actions path** (the plan-result callback doesn't fetch the HEAD commit
+— follow-up). **Still needs:** a real **no-key deploy to live-verify**, and a
+**re-seed of repos** (push `ship-deploy-plan.yml` v0.40 to default branches) so
+the Actions path uses the new planner. KEEP THE TWO IN SYNC: change `planner.py`
+→ change the workflow → bump `BUNDLE_VERSION` → re-seed.
 
 ## Status — monorepo deploy works end-to-end ✅
 Test repo `WonnaBeCodeFather/monorepotest` (Express backend + Vite/React
@@ -291,11 +308,12 @@ This is the live-confirm pass for everything above. Steps for vvlad:
    source itself expects the public prefix.
 4. **Internal wiring** — server→server, `DATABASE_URL`, queues (internal
    hostnames, not `$APP_URL`).
-5. **Actions-workflow parity (partial).** `ship-deploy-plan.yml` schema/prompt
-   now includes env `value` and top-level `connections`, and backend submit-time
-   normalization protects both manual and Actions paths. Still needed before
-   calling it done: bump the seed bundle version and re-seed repos so already
-   installed workflow files get the updated inline planner.
+5. ✅ **Actions-workflow parity — DONE (`d64597e8`).** `ship-deploy-plan.yml`
+   now mirrors the backend planner (byte-identical system prompt, file tree +
+   layout + directory-diverse key files, max_tokens 8192, verify-guard + retry);
+   `BUNDLE_VERSION` 0.40. See the "✅ Actions-planner parity" section near the
+   top for the full verification + remaining deltas. **Open:** live-verify via a
+   real no-key deploy + re-seed repos; Actions-path commit-pin.
 6. ✅ **Show the plan in the UI** — DONE this session (Components row). Possible
    polish later: collapse long env lists, show on the Deploy step pre-submit.
 7. ✅ **Health-probe grace period** — DONE this session (`probe_with_grace`).
