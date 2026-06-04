@@ -130,6 +130,46 @@ def test_validate_upload_rejects_bad_filename() -> None:
     assert exc_info.value.code == "bad_filename"
 
 
+@pytest.mark.parametrize(
+    "filename,reported,expected",
+    [
+        ("session-summary.md", "", "text/markdown"),
+        ("session-summary.md", None, "text/markdown"),
+        ("notes.md", "application/octet-stream", "text/markdown"),
+        ("doc.md", "text/markdown", "text/markdown"),
+        ("README.MD", "", "text/markdown"),
+        ("archive.tar.md", "", "text/markdown"),
+        ("doc.md", "image/heic", "text/markdown"),
+        ("photo.heic", "", "application/octet-stream"),
+        ("photo.png", "image/png", "image/png"),
+    ],
+)
+def test_resolve_mime(filename: str, reported: str | None, expected: str) -> None:
+    from backend.app.services.attachments.policy import resolve_mime
+
+    assert resolve_mime(filename, reported) == expected
+
+
+def test_resolve_mime_then_validate_accepts_empty_md() -> None:
+    from backend.app.services.attachments.policy import resolve_mime, validate_upload
+
+    mime = resolve_mime("session-summary.md", "")
+    validate_upload(filename="session-summary.md", mime=mime, size_bytes=100)
+
+
+def test_resolve_mime_then_validate_rejects_heic() -> None:
+    from backend.app.services.attachments.policy import (
+        AttachmentPolicyError,
+        resolve_mime,
+        validate_upload,
+    )
+
+    mime = resolve_mime("photo.heic", "")
+    with pytest.raises(AttachmentPolicyError) as exc_info:
+        validate_upload(filename="photo.heic", mime=mime, size_bytes=100)
+    assert exc_info.value.code == "unsupported_mime"
+
+
 def test_get_default_storage_refuses_unknown_backend(monkeypatch) -> None:
     """A half-configured ``SHIP_ATTACHMENT_BACKEND`` must fail
     loudly, not silently fall back to local — otherwise an operator
