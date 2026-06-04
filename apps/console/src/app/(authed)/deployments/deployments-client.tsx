@@ -269,7 +269,16 @@ export default function DeploymentsClient({ workspaceId }: { workspaceId: string
   // deep-link); the wizard reopens at the DO step once data has loaded.
   const [pendingConnectRepo, setPendingConnectRepo] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // Transient confirmation banner (e.g. after a teardown, which soft-deletes
+  // rather than removing the card — so we tell the user it actually happened).
+  const [toast, setToast] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 4500);
+    return () => clearTimeout(t);
+  }, [toast]);
 
   const fetchList = useCallback(async () => {
     const res = await fetch(`/api/deployments?ws=${enc(workspaceId)}`);
@@ -406,6 +415,9 @@ export default function DeploymentsClient({ workspaceId }: { workspaceId: string
     });
     if (res.ok) {
       await fetchList();
+      setToast(
+        "Deleted — app removed from DigitalOcean, billing stopped. The card stays as “Deleted” (history); Redeploy brings it back.",
+      );
       return true;
     }
     return false;
@@ -423,6 +435,11 @@ export default function DeploymentsClient({ workspaceId }: { workspaceId: string
 
   return (
     <div className="space-y-4">
+      {toast && (
+        <div className="fixed bottom-6 left-1/2 z-50 max-w-md -translate-x-1/2 rounded-lg border border-emerald-500/30 bg-emerald-500/15 px-4 py-2.5 text-xs text-emerald-100 shadow-2xl backdrop-blur">
+          {toast}
+        </div>
+      )}
       <div className="flex items-center justify-between">
         <p className="text-xs text-white/50">
           One-click deploy to a cloud provider · DigitalOcean App Platform
@@ -572,7 +589,13 @@ function AppCard({
   };
 
   return (
-    <div className="overflow-hidden rounded-xl border border-white/10 bg-white/[0.03]">
+    <div
+      className={`overflow-hidden rounded-xl border bg-white/[0.03] ${
+        cur.status === "deleted"
+          ? "border-white/5 opacity-55"
+          : "border-white/10"
+      }`}
+    >
       {/* Collapsed header — click to expand */}
       <button
         onClick={onToggle}
