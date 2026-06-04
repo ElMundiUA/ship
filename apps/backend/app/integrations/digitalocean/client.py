@@ -229,6 +229,28 @@ async def get_latest_deployment(
     return deployments[0] if deployments else None
 
 
+async def create_deployment(
+    app_id: str,
+    *,
+    token: str,
+    force_build: bool = True,
+    client: httpx.AsyncClient | None = None,
+) -> dict[str, Any]:
+    """POST /v2/apps/{app_id}/deployments — trigger a fresh deployment that
+    PULLS THE LATEST COMMIT from the source repo. Critical for redeploys:
+    ``update_app`` (PUT spec) does NOT re-pull code (DO reuses its cached
+    branch tip), so after a force-push it would keep building a stale commit.
+    Creating a deployment forces a fresh source fetch + build."""
+    data = await _request(
+        "POST",
+        f"/apps/{app_id}/deployments",
+        token=token,
+        json={"force_build": force_build},
+        client=client,
+    )
+    return data["deployment"]
+
+
 async def get_deployment(
     app_id: str,
     deployment_id: str,
@@ -329,6 +351,7 @@ __all__ = [
     "FAILED_PHASES",
     "app_live_url",
     "create_app",
+    "create_deployment",
     "update_app",
     "deployment_phase",
     "get_app",

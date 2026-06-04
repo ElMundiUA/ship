@@ -348,24 +348,36 @@ class DigitalOceanAppPlatform:
                 )
             except Exception as exc:  # noqa: BLE001 — cost is non-critical
                 logger.info("DO instance_sizes cost fallback failed: %s", exc)
+        dep_id: str | None = None
         if existing_app_id:
-            # Redeploy: update the existing DO app in place (new deployment
-            # under the SAME app) rather than spawning a duplicate.
+            # Redeploy: update the existing DO app in place. CRITICAL: a PUT
+            # spec update does NOT re-pull source code — DO reuses its cached
+            # branch tip, so after a force-push it keeps building a stale/dead
+            # commit ("error checking out commit: object not found"). So after
+            # applying the spec we explicitly create_deployment(force_build) to
+            # force a fresh source fetch of the branch's real HEAD.
             logger.info("Updating DO app %s ('%s')", existing_app_id, plan.app_name)
             app = await do.update_app(
                 existing_app_id, spec, token=self._token, client=self._client
             )
+            app_id = app["id"]
+            fresh = await do.create_deployment(
+                app_id, token=self._token, force_build=True, client=self._client
+            )
+            dep_id = fresh.get("id")
         else:
             logger.info(
                 "Creating DO app '%s' (%d components)",
                 plan.app_name,
                 len(plan.components),
             )
+            # A create already deploys the branch's current HEAD (fresh).
             app = await do.create_app(spec, token=self._token, client=self._client)
-        app_id = app["id"]
-        # A deployment is created automatically on create/update.
-        dep = await do.get_latest_deployment(app_id, token=self._token, client=self._client)
-        dep_id = dep["id"] if dep else None
+            app_id = app["id"]
+            dep = await do.get_latest_deployment(
+                app_id, token=self._token, client=self._client
+            )
+            dep_id = dep["id"] if dep else None
         logger.info("DO app %s, deployment %s", app_id, dep_id)
         extra: dict[str, Any] = {"spec_name": plan.app_name, "region": self._region}
         if estimated_monthly_usd is not None:
