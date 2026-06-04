@@ -1064,45 +1064,58 @@ function AppCard({
                 Environment variables &amp; domains will live here (secrets gate
                 is on the roadmap).
               </p>
-              <div className="rounded-lg border border-red-500/20 bg-red-500/[0.04] p-3">
-                <div className="text-xs font-semibold text-white/80">
-                  Delete deployment
+              {cur.status === "deleted" ? (
+                <div className="rounded-lg border border-white/10 bg-white/[0.02] p-3">
+                  <div className="text-xs font-semibold text-white/70">
+                    Already deleted
+                  </div>
+                  <p className="mt-0.5 text-[11px] text-white/45">
+                    This app was removed from DigitalOcean — billing is stopped.
+                    Use <span className="text-white/70">Redeploy</span> (top
+                    right) to bring it back.
+                  </p>
                 </div>
-                <p className="mt-0.5 text-[11px] text-white/45">
-                  Permanently removes this app from DigitalOcean and stops all
-                  billing. This can’t be undone.
-                </p>
-                {deleteError && (
-                  <p className="mt-2 text-[11px] text-red-400">{deleteError}</p>
-                )}
-                <div className="mt-2 flex items-center gap-2">
-                  {!confirmDelete ? (
-                    <button
-                      onClick={() => setConfirmDelete(true)}
-                      className="rounded-md border border-red-500/40 px-3 py-1 text-[11px] font-semibold text-red-300 transition hover:bg-red-500/10"
-                    >
-                      Delete
-                    </button>
-                  ) : (
-                    <>
-                      <button
-                        onClick={doDelete}
-                        disabled={deleting}
-                        className="rounded-md bg-red-600 px-3 py-1 text-[11px] font-semibold text-white transition hover:bg-red-500 disabled:opacity-50"
-                      >
-                        {deleting ? "Deleting…" : "Yes, delete it"}
-                      </button>
-                      <button
-                        onClick={() => setConfirmDelete(false)}
-                        disabled={deleting}
-                        className="rounded-md px-3 py-1 text-[11px] font-semibold text-white/50 hover:text-white"
-                      >
-                        Cancel
-                      </button>
-                    </>
+              ) : (
+                <div className="rounded-lg border border-red-500/20 bg-red-500/[0.04] p-3">
+                  <div className="text-xs font-semibold text-white/80">
+                    Delete deployment
+                  </div>
+                  <p className="mt-0.5 text-[11px] text-white/45">
+                    Permanently removes this app from DigitalOcean and stops all
+                    billing. This can’t be undone.
+                  </p>
+                  {deleteError && (
+                    <p className="mt-2 text-[11px] text-red-400">{deleteError}</p>
                   )}
+                  <div className="mt-2 flex items-center gap-2">
+                    {!confirmDelete ? (
+                      <button
+                        onClick={() => setConfirmDelete(true)}
+                        className="rounded-md border border-red-500/40 px-3 py-1 text-[11px] font-semibold text-red-300 transition hover:bg-red-500/10"
+                      >
+                        Delete
+                      </button>
+                    ) : (
+                      <>
+                        <button
+                          onClick={doDelete}
+                          disabled={deleting}
+                          className="rounded-md bg-red-600 px-3 py-1 text-[11px] font-semibold text-white transition hover:bg-red-500 disabled:opacity-50"
+                        >
+                          {deleting ? "Deleting…" : "Yes, delete it"}
+                        </button>
+                        <button
+                          onClick={() => setConfirmDelete(false)}
+                          disabled={deleting}
+                          className="rounded-md px-3 py-1 text-[11px] font-semibold text-white/50 hover:text-white"
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    )}
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           )}
         </div>
