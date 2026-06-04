@@ -132,13 +132,13 @@ function errText(body: unknown, status: number): string {
 
 function statusTone(s: ApiDeploymentStatus) {
   if (s === "active") return "text-emerald-400";
-  if (s === "deleted") return "text-white/45";
+  if (s === "deleted") return "text-red-400";
   if (s === "failed" || s === "cancelled") return "text-red-400";
   return "text-yellow-400";
 }
 function statusDot(s: ApiDeploymentStatus) {
   if (s === "active") return "bg-emerald-400";
-  if (s === "deleted") return "bg-white/35";
+  if (s === "deleted") return "bg-red-400";
   if (s === "failed" || s === "cancelled") return "bg-red-400";
   return "bg-yellow-400 animate-pulse";
 }
@@ -592,7 +592,7 @@ function AppCard({
     <div
       className={`overflow-hidden rounded-xl border bg-white/[0.03] ${
         cur.status === "deleted"
-          ? "border-white/5 opacity-55"
+          ? "border-red-500/20 opacity-75"
           : "border-white/10"
       }`}
     >
@@ -613,6 +613,11 @@ function AppCard({
             <span className={`text-[11px] font-semibold ${statusTone(cur.status)}`}>
               {statusLabel(cur.status, cur.status_detail)}
             </span>
+            {cur.status === "deleted" && (
+              <span className="whitespace-nowrap rounded bg-red-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-red-300">
+                billing stopped
+              </span>
+            )}
             {cur.redeployed_from_version != null && (
               <span className="whitespace-nowrap rounded bg-white/10 px-1.5 py-0.5 text-[10px] text-white/50">
                 rebuilt from v{cur.redeployed_from_version}
