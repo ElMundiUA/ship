@@ -256,6 +256,70 @@ no extra determinism). Cross-app backend URLs are solved at the code/config leve
 i.e. the operator sets the env. The real lever is **env editing in Ship (Phase 8)**,
 not planner changes. Planner stays as the clean "translate the repo" component.
 
+## 🔜 Phase 8 — env / secrets gate (NEXT FEATURE — designed, not built)
+
+### The problem
+The planner declares env var NAMES; `_build_envs` (DO adapter) puts them in the
+spec as `type: SECRET`/`GENERAL`, `scope: RUN_AND_BUILD_TIME`, but **secrets are
+sent with `value: ""`** — Ship never collects the actual values. So:
+- an app that needs a real secret (DB password, API key) deploys without it →
+  runtime failure;
+- cross-app config (a standalone frontend's backend URL, e.g. `VITE_API_RUL`)
+  can't be set → wrong wiring (the lone-frontend 404 we hit);
+- **worse — a latent data-loss bug TODAY:** on redeploy Ship does
+  `update_app(spec)` with `value: ""` for secrets, which **WIPES** any secret the
+  operator set on DO. Must be fixed regardless of the feature.
+
+### What we know about DO env/secrets (researched 2026-06-04, with sources)
+- **SECRET** is stored encrypted by DO as `EV[1:...]` ciphertext — **write-only**
+  (can't read the plaintext back). ([env how-to](https://docs.digitalocean.com/products/app-platform/how-to/use-environment-variables/), [app-spec ref](https://docs.digitalocean.com/products/app-platform/reference/app-spec/))
+- On **CREATE** a secret must be **plaintext** (DO encrypts it); error otherwise
+  ("secret env value must not be encrypted before app is created"). ([thread](https://www.digitalocean.com/community/questions/error-with-dolt-secret-env-value-must-not-be-encrypted-before-app-is-created))
+- On **UPDATE** you MUST resend the **encrypted** value (`EV[1:...]`) for unchanged
+  secrets, or DO **wipes** them — widely reported footgun ([env removed on each
+  update](https://www.digitalocean.com/community/questions/environmental-variables-are-getting-removed-on-each-app-update), [doctl drops global envs #934](https://github.com/digitalocean/doctl/issues/934)).
+  Best practice: export the spec (with encrypted secrets) and reuse it for
+  updates ([best-practices thread](https://www.digitalocean.com/community/questions/what-are-app-spec-best-practices-for-keeping-env-secrets-secret)).
+- **Dashboard:** Settings tab → pick a component → Environment Variables → Edit.
+  Deep link: `https://cloud.digitalocean.com/apps/{app_id}/settings`.
+- **Bindable vars** (useful for #4 internal wiring): `${APP_URL}`, `${APP_DOMAIN}`,
+  `${_self.PRIVATE_DOMAIN}` (service↔service), `${<db-name>.DATABASE_URL}`.
+
+### Chosen solution (simplest safe design vvlad + Claude converged on)
+- **UI — env fields live in the Deploy STEP (per repo/app), not a separate early
+  step** (vvlad: env is intrinsically per-repo; a real product is often 2 repos =
+  2 apps = 2 env sets). Show the plan's env contract for that repo's components:
+  non-secret config (HOST, `$APP_URL`, `VITE_API_RUL`) prefilled; required/secret
+  → input fields; on **redeploy** show already-set secrets as **"•••set"** (read
+  from DO) with an option to change. Same editor on the card's **Settings** tab
+  for later edits.
+- **Backend — preserve-on-update (MANDATORY, also fixes the data-loss bug):**
+  before `update_app`, GET the current app spec and **merge back the encrypted
+  `EV[1:...]`** for every SECRET the operator already set; send only NEW/changed
+  values as plaintext. Never send `value: ""` for an existing secret. (Native
+  rollback already restores the prior artifact's secrets — DO handles it.)
+- **Ship does NOT persist secret values** — they're transient in the deploy
+  request (exactly like the manual LLM key today); DO holds them encrypted →
+  lower liability. ("Responsibility on DO.")
+- **Multi-repo / cross-app:** each repo deploys to its own app with its own env
+  set in its own Deploy step. The frontend's backend URL is a plain GENERAL env
+  the operator sets in the frontend's Deploy step (the operator-level lone-frontend
+  fix from the DECISION above) — NOT planner inference.
+
+### Open question (to confirm before building)
+Env per-repo in the Deploy step (chosen) vs a **combined 2-repo deploy** (one
+wizard run deploying frontend + backend together). Leaning to the first
+(small extension); the combined flow is a separate, bigger item.
+
+### Build checklist (when greenlit)
+- [ ] backend: preserve-on-update merge of encrypted secrets in
+  `_submit_to_digitalocean` / `_build_envs` (GET app → reuse `EV[1:...]`).
+- [ ] backend: expose the plan's env contract (keys + which are set on DO) to the
+  console; accept operator-entered values on the deploy/redeploy request.
+- [ ] console: env fields on the Deploy step (prefill non-secret; secret inputs;
+  "•••set" on redeploy) + the same editor on the Settings tab.
+- [ ] required-secret gate: warn/soft-block deploy when a required secret is unset.
+
 ## Status — monorepo deploy works end-to-end ✅
 Test repo `WonnaBeCodeFather/monorepotest` (Express backend + Vite/React
 frontend) deploys to DigitalOcean and reaches **Healthy**. The chain that got
