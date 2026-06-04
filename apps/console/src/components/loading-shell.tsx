@@ -58,6 +58,10 @@ export function LoadingShell({
         <div className="flex min-w-0 flex-1 flex-col">
           <header className="sticky top-0 z-40 border-b border-white/10 bg-ink/80 backdrop-blur-xl">
             <div className="flex items-center gap-3 px-6 py-4 lg:px-8">
+              <div
+                aria-hidden
+                className="h-10 w-10 shrink-0 animate-pulse rounded-lg bg-white/[0.06] lg:hidden"
+              />
               <div className="min-w-0 flex-1 space-y-2">
                 <div className="h-3 w-24 animate-pulse rounded bg-white/[0.06]" />
                 <div className="h-6 w-64 animate-pulse rounded bg-white/[0.08]" />
@@ -109,6 +113,10 @@ export function LoadingBody({
     <>
       <header className="sticky top-0 z-40 border-b border-white/10 bg-ink/80 backdrop-blur-xl">
         <div className="flex items-center gap-3 px-6 py-4 lg:px-8">
+          <div
+            aria-hidden
+            className="h-10 w-10 shrink-0 animate-pulse rounded-lg bg-white/[0.06] lg:hidden"
+          />
           <div className="min-w-0 flex-1 space-y-2">
             <div className="h-3 w-24 animate-pulse rounded bg-white/[0.06]" />
             <div className="h-6 w-64 animate-pulse rounded bg-white/[0.08]" />
