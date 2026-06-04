@@ -286,13 +286,18 @@ sent with `value: ""`** — Ship never collects the actual values. So:
   `${_self.PRIVATE_DOMAIN}` (service↔service), `${<db-name>.DATABASE_URL}`.
 
 ### Chosen solution (simplest safe design vvlad + Claude converged on)
-- **UI — env fields live in the Deploy STEP (per repo/app), not a separate early
-  step** (vvlad: env is intrinsically per-repo; a real product is often 2 repos =
-  2 apps = 2 env sets). Show the plan's env contract for that repo's components:
-  non-secret config (HOST, `$APP_URL`, `VITE_API_RUL`) prefilled; required/secret
-  → input fields; on **redeploy** show already-set secrets as **"•••set"** (read
-  from DO) with an option to change. Same editor on the card's **Settings** tab
-  for later edits.
+- **UI — a dedicated, OPTIONAL "Env" STEP in the per-repo stepper** (vvlad: env is
+  per-repo; you deploy backend and frontend separately, each its own stepper, and
+  one of its steps is env). Proposed order: `repo → DigitalOcean → planner → Env
+  (optional) → Deploy`. The step is **free-form key/value rows** the operator
+  types (key, value, secret toggle) — NOT plan-driven, because the plan (and thus
+  the env contract) isn't computed until Deploy, so the wizard can't show it yet.
+  On **redeploy** the step is **prefilled**: the plan's declared keys + existing
+  values, secrets shown as **"•••set"** (read from DO), with add/change. Same
+  editor on the card's **Settings** tab for later edits. Non-secret deploy config
+  the planner already infers (HOST, `$APP_URL`) still flows automatically — the
+  step is for operator-supplied secrets and cross-app values (e.g. `VITE_API_RUL`
+  = the backend's URL).
 - **Backend — preserve-on-update (MANDATORY, also fixes the data-loss bug):**
   before `update_app`, GET the current app spec and **merge back the encrypted
   `EV[1:...]`** for every SECRET the operator already set; send only NEW/changed
@@ -306,10 +311,19 @@ sent with `value: ""`** — Ship never collects the actual values. So:
   the operator sets in the frontend's Deploy step (the operator-level lone-frontend
   fix from the DECISION above) — NOT planner inference.
 
-### Open question (to confirm before building)
-Env per-repo in the Deploy step (chosen) vs a **combined 2-repo deploy** (one
-wizard run deploying frontend + backend together). Leaning to the first
-(small extension); the combined flow is a separate, bigger item.
+### Open question — RESOLVED (vvlad 2026-06-04)
+**Per-repo deploy, env as its own optional stepper step.** NOT a combined 2-repo
+deploy — each repo (backend, frontend) is deployed separately with its own
+stepper; one of those steps is the Env step. (A combined frontend+backend deploy
+remains a possible bigger feature later, not now.)
+
+### Planner impact: NONE
+The planner needs **no changes** for this flow. It already emits the env contract
+(`EnvVarSpec`: key/required/secret/value/note) and the console already receives it
+(`plan_components[].env`). Collecting values is downstream: UI (the Env step) +
+backend (merge into the DO spec + preserve-on-update). Keeps the planner clean
+(consistent with the DECISION above). The env step is free-form on first deploy
+(plan not computed yet) and prefilled from the stored plan on redeploy.
 
 ### Build checklist (when greenlit)
 - [ ] backend: preserve-on-update merge of encrypted secrets in
