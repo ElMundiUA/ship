@@ -105,6 +105,11 @@ export function buildInboxUrl(
   return qs ? `/inbox?${qs}` : "/inbox";
 }
 
+/** Deeplink to a single mailbox row (RFC-0010; replaces retired `/inbox/[id]`). */
+export function inboxItemUrl(itemId: string): string {
+  return buildInboxUrl(DEFAULT_INBOX_FILTERS, { selected: itemId });
+}
+
 /**
  * Count of non-default filter axes. Each axis (ownership, types, repo, play)
  * contributes at most 1.

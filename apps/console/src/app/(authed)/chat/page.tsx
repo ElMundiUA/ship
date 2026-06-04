@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { PageBody, PageHeader } from "@/components/app-shell";
+import { inboxItemUrl } from "@/components/inbox/inbox-url";
 import { ScopePill } from "@/components/scope-pill";
 import { resolveScopeFromSearch } from "@/lib/scope";
 import { Card, CardHeader } from "@/components/ui";
@@ -177,7 +178,7 @@ export default async function ChatPage({
                 </span>
               </div>
               <Link
-                href={`/inbox/${encodeURIComponent(String(params.from_inbox))}`}
+                href={inboxItemUrl(String(params.from_inbox))}
                 className="shrink-0 rounded-lg border border-aqua/40 px-3 py-1.5 font-semibold text-aqua hover:bg-aqua/10"
               >
                 Open inbox row →

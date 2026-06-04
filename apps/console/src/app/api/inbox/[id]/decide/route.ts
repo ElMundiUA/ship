@@ -14,6 +14,7 @@ import {
   decideInboxItem,
   isApiConfigured,
 } from "@/lib/api/client";
+import { inboxItemUrl } from "@/components/inbox/inbox-url";
 import { resolveOrigin } from "@/lib/api/origin";
 
 type DecideBody = {
@@ -132,7 +133,7 @@ async function handleForm(request: Request, origin: string, id: string) {
       }
       return back(origin, id, codeFor(err), returnTo);
     }
-    const successTarget = returnTo ?? `/inbox/${id}`;
+    const successTarget = returnTo ?? inboxItemUrl(id);
     return NextResponse.redirect(new URL(successTarget, origin), 303);
   }
 
@@ -140,7 +141,7 @@ async function handleForm(request: Request, origin: string, id: string) {
 }
 
 function back(origin: string, id: string, code: string, returnTo: string | null) {
-  const url = new URL(returnTo ?? `/inbox/${id}`, origin);
+  const url = new URL(returnTo ?? inboxItemUrl(id), origin);
   url.searchParams.set("error", code);
   return NextResponse.redirect(url, 303);
 }

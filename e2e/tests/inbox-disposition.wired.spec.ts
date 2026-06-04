@@ -33,8 +33,8 @@ test.describe("inbox: disposition detail (wired, serial)", () => {
     page: import("@playwright/test").Page,
     itemId: string,
   ) {
-    await page.goto(`/inbox/${itemId}`);
-    await expect(page).toHaveURL(new RegExp(`/inbox/${itemId}`), {
+    await page.goto(`/inbox?selected=${encodeURIComponent(itemId)}`);
+    await expect(page).toHaveURL(new RegExp(`selected=${itemId}`), {
       timeout: 30_000,
     });
   }

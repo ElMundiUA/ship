@@ -18,6 +18,7 @@ import {
   discussInboxItemWithNavigator,
   isApiConfigured,
 } from "@/lib/api/client";
+import { inboxItemUrl } from "@/components/inbox/inbox-url";
 import { resolveOrigin } from "@/lib/api/origin";
 
 export async function POST(
@@ -49,8 +50,7 @@ export async function POST(
 }
 
 function back(origin: string, id: string, code: string) {
-  return NextResponse.redirect(
-    new URL(`/inbox/${encodeURIComponent(id)}?error=${code}`, origin),
-    303,
-  );
+  const url = new URL(inboxItemUrl(id), origin);
+  url.searchParams.set("error", code);
+  return NextResponse.redirect(url, 303);
 }

@@ -49,6 +49,10 @@ describe("renderToolResult", () => {
     // "Open Inbox" deeplink chip + per-row "Open" chip — both must
     // be present for the operator to be able to click through.
     expect(screen.getAllByText(/Open/).length).toBeGreaterThanOrEqual(1);
+    const rowOpen = screen
+      .getAllByRole("link")
+      .find((el) => el.getAttribute("href") === "/inbox?selected=abc");
+    expect(rowOpen).toBeDefined();
   });
 
   it("U2 — inbox_list empty items renders the cleared-queue state", () => {
