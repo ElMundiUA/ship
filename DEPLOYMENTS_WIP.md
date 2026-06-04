@@ -245,6 +245,17 @@ yet on the Actions path** (the plan-result callback doesn't fetch the HEAD commi
 the Actions path uses the new planner. KEEP THE TWO IN SYNC: change `planner.py`
 → change the workflow → bump `BUNDLE_VERSION` → re-seed.
 
+## DECISION (2026-06-04, vvlad) — keep the planner clean; wiring is config
+A standalone frontend deployed alone (e.g. `frontend-only-janky`) had its API-base
+env wired to `$APP_URL` (its OWN url), so its healthcheck button hit `<self>/health`
+→ 404; the real backend is a SEPARATE app. This is NOT a planner bug — the planner
+faithfully translated the repo (correctly detected the API-base env by meaning).
+Which separate deployment is "the backend" is operator topology, not in the repo.
+**DECISION: do NOT add lone-frontend heuristics to the planner** (no special-casing,
+no extra determinism). Cross-app backend URLs are solved at the code/config level —
+i.e. the operator sets the env. The real lever is **env editing in Ship (Phase 8)**,
+not planner changes. Planner stays as the clean "translate the repo" component.
+
 ## Status — monorepo deploy works end-to-end ✅
 Test repo `WonnaBeCodeFather/monorepotest` (Express backend + Vite/React
 frontend) deploys to DigitalOcean and reaches **Healthy**. The chain that got
