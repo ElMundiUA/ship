@@ -317,13 +317,17 @@ deploy — each repo (backend, frontend) is deployed separately with its own
 stepper; one of those steps is the Env step. (A combined frontend+backend deploy
 remains a possible bigger feature later, not now.)
 
-### Planner impact: NONE
-The planner needs **no changes** for this flow. It already emits the env contract
-(`EnvVarSpec`: key/required/secret/value/note) and the console already receives it
-(`plan_components[].env`). Collecting values is downstream: UI (the Env step) +
-backend (merge into the DO spec + preserve-on-update). Keeps the planner clean
-(consistent with the DECISION above). The env step is free-form on first deploy
-(plan not computed yet) and prefilled from the stored plan on redeploy.
+### Planner impact: NONE — the PLANNER doesn't talk to DO; the ADAPTER does
+Pipeline: `Env step (UI) → planner makes the abstract plan (env NAMES + flags,
+no operator values) → DO adapter (build_app_spec / _build_envs) injects the
+operator's values + merges DO's existing encrypted secrets → _submit_to_digitalocean
+sends the spec to DO`. So the operator's entered values are merged at the
+**adapter/submit layer in plain code**, NOT by the planner and NOT via any LLM
+instruction. The planner needs **no changes**: it already emits the contract
+(`EnvVarSpec`: key/required/secret/value/note); the console already receives it
+(`plan_components[].env`). The env step is free-form on first deploy (plan not
+computed yet) and prefilled from the stored plan on redeploy. (Consistent with the
+DECISION above — planner stays clean.)
 
 ### Build checklist (when greenlit)
 - [ ] backend: preserve-on-update merge of encrypted secrets in
