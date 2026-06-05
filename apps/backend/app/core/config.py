@@ -352,6 +352,31 @@ class Settings(BaseSettings):
     # do not want to burn frontier-tier tokens.
     agent_model_main: str = Field(default="gpt-4o", alias="AGENT_MODEL_MAIN")
     agent_model_fast: str = Field(default="gpt-4o-mini", alias="AGENT_MODEL_FAST")
+
+    # --- Deploy planner: LOCAL-DEV Gemini fallback (DO NOT DEPLOY) --------
+    # ⚠️  TEMPORARY local-only escape hatch. The deploy planner normally
+    # uses Ship's configured agent vendor (OpenAI/Anthropic via
+    # ``pick_default_client``). On a laptop that has neither key, set
+    # ``DEPLOY_PLANNER_GEMINI_API_KEY`` to a personal Gemini key so the
+    # planner can run end-to-end locally. This path is GATED behind
+    # ``DEPLOY_PLANNER_ALLOW_DEV_FALLBACK=true`` and MUST stay off in any
+    # deployed environment. The key value lives only in your gitignored
+    # ``.env`` — never commit it. See DEPLOY_SETUP.md.
+    deploy_planner_gemini_api_key: str | None = Field(
+        default=None, alias="DEPLOY_PLANNER_GEMINI_API_KEY"
+    )
+    deploy_planner_gemini_model: str = Field(
+        default="gemini-2.5-flash", alias="DEPLOY_PLANNER_GEMINI_MODEL"
+    )
+    deploy_planner_allow_dev_fallback: bool = Field(
+        default=False, alias="DEPLOY_PLANNER_ALLOW_DEV_FALLBACK"
+    )
+    # Optional backend-side key for the Mistral deploy-planner vendor.
+    # Used both for BYO planning and for the live model-list lookup that
+    # populates the "New deployment" model dropdown (see
+    # ``services.deploy.model_catalog``). Repo GitHub-secret keys can't be
+    # read back from GitHub, so the dropdown relies on this env key.
+    mistral_api_key: str | None = Field(default=None, alias="MISTRAL_API_KEY")
     # Hard cap on tokens we let the agent spend per turn (prompt + completion
     # combined). Triggers a 429 from the SSE route when exceeded so a runaway
     # tool-loop doesn't silently nuke a tenant's monthly budget.
@@ -473,6 +498,36 @@ class Settings(BaseSettings):
     )
     notion_client_secret: str | None = Field(
         default=None, alias="NOTION_CLIENT_SECRET"
+    )
+
+    # --- DigitalOcean OAuth (deploy provider — App Platform) -------------
+    # Public OAuth Application credentials registered at
+    # https://cloud.digitalocean.com/account/api/applications . Required
+    # for the deploy ``connect/start`` + ``connect/callback`` endpoints;
+    # without them the routes 503 so ops sees a clean misconfiguration
+    # error (same posture as Linear/Notion).
+    digitalocean_client_id: str | None = Field(
+        default=None, alias="DIGITALOCEAN_CLIENT_ID"
+    )
+    digitalocean_client_secret: str | None = Field(
+        default=None, alias="DIGITALOCEAN_CLIENT_SECRET"
+    )
+    # Space-separated OAuth scopes. ``write`` is required to create and
+    # manage App Platform apps; ``read`` lets us poll deployment status.
+    # DigitalOcean only offers these two coarse scopes today.
+    digitalocean_oauth_scopes: str = Field(
+        default="read write",
+        alias="DIGITALOCEAN_OAUTH_SCOPES",
+    )
+    # DigitalOcean access tokens expire after 30 days and ship a
+    # single-use refresh token. This cron cadence rotates the
+    # access+refresh pair well before expiry; 24h leaves ~29 days of
+    # head-room and many retry windows before a token would ever lapse.
+    digitalocean_token_refresh_hours: int = Field(
+        default=24,
+        ge=1,
+        le=168,
+        alias="DIGITALOCEAN_TOKEN_REFRESH_HOURS",
     )
 
     # --- Telegram bot adapter (group ↔ workspace bridge) ------------------

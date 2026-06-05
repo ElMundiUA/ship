@@ -4316,3 +4316,303 @@ export function rerunLocalCiRun(
     { method: "POST", token },
   );
 }
+
+// ---------------------------------------------------------------------------
+// Deploy
+// ---------------------------------------------------------------------------
+
+export type ApiDeploymentStatus =
+  | "pending"
+  | "planning"
+  | "deploying"
+  | "active"
+  | "failed"
+  | "cancelled"
+  | "deleted";
+
+export interface ApiDeployment {
+  id: string;
+  workspace_id: string;
+  repo_id: string;
+  repo_full_name: string | null;
+  provider: string;
+  status: ApiDeploymentStatus;
+  status_detail: string | null;
+  live_url: string | null;
+  healthy: boolean | null;
+  error_message: string | null;
+  /** Coarse failure category; "github_access" = private repo unreachable by DO. */
+  error_kind: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  created_at: string;
+  updated_at: string;
+  plan_summary: string | null;
+  version: number | null;
+  redeployed_from_id: string | null;
+  redeployed_from_version: number | null;
+  rolled_back_from_id: string | null;
+  rolled_back_from_version: number | null;
+  can_provider_rollback: boolean;
+  /** Git commit this version shipped (pinned at deploy, best-effort). */
+  commit_sha: string | null;
+  commit_message: string | null;
+  commit_author: string | null;
+  committed_at: string | null;
+  /** Full stored planner output with secret env values masked. */
+  plan_debug: Record<string, unknown> | null;
+  /** Per-component breakdown of the planner's DeployPlan (secret env values masked). */
+  plan_components: ApiDeployComponent[];
+  /** DigitalOcean's own monthly cost estimate (USD) for this spec, or null. */
+  estimated_monthly_usd: number | null;
+  /** Operator-supplied env metadata; secret values are never returned. */
+  operator_env: ApiDeploymentEnvSetting[];
+}
+
+export interface ApiDeploymentEnvSetting {
+  key: string;
+  value: string | null;
+  secret: boolean;
+  set: boolean;
+}
+
+export interface ApiDeploymentEnvInput {
+  key: string;
+  value: string;
+  secret: boolean;
+}
+
+export interface ApiDeployComponent {
+  name: string;
+  kind: string;
+  runtime: string | null;
+  source_dir: string | null;
+  http_port: number | null;
+  routes: string[];
+  health_check_path: string | null;
+  dockerfile_path: string | null;
+  env: { key: string; value: string | null; secret: boolean; required: boolean }[];
+}
+
+export function triggerDeploy(
+  workspaceId: string,
+  repoId: string,
+  llm?: { provider?: string; model?: string; apiKey?: string } | null,
+  env?: ApiDeploymentEnvInput[],
+  token?: string,
+): Promise<ApiDeployment> {
+  return apiFetch<ApiDeployment>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/deploy`,
+    {
+      method: "POST",
+      body: llm
+        ? {
+            llm_provider: llm.provider,
+            llm_model: llm.model,
+            llm_api_key: llm.apiKey,
+            env,
+          }
+        : { env },
+      token,
+    },
+  );
+}
+
+export function getDeployment(
+  workspaceId: string,
+  deploymentId: string,
+  token?: string,
+): Promise<ApiDeployment> {
+  return apiFetch<ApiDeployment>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/deployments/${encodeURIComponent(deploymentId)}`,
+    { token },
+  );
+}
+
+export function redeployVersion(
+  workspaceId: string,
+  deploymentId: string,
+  env?: ApiDeploymentEnvInput[],
+  token?: string,
+): Promise<ApiDeployment> {
+  return apiFetch<ApiDeployment>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/deployments/${encodeURIComponent(deploymentId)}/redeploy`,
+    { method: "POST", body: { env }, token },
+  );
+}
+
+export function rollbackVersion(
+  workspaceId: string,
+  deploymentId: string,
+  token?: string,
+): Promise<ApiDeployment> {
+  return apiFetch<ApiDeployment>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/deployments/${encodeURIComponent(deploymentId)}/rollback`,
+    { method: "POST", body: {}, token },
+  );
+}
+
+export type DeployLogType = "BUILD" | "DEPLOY" | "RUN";
+
+export interface ApiDeployLogs {
+  type: string;
+  text: string;
+  truncated: boolean;
+}
+
+export function getDeploymentLogs(
+  workspaceId: string,
+  deploymentId: string,
+  type: DeployLogType,
+  token?: string,
+): Promise<ApiDeployLogs> {
+  return apiFetch<ApiDeployLogs>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/deployments/${encodeURIComponent(deploymentId)}/logs?type=${type}`,
+    { token },
+  );
+}
+
+export function listWorkspaceDeployments(
+  workspaceId: string,
+  token?: string,
+): Promise<ApiDeployment[]> {
+  return apiFetch<ApiDeployment[]>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/deployments`,
+    { token },
+  );
+}
+
+export interface ApiDeployProvider {
+  provider: string;
+  label: string;
+  connected: boolean;
+  connect_start_path: string | null;
+}
+
+export function listDeployProviders(
+  workspaceId: string,
+  token?: string,
+): Promise<ApiDeployProvider[]> {
+  return apiFetch<ApiDeployProvider[]>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/deploy/providers`,
+    { token },
+  );
+}
+
+export interface ApiDeployPlannerOptions {
+  providers: string[];
+  missing: string[];
+}
+
+export function getDeployPlannerOptions(
+  workspaceId: string,
+  repoId: string,
+  token?: string,
+): Promise<ApiDeployPlannerOptions> {
+  return apiFetch<ApiDeployPlannerOptions>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/deploy/planner-options`,
+    { token },
+  );
+}
+
+export interface ApiDeployPlannerModels {
+  provider: string;
+  models: string[];
+  default_model: string;
+  /** "live" = from the provider API, "fallback" = curated list. */
+  source: string;
+  error: string | null;
+}
+
+export function getDeployPlannerModels(
+  workspaceId: string,
+  repoId: string,
+  provider: string,
+  apiKey?: string,
+  token?: string,
+): Promise<ApiDeployPlannerModels> {
+  return apiFetch<ApiDeployPlannerModels>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/deploy/planner-models`,
+    {
+      method: "POST",
+      token,
+      body: { provider, api_key: apiKey || undefined },
+    },
+  );
+}
+
+export interface ApiDeployPlannerPref {
+  provider: string | null;
+  model: string | null;
+}
+
+/** Persist the repo's deploy-planner preference (provider + model). */
+export function setDeployPlannerPref(
+  workspaceId: string,
+  repoId: string,
+  pref: { provider: string | null; model: string | null },
+  token?: string,
+): Promise<ApiDeployPlannerPref> {
+  return apiFetch<ApiDeployPlannerPref>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/deploy/planner-pref`,
+    { method: "PUT", token, body: pref },
+  );
+}
+
+/** Start the DigitalOcean OAuth connect; returns the URL to redirect to. */
+export function startDigitalOceanConnect(
+  workspaceId: string,
+  returnPath?: string,
+  token?: string,
+): Promise<{ install_url: string; state: string }> {
+  const qs = new URLSearchParams({ workspace_id: workspaceId });
+  if (returnPath) qs.set("return_path", returnPath);
+  return apiFetch<{ install_url: string; state: string }>(
+    `/v1/integrations/digitalocean/install/start?${qs.toString()}`,
+    { method: "POST", token },
+  );
+}
+
+export interface ApiDeployEvent {
+  kind: string;
+  message: string;
+  created_at: string;
+}
+
+export function listAppEvents(
+  workspaceId: string,
+  repoId: string,
+  token?: string,
+): Promise<ApiDeployEvent[]> {
+  return apiFetch<ApiDeployEvent[]>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/deploy/events`,
+    { token },
+  );
+}
+
+export function teardownDeployment(
+  workspaceId: string,
+  repoId: string,
+  token?: string,
+): Promise<{
+  ok: boolean;
+  deleted_app_ids: string[];
+  removed: number;
+  soft_deleted: number;
+}> {
+  return apiFetch(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/deploy`,
+    { method: "DELETE", token },
+  );
+}
+
+export function listRepoDeployments(
+  workspaceId: string,
+  repoId: string,
+  token?: string,
+): Promise<ApiDeployment[]> {
+  return apiFetch<ApiDeployment[]>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/deployments`,
+    { token },
+  );
+}

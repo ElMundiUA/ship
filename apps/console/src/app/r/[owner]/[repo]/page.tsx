@@ -180,6 +180,8 @@ function renderMock(slug: string, tab: Tab, opsWindow: OpsReportWindow = "24h") 
             preset: null,
             installed_bundle_version: null,
             current_bundle_version: "0.6",
+            deploy_planner_provider: null,
+            deploy_planner_model: null,
           } as ApiActivatedRepo
         }
         base={base}

@@ -105,6 +105,38 @@ AGENT_SECRET_CATALOG: tuple[AgentSecretSpec, ...] = (
         ),
     ),
     AgentSecretSpec(
+        slug="llm-openai",
+        label="LLM API key (OpenAI)",
+        secret_name="OPENAI_API_KEY",
+        vendor_url="https://platform.openai.com/api-keys",
+        description="Optional. Usable by deployment planning and future AI workflows.",
+    ),
+    AgentSecretSpec(
+        slug="llm-anthropic",
+        label="LLM API key (Anthropic)",
+        secret_name="ANTHROPIC_API_KEY",
+        vendor_url="https://console.anthropic.com/settings/keys",
+        description="Optional. Usable by deployment planning and future AI workflows.",
+    ),
+    AgentSecretSpec(
+        slug="llm-gemini",
+        label="LLM API key (Gemini)",
+        secret_name="GEMINI_API_KEY",
+        vendor_url="https://aistudio.google.com/app/apikey",
+        description=(
+            "Optional. Usable by deployment planning and future AI workflows."
+        ),
+    ),
+    AgentSecretSpec(
+        slug="llm-mistral",
+        label="LLM API key (Mistral)",
+        secret_name="MISTRAL_API_KEY",
+        vendor_url="https://console.mistral.ai/api-keys",
+        description=(
+            "Optional. Usable by deployment planning and future AI workflows."
+        ),
+    ),
+    AgentSecretSpec(
         slug="copilot",
         label="GitHub Copilot",
         secret_name=None,
@@ -125,7 +157,15 @@ _CATALOG_BY_SLUG: dict[str, AgentSecretSpec] = {
 # Slugs whose GitHub secrets are mutually substitutable for the wizard:
 # pick **one** vendor key for the agent you use (or skip all if Copilot).
 _LLM_VENDOR_SLUGS: frozenset[str] = frozenset(
-    {"claude-md", "cursor-cloud", "codex"}
+    {
+        "claude-md",
+        "cursor-cloud",
+        "codex",
+        "llm-openai",
+        "llm-anthropic",
+        "llm-gemini",
+        "llm-mistral",
+    }
 )
 
 

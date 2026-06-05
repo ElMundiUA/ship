@@ -27,6 +27,8 @@ from backend.app.services.cron import (
     register_cron,
 )
 from backend.app.db.models.tenancy import Workspace
+from backend.app.services.deploy.health import recheck_active_deployments
+from backend.app.services.deploy.reconcile import reconcile_active_deployments
 from backend.app.services.knowledge_claim_extractor import (
     extract_pending_workspace,
 )
@@ -666,6 +668,62 @@ def register_all() -> None:
         cron_expr="*/15 * * * *",  # every 15 min — drains deferred seed merges fast
         job_id="seed_auto_merge",
     )
+    register_cron(
+        fn=_deployments_health_tick,
+        cron_expr="*/15 * * * *",  # every 15 min — re-probe live deployment health
+        job_id="deployments_health",
+    )
+    register_cron(
+        fn=_deployments_reconcile_tick,
+        cron_expr="*/30 * * * *",  # every 30 min — detect apps removed on DO
+        job_id="deployments_reconcile",
+    )
+
+
+@cron_with_lock(
+    lock=CronLockId.DEPLOYMENTS_RECONCILE, name="deployments_reconcile"
+)
+async def _deployments_reconcile_tick() -> None:
+    """Every 30 min: detect deployments whose DO app was removed externally
+    and flip them to red + an activity event (no stale green cards)."""
+    sm = get_sessionmaker()
+    async with sm() as session:
+        try:
+            checked, drifted = await reconcile_active_deployments(session)
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            log.exception("deployments_reconcile tick failed")
+            return
+    if checked:
+        log.info(
+            "deployments_reconcile tick: checked=%d drifted=%d", checked, drifted
+        )
+
+
+@cron_with_lock(lock=CronLockId.DEPLOYMENTS_HEALTH, name="deployments_health")
+async def _deployments_health_tick() -> None:
+    """Every 15 min: re-probe the healthcheck of every ACTIVE deployment.
+
+    Keeps the ``healthy`` flag on the Deployments cards honest even when no
+    one has the console open — a site that goes down later flips the dot to
+    red on the next tick (and back to green when it recovers).
+    """
+    sm = get_sessionmaker()
+    async with sm() as session:
+        try:
+            checked, changed = await recheck_active_deployments(session)
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            log.exception("deployments_health tick failed")
+            return
+    if checked:
+        log.info(
+            "deployments_health tick: urls_checked=%d rows_changed=%d",
+            checked,
+            changed,
+        )
 
 
 @cron_with_lock(lock=CronLockId.INBOX_STALE_SWEEP, name="inbox_stale_sweep")

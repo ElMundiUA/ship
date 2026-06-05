@@ -152,6 +152,18 @@ class CronLockId(IntEnum):
     # (older-bundle) seed PR. See :mod:`seed_auto_merge`.
     SEED_AUTO_MERGE = 1022
 
+    # Deploy health monitor (2026-06-01). Every 15 min, re-probe the
+    # healthcheck of every ACTIVE deployment's live URL and update the
+    # ``healthy`` flag so the Deployments cards reflect real liveness even
+    # when no one has the console open. See :mod:`services.deploy.health`.
+    DEPLOYMENTS_HEALTH = 1023
+
+    # Deploy reconcile (2026-06-01). Every 30 min, detect drift between our
+    # deployment rows and the provider's real apps: an ACTIVE app that
+    # vanished from DigitalOcean flips to red + an activity event, so cards
+    # never show a stale green. See :mod:`services.deploy.reconcile`.
+    DEPLOYMENTS_RECONCILE = 1024
+
 
 # ---------------------------------------------------------------------------
 # Decorator

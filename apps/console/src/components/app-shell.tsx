@@ -81,6 +81,7 @@ function buildWorkspaceNav(inboxActionableCount?: number | null): NavGroup[] {
         { href: "/knowledge", label: "Knowledge", icon: <DotIcon /> },
         { href: "/settings/policy", label: "Policies", icon: <DotIcon /> },
         { href: "/audit", label: "Audit", icon: <DotIcon /> },
+        { href: "/deployments", label: "Deployments", icon: <DotIcon /> },
       ],
     },
   ];
