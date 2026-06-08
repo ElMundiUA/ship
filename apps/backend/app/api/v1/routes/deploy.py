@@ -1112,7 +1112,24 @@ async def trigger_deploy(
             ]
             if pending_env:
                 dep.provider_ref["pending_operator_env"] = pending_env
+            # ``updated_at`` carries a server-side ``onupdate=now()``: a plain
+            # flush emits the UPDATE and then EXPIRES this attribute (the new
+            # server value is not read back). The synchronous serializer
+            # (``_to_out``) would later touch ``dep.updated_at`` and trigger a
+            # lazy refresh from sync code → ``greenlet_spawn`` 500. Set it
+            # explicitly (as the manual + dispatch-failure paths do) so the
+            # attribute stays populated and no lazy IO is needed.
+            dep.updated_at = datetime.now(timezone.utc)
             await session.flush()
+            # Make the row durable BEFORE firing the GitHub Actions workflow.
+            # The planner runs asynchronously in the user's repo and posts the
+            # plan back to ``/plan-result``, which 404s ("Deployment not
+            # found") unless this row is committed. Without this commit, ANY
+            # error after dispatch (e.g. response serialization) would roll the
+            # row back and strand the already-dispatched run, which then fails
+            # its callback. ``expire_on_commit`` is False, so ``dep`` stays
+            # usable for the response below.
+            await session.commit()
             # Resolve the model the Actions planner should use. When the
             # operator didn't pick one (modal or saved preference), pin the
             # backend's current default for the provider rather than leaving
