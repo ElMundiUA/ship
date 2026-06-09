@@ -4343,6 +4343,8 @@ export interface ApiDeployment {
   error_message: string | null;
   /** Coarse failure category; "github_access" = private repo unreachable by DO. */
   error_kind: string | null;
+  /** DigitalOcean region slug this app was deployed to (for redeploy pre-fill). */
+  region?: string | null;
   started_at: string | null;
   finished_at: string | null;
   created_at: string;
@@ -4400,19 +4402,20 @@ export function triggerDeploy(
   llm?: { provider?: string; model?: string; apiKey?: string } | null,
   env?: ApiDeploymentEnvInput[],
   token?: string,
+  region?: string,
 ): Promise<ApiDeployment> {
+  const body: Record<string, unknown> = { env };
+  if (llm) {
+    body.llm_provider = llm.provider;
+    body.llm_model = llm.model;
+    body.llm_api_key = llm.apiKey;
+  }
+  if (region) body.region = region;
   return apiFetch<ApiDeployment>(
     `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/deploy`,
     {
       method: "POST",
-      body: llm
-        ? {
-            llm_provider: llm.provider,
-            llm_model: llm.model,
-            llm_api_key: llm.apiKey,
-            env,
-          }
-        : { env },
+      body,
       token,
     },
   );
@@ -4448,6 +4451,17 @@ export function rollbackVersion(
 ): Promise<ApiDeployment> {
   return apiFetch<ApiDeployment>(
     `/v1/workspaces/${encodeURIComponent(workspaceId)}/deployments/${encodeURIComponent(deploymentId)}/rollback`,
+    { method: "POST", body: {}, token },
+  );
+}
+
+export function cancelDeployment(
+  workspaceId: string,
+  deploymentId: string,
+  token?: string,
+): Promise<ApiDeployment> {
+  return apiFetch<ApiDeployment>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/deployments/${encodeURIComponent(deploymentId)}/cancel`,
     { method: "POST", body: {}, token },
   );
 }

@@ -44,15 +44,31 @@ const ALL_PLANNER_PROVIDERS = ["gemini", "openai", "anthropic", "mistral"];
 // New-deployment wizard steps, in order. Each gate must pass before the
 // stepper lets the operator advance, so they can't (e.g.) try to authorize
 // GitHub before DigitalOcean is connected.
-const DEPLOY_STEPS = ["repo", "digitalocean", "env", "planner", "deploy"] as const;
+const DEPLOY_STEPS = ["repo", "digitalocean", "region", "env", "planner", "deploy"] as const;
 type DeployStep = (typeof DEPLOY_STEPS)[number];
 const DEPLOY_STEP_LABELS: Record<DeployStep, string> = {
   repo: "Repository",
   digitalocean: "Connect DigitalOcean",
+  region: "Region",
   env: "Environment",
   planner: "Deploy planner",
   deploy: "Deploy",
 };
+// DigitalOcean App Platform regions offered in the wizard (slug → label). The
+// region is fixed at app creation; the default (nyc) matches DO's own default.
+const DEPLOY_REGIONS: { slug: string; label: string }[] = [
+  { slug: "nyc", label: "New York · NYC" },
+  { slug: "sfo", label: "San Francisco · SFO" },
+  { slug: "atl", label: "Atlanta · ATL" },
+  { slug: "ric", label: "Richmond · RIC" },
+  { slug: "ams", label: "Amsterdam · AMS" },
+  { slug: "fra", label: "Frankfurt · FRA" },
+  { slug: "lon", label: "London · LON" },
+  { slug: "tor", label: "Toronto · TOR" },
+  { slug: "blr", label: "Bangalore · BLR" },
+  { slug: "sgp", label: "Singapore · SGP" },
+  { slug: "syd", label: "Sydney · SYD" },
+];
 const SECRET_SET_PLACEHOLDER = "•••set";
 
 type EnvDraft = {
@@ -202,15 +218,24 @@ const repoVisibilityUrl = (fullName: string | null) =>
  * the next click (authorize, or make public, then redeploy). Calm blue tone,
  * no red. Only used reactively now (no proactive pre-deploy warning).
  */
-function PrivateRepoHelp({ repoFullName }: { repoFullName: string | null }) {
+function PrivateRepoHelp({
+  repoFullName,
+  onRedeploy,
+  redeploying,
+}: {
+  repoFullName: string | null;
+  onRedeploy: () => void;
+  redeploying: boolean;
+}) {
   return (
     <div className="rounded-lg border border-blue-500/30 bg-blue-500/[0.07] px-3 py-2.5 text-xs">
       <p className="font-semibold text-white/90">
         One more step — let DigitalOcean read this repo
       </p>
       <p className="mt-1 text-white/55">
-        It&apos;s private, so DigitalOcean needs read access to build it. One
-        click, then redeploy:
+        It&apos;s private, so DigitalOcean needs read access to build it.
+        Authorize on GitHub, then redeploy right here — no need to redo the
+        wizard:
       </p>
       <div className="mt-2 flex flex-wrap gap-2">
         <a
@@ -221,6 +246,14 @@ function PrivateRepoHelp({ repoFullName }: { repoFullName: string | null }) {
         >
           Authorize DigitalOcean →
         </a>
+        <button
+          type="button"
+          onClick={onRedeploy}
+          disabled={redeploying}
+          className="rounded-md border border-emerald-500/40 px-2.5 py-1.5 text-[11px] font-semibold text-emerald-300 transition hover:bg-emerald-500/10 disabled:opacity-50"
+        >
+          {redeploying ? "Redeploying…" : "I've authorized — Redeploy"}
+        </button>
         <a
           href={repoVisibilityUrl(repoFullName)}
           target="_blank"
@@ -231,8 +264,9 @@ function PrivateRepoHelp({ repoFullName }: { repoFullName: string | null }) {
         </a>
       </div>
       <p className="mt-2 text-[10px] text-white/35">
-        Authorizing opens GitHub (you&apos;re already signed in there). Once
-        DigitalOcean has access, hit Redeploy — that&apos;s the whole fix.
+        Authorizing opens GitHub in a new tab and then hands you off to a
+        DigitalOcean screen — you can close that and come back here. Your plan
+        is saved, so Redeploy ships it without re-running the wizard.
       </p>
     </div>
   );
@@ -391,6 +425,10 @@ export default function DeploymentsClient({ workspaceId }: { workspaceId: string
   const [modalInitialEnvRows, setModalInitialEnvRows] = useState<EnvDraft[] | null>(
     null,
   );
+  // Region to pre-fill the wizard with on a redeploy (the app's current
+  // region) so a plain redeploy doesn't accidentally migrate it. null = new
+  // deploy → the wizard defaults to nyc.
+  const [modalInitialRegion, setModalInitialRegion] = useState<string | null>(null);
   // Set when we land back from the DigitalOcean OAuth connect (returnPath
   // deep-link); the wizard reopens at the DO step once data has loaded.
   const [pendingConnectRepo, setPendingConnectRepo] = useState<string | null>(null);
@@ -498,9 +536,17 @@ export default function DeploymentsClient({ workspaceId }: { workspaceId: string
   }, [pendingConnectRepo, loading]);
 
   const handleRedeploy = (repoId: string, current?: ApiDeployment) => {
+    // Redeploy reopens the wizard at the Deploy-planner step (not the final
+    // review) with this deployment pre-filled (repo / env / region). The
+    // planner is the one thing that ISN'T fully restorable — a manual LLM key
+    // is never stored, so landing here lets the operator see/fix the planner
+    // (e.g. re-enter a manual key) before the last two steps, instead of
+    // discovering it only at deploy time. They can still step back to any
+    // earlier field.
     setModalRepoId(repoId);
-    setModalInitialStep(0);
+    setModalInitialStep(DEPLOY_STEPS.indexOf("planner"));
     setModalInitialEnvRows(current ? deploymentEnvRows(current) : null);
+    setModalInitialRegion(current?.region ?? null);
     setModalOpen(true);
   };
 
@@ -530,6 +576,20 @@ export default function DeploymentsClient({ workspaceId }: { workspaceId: string
     if (!res.ok) return false;
     const dep: ApiDeployment = await res.json();
     setDeployments((prev) => [dep, ...prev]);
+    return true;
+  };
+
+  // Stop a deploy stuck before any DO app exists (e.g. an Actions-planned
+  // deploy whose callback never arrives). Updates the row in place.
+  const handleCancel = async (deploymentId: string): Promise<boolean> => {
+    const res = await fetch(`/api/deploy/cancel`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ workspaceId, deploymentId }),
+    });
+    if (!res.ok) return false;
+    const dep: ApiDeployment = await res.json();
+    setDeployments((prev) => prev.map((d) => (d.id === dep.id ? dep : d)));
     return true;
   };
 
@@ -580,6 +640,7 @@ export default function DeploymentsClient({ workspaceId }: { workspaceId: string
             setModalRepoId(null);
             setModalInitialStep(0);
             setModalInitialEnvRows(null);
+            setModalInitialRegion(null);
             setModalOpen(true);
           }}
           className="rounded-full bg-blue-600 px-4 py-1.5 text-xs font-semibold text-white transition hover:bg-blue-500"
@@ -610,6 +671,7 @@ export default function DeploymentsClient({ workspaceId }: { workspaceId: string
               onRedeployVersion={handleRedeployVersion}
               onRollbackVersion={handleRollbackVersion}
               onRecheck={() => handleRecheck(g.current.id)}
+              onCancel={() => handleCancel(g.current.id)}
               onDelete={() => handleDelete(g.repoId)}
             />
           ))}
@@ -624,6 +686,7 @@ export default function DeploymentsClient({ workspaceId }: { workspaceId: string
           initialRepoId={modalRepoId}
           initialStep={modalInitialStep}
           initialEnvRows={modalInitialEnvRows}
+          initialRegion={modalInitialRegion}
           onClose={() => setModalOpen(false)}
           onDeployed={(dep) => {
             setDeployments((prev) => [dep, ...prev]);
@@ -649,6 +712,7 @@ function AppCard({
   onRedeployVersion,
   onRollbackVersion,
   onRecheck,
+  onCancel,
   onDelete,
 }: {
   workspaceId: string;
@@ -662,6 +726,7 @@ function AppCard({
   ) => Promise<boolean>;
   onRollbackVersion: (deploymentId: string) => Promise<boolean>;
   onRecheck: () => void;
+  onCancel: () => Promise<boolean>;
   onDelete: () => Promise<boolean>;
 }) {
   const [tab, setTab] = useState<CardTab>("overview");
@@ -672,6 +737,7 @@ function AppCard({
   const [redeployingId, setRedeployingId] = useState<string | null>(null);
   const [rollingBackId, setRollingBackId] = useState<string | null>(null);
   const [versionError, setVersionError] = useState<string | null>(null);
+  const [cancelling, setCancelling] = useState(false);
   const [envRows, setEnvRows] = useState<EnvDraft[]>(() =>
     deploymentEnvRows(group.current),
   );
@@ -725,13 +791,12 @@ function AppCard({
     }
   };
 
-  const redeploy = async () => {
-    setBusy(true);
-    try {
-      onRedeploy();
-    } finally {
-      setBusy(false);
-    }
+  const redeploy = () => {
+    // Reopen the wizard at the review (last) step with this deployment's
+    // repo / region / env pre-filled — the operator can eyeball it or step
+    // back to any field before confirming, which also guards an accidental
+    // click. (The final Deploy re-runs the normal deploy.)
+    onRedeploy();
   };
 
   const saveEnv = async () => {
@@ -835,6 +900,25 @@ function AppCard({
           </div>
         </div>
 
+        {(cur.status === "planning" || cur.status === "pending") && (
+          <span
+            onClick={(e) => {
+              e.stopPropagation();
+              if (cancelling) return;
+              setCancelling(true);
+              void onCancel().finally(() => setCancelling(false));
+            }}
+            title="Stop this deploy — it's stuck before any DigitalOcean app was created"
+            className={[
+              "rounded-full px-3 py-1 text-[11px] font-semibold transition",
+              cancelling
+                ? "cursor-not-allowed bg-red-500/10 text-red-300/50"
+                : "cursor-pointer bg-red-500/15 text-red-300 hover:bg-red-500/25",
+            ].join(" ")}
+          >
+            {cancelling ? "Stopping…" : "Stop"}
+          </span>
+        )}
         <span
           onClick={(e) => {
             e.stopPropagation();
@@ -998,7 +1082,11 @@ function AppCard({
               )}
               {cur.error_kind === "github_access" && (
                 <div className="mt-1">
-                  <PrivateRepoHelp repoFullName={cur.repo_full_name} />
+                  <PrivateRepoHelp
+                    repoFullName={cur.repo_full_name}
+                    onRedeploy={redeploy}
+                    redeploying={busy}
+                  />
                 </div>
               )}
             </dl>
@@ -1600,6 +1688,7 @@ function NewDeploymentModal({
   initialRepoId,
   initialStep = 0,
   initialEnvRows,
+  initialRegion,
   onClose,
   onDeployed,
   onProvidersChanged,
@@ -1612,6 +1701,9 @@ function NewDeploymentModal({
   // DigitalOcean step after the OAuth connect round-trip.
   initialStep?: number;
   initialEnvRows?: EnvDraft[] | null;
+  // Region to pre-select (the app's current region on a redeploy). Undefined
+  // / null on a new deploy → defaults to nyc.
+  initialRegion?: string | null;
   onClose: () => void;
   onDeployed: (dep: ApiDeployment) => void;
   onProvidersChanged: (p: ApiDeployProvider[]) => void;
@@ -1638,6 +1730,11 @@ function NewDeploymentModal({
   // of the repo's configured key. Hidden behind a toggle so the common
   // case stays a clean provider + model picker.
   const [manualLlm, setManualLlm] = useState(false);
+  // DigitalOcean region for a NEW app (fixed at app creation). Default nyc.
+  // Region the app runs in. Pre-filled to the app's current region on a
+  // redeploy (so a plain redeploy doesn't move it); picking a different one on
+  // an existing app migrates it on deploy (a managed DB, if any, stays put).
+  const [region, setRegion] = useState(initialRegion ?? "nyc");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Wizard step index into DEPLOY_STEPS.
@@ -1903,6 +2000,7 @@ function NewDeploymentModal({
           llmProvider: plannerProvider || undefined,
           llmModel: plannerModel.trim() || undefined,
           llmApiKey: plannerApiKey.trim() || undefined,
+          region,
           env: cleanEnvRows(deployEnvRows),
         }),
       });
@@ -2071,6 +2169,38 @@ function NewDeploymentModal({
           </div>
         )}
 
+        {/* ── Region ──────────────────────────────────────────── */}
+        {stepKey === "region" && (
+          <div className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2">
+            <div className="text-[11px] font-semibold uppercase tracking-wider text-white/45">
+              Region
+            </div>
+            <p className="mt-1 text-xs text-white/50">
+              Where DigitalOcean runs your app. Pick the region closest to your
+              users.
+            </p>
+            <select
+              value={region}
+              onChange={(e) => setRegion(e.target.value)}
+              className="mt-2 w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none"
+            >
+              {DEPLOY_REGIONS.map((r) => (
+                <option key={r.slug} value={r.slug} className="bg-[#0e1015]">
+                  {r.label}
+                </option>
+              ))}
+            </select>
+            {initialRegion && region !== initialRegion && (
+              <p className="mt-2 text-[11px] text-amber-200">
+                Changing the region migrates this app to{" "}
+                {DEPLOY_REGIONS.find((r) => r.slug === region)?.label ?? region}{" "}
+                on deploy. A managed database (if any) stays in the old region —
+                move it separately.
+              </p>
+            )}
+          </div>
+        )}
+
         {/* ── Step 3 · Environment ────────────────────────────── */}
         {stepKey === "env" && (
           <div className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2">
@@ -2234,6 +2364,12 @@ function NewDeploymentModal({
                 <span className="text-white/45">Repository</span>
                 <span className="truncate text-white">
                   {selectedRepo?.full_name ?? "—"}
+                </span>
+              </div>
+              <div className="mt-1 flex justify-between gap-2">
+                <span className="text-white/45">Region</span>
+                <span className="text-white">
+                  {DEPLOY_REGIONS.find((r) => r.slug === region)?.label ?? region}
                 </span>
               </div>
               <div className="mt-1 flex justify-between gap-2">

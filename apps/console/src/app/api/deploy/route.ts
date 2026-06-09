@@ -22,6 +22,7 @@ export async function POST(request: Request) {
     llmProvider?: string;
     llmModel?: string;
     llmApiKey?: string;
+    region?: string;
     env?: { key: string; value: string; secret: boolean }[];
   };
   try {
@@ -58,6 +59,7 @@ export async function POST(request: Request) {
       llm,
       body.env ?? [],
       token,
+      body.region,
     );
     return NextResponse.json(data, { status: 202 });
   } catch (err) {
