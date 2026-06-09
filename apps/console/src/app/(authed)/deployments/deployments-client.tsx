@@ -866,6 +866,14 @@ function AppCard({
             <span>{group.provider}</span>
             <span>·</span>
             <span>{relTime(cur.created_at)}</span>
+            {cur.region && (
+              <>
+                <span>·</span>
+                <span className="uppercase" title="DigitalOcean region">
+                  {cur.region}
+                </span>
+              </>
+            )}
             {cur.live_url && cur.status === "active" && (
               <>
                 <span>·</span>
