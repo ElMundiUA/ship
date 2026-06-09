@@ -1501,6 +1501,46 @@ async def get_deployment(
 
 
 @router.post(
+    "/workspaces/{workspace_id}/deployments/{deployment_id}/cancel",
+    response_model=ApiDeploymentOut,
+)
+async def cancel_deployment(
+    workspace_id: uuid.UUID,
+    deployment_id: uuid.UUID,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+) -> ApiDeploymentOut:
+    """Stop a deploy that's stuck before any DigitalOcean app exists.
+
+    The main case: an Actions-planned deploy sits in ``planning`` because the
+    GitHub workflow's ``/plan-result`` callback never arrives (e.g. a local
+    backend GitHub can't reach). We only cancel ``pending``/``planning`` rows —
+    no DO app has been created yet, so there's nothing to tear down or orphan.
+    A late callback is harmless: it no-ops on a terminal row. (A ``deploying``
+    row already has a DO app; use Delete for that, not cancel.)
+    """
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+    dep = await session.get(Deployment, deployment_id)
+    if dep is None or dep.workspace_id != workspace_id:
+        raise HTTPException(status_code=404, detail="Deployment not found")
+    if dep.status in (DS.PENDING, DS.PLANNING):
+        dep.status = DS.CANCELLED
+        dep.status_detail = "cancelled"
+        dep.error_message = "Deploy stopped before it finished (canceled)."
+        dep.finished_at = datetime.now(timezone.utc)
+        dep.updated_at = datetime.now(timezone.utc)
+        await _event(
+            session,
+            dep,
+            DeploymentEventKind.DEPLOY_FAILED,
+            "Deploy canceled before it finished.",
+        )
+        await session.flush()
+    names = await _repo_name_map(session, [dep.repo_id])
+    return await _to_out_async(session, dep, repo_full_name=names.get(dep.repo_id))
+
+
+@router.post(
     "/workspaces/{workspace_id}/deployments/{deployment_id}/redeploy",
     response_model=ApiDeploymentOut,
 )

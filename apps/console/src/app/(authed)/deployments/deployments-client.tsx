@@ -536,12 +536,15 @@ export default function DeploymentsClient({ workspaceId }: { workspaceId: string
   }, [pendingConnectRepo, loading]);
 
   const handleRedeploy = (repoId: string, current?: ApiDeployment) => {
-    // Redeploy reopens the wizard at the review (last) step with this
-    // deployment pre-filled (repo / env / region) — the operator can step
-    // back to verify or change any field, then confirm. Guards an accidental
-    // redeploy and keeps everything visible before re-shipping.
+    // Redeploy reopens the wizard at the Deploy-planner step (not the final
+    // review) with this deployment pre-filled (repo / env / region). The
+    // planner is the one thing that ISN'T fully restorable — a manual LLM key
+    // is never stored, so landing here lets the operator see/fix the planner
+    // (e.g. re-enter a manual key) before the last two steps, instead of
+    // discovering it only at deploy time. They can still step back to any
+    // earlier field.
     setModalRepoId(repoId);
-    setModalInitialStep(DEPLOY_STEPS.length - 1);
+    setModalInitialStep(DEPLOY_STEPS.indexOf("planner"));
     setModalInitialEnvRows(current ? deploymentEnvRows(current) : null);
     setModalInitialRegion(current?.region ?? null);
     setModalOpen(true);
@@ -573,6 +576,20 @@ export default function DeploymentsClient({ workspaceId }: { workspaceId: string
     if (!res.ok) return false;
     const dep: ApiDeployment = await res.json();
     setDeployments((prev) => [dep, ...prev]);
+    return true;
+  };
+
+  // Stop a deploy stuck before any DO app exists (e.g. an Actions-planned
+  // deploy whose callback never arrives). Updates the row in place.
+  const handleCancel = async (deploymentId: string): Promise<boolean> => {
+    const res = await fetch(`/api/deploy/cancel`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ workspaceId, deploymentId }),
+    });
+    if (!res.ok) return false;
+    const dep: ApiDeployment = await res.json();
+    setDeployments((prev) => prev.map((d) => (d.id === dep.id ? dep : d)));
     return true;
   };
 
@@ -654,6 +671,7 @@ export default function DeploymentsClient({ workspaceId }: { workspaceId: string
               onRedeployVersion={handleRedeployVersion}
               onRollbackVersion={handleRollbackVersion}
               onRecheck={() => handleRecheck(g.current.id)}
+              onCancel={() => handleCancel(g.current.id)}
               onDelete={() => handleDelete(g.repoId)}
             />
           ))}
@@ -694,6 +712,7 @@ function AppCard({
   onRedeployVersion,
   onRollbackVersion,
   onRecheck,
+  onCancel,
   onDelete,
 }: {
   workspaceId: string;
@@ -707,6 +726,7 @@ function AppCard({
   ) => Promise<boolean>;
   onRollbackVersion: (deploymentId: string) => Promise<boolean>;
   onRecheck: () => void;
+  onCancel: () => Promise<boolean>;
   onDelete: () => Promise<boolean>;
 }) {
   const [tab, setTab] = useState<CardTab>("overview");
@@ -717,6 +737,7 @@ function AppCard({
   const [redeployingId, setRedeployingId] = useState<string | null>(null);
   const [rollingBackId, setRollingBackId] = useState<string | null>(null);
   const [versionError, setVersionError] = useState<string | null>(null);
+  const [cancelling, setCancelling] = useState(false);
   const [envRows, setEnvRows] = useState<EnvDraft[]>(() =>
     deploymentEnvRows(group.current),
   );
@@ -879,6 +900,25 @@ function AppCard({
           </div>
         </div>
 
+        {(cur.status === "planning" || cur.status === "pending") && (
+          <span
+            onClick={(e) => {
+              e.stopPropagation();
+              if (cancelling) return;
+              setCancelling(true);
+              void onCancel().finally(() => setCancelling(false));
+            }}
+            title="Stop this deploy — it's stuck before any DigitalOcean app was created"
+            className={[
+              "rounded-full px-3 py-1 text-[11px] font-semibold transition",
+              cancelling
+                ? "cursor-not-allowed bg-red-500/10 text-red-300/50"
+                : "cursor-pointer bg-red-500/15 text-red-300 hover:bg-red-500/25",
+            ].join(" ")}
+          >
+            {cancelling ? "Stopping…" : "Stop"}
+          </span>
+        )}
         <span
           onClick={(e) => {
             e.stopPropagation();

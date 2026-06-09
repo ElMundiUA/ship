@@ -4455,6 +4455,17 @@ export function rollbackVersion(
   );
 }
 
+export function cancelDeployment(
+  workspaceId: string,
+  deploymentId: string,
+  token?: string,
+): Promise<ApiDeployment> {
+  return apiFetch<ApiDeployment>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/deployments/${encodeURIComponent(deploymentId)}/cancel`,
+    { method: "POST", body: {}, token },
+  );
+}
+
 export type DeployLogType = "BUILD" | "DEPLOY" | "RUN";
 
 export interface ApiDeployLogs {
