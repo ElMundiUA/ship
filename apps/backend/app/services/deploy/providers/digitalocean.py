@@ -180,6 +180,30 @@ def _root_relative_dockerfile(source_dir: str | None, dockerfile_path: str) -> s
     return f"{sd}/{df}"
 
 
+def _normalize_route_path(path: str | None) -> str:
+    """Canonicalize a plan route into a DigitalOcean ingress path PREFIX.
+
+    DO route paths are literal prefixes; globs are NOT supported. An LLM
+    planner may emit ``/*`` (informally "everything"), but DO then matches no
+    request and the app 404s on ``/`` (confirmed live: ``/*`` → 404, ``/`` →
+    200). Strip a trailing wildcard so ``/*`` → ``/`` and ``/api/*`` →
+    ``/api``; plain prefixes pass through unchanged. Provider-specific (other
+    targets, e.g. AWS ALB, accept globs), so it lives in the adapter next to
+    ``_root_relative_dockerfile`` — not in the planner or the provider-neutral
+    plan.
+    """
+    p = (path or "/").strip() or "/"
+    if not p.startswith("/"):
+        p = "/" + p
+    if p.endswith("/*"):
+        p = p[:-2] or "/"
+    elif p.endswith("*"):
+        p = p[:-1] or "/"
+    if p != "/":
+        p = "/" + p.strip("/")
+    return p
+
+
 def _build_service(
     comp,
     *,
@@ -208,7 +232,7 @@ def _build_service(
     if comp.http_port:
         svc["http_port"] = comp.http_port
     routes = comp.routes or ["/"]
-    svc["routes"] = [{"path": r} for r in routes]
+    svc["routes"] = [{"path": _normalize_route_path(r)} for r in routes]
     hc = _build_health_check(comp)
     if hc:
         svc["health_check"] = hc
@@ -235,7 +259,7 @@ def _build_static_site(
     if comp.output_dir:
         site["output_dir"] = comp.output_dir
     routes = comp.routes or ["/"]
-    site["routes"] = [{"path": r} for r in routes]
+    site["routes"] = [{"path": _normalize_route_path(r)} for r in routes]
     envs = _build_envs(comp.env, operator)
     if envs:
         site["envs"] = envs
