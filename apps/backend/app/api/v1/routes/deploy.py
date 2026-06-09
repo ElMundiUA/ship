@@ -90,6 +90,20 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["deploy"])
 
 _DEPLOY_PLAN_WORKFLOW = "ship-deploy-plan.yml"
+# DigitalOcean App Platform region slugs offered in the deploy wizard. DO's
+# ``region`` spec field is fixed at app creation; an unknown/missing value
+# falls back to ``nyc`` (DO's own default) so a bad input never blocks deploy.
+_DO_REGIONS: frozenset[str] = frozenset(
+    {"nyc", "sfo", "atl", "ric", "ams", "fra", "lon", "tor", "blr", "sgp", "syd"}
+)
+_DEFAULT_REGION = "nyc"
+
+
+def _coerce_region(value: str | None) -> str:
+    region = (value or "").strip().lower()
+    return region if region in _DO_REGIONS else _DEFAULT_REGION
+
+
 _DEPLOY_TOKEN_SUBJECT = "ship.deploy.plan"
 _DEPLOY_TOKEN_TTL_SECONDS = 30 * 60
 _PLANNER_SECRET_BY_PROVIDER = {
@@ -340,6 +354,9 @@ class ApiDeploymentOut(BaseModel):
     # "github_access" (private repo not reachable by DO's GitHub app);
     # None for any other / no error.
     error_kind: str | None = None
+    # DigitalOcean region slug this app was deployed to (from provider_ref).
+    # Lets the console pre-fill the region when redeploying.
+    region: str | None = None
     started_at: str | None
     finished_at: str | None
     created_at: str
@@ -380,6 +397,7 @@ class TriggerDeployIn(BaseModel):
     llm_provider: str | None = None
     llm_model: str | None = None
     llm_api_key: str | None = None
+    region: str | None = None
     env: list[OperatorEnvIn] = []
 
 
@@ -682,6 +700,11 @@ def _to_out(d: Deployment, *, repo_full_name: str | None = None) -> ApiDeploymen
         healthy=d.healthy,
         error_message=d.error_message,
         error_kind=_error_kind_for(d.error_message),
+        region=(
+            d.provider_ref.get("region")
+            if isinstance(d.provider_ref, dict)
+            else None
+        ),
         started_at=d.started_at.isoformat() if d.started_at else None,
         finished_at=d.finished_at.isoformat() if d.finished_at else None,
         created_at=d.created_at.isoformat(),
@@ -877,6 +900,7 @@ async def _submit_to_digitalocean(
     deploy_plan: DeployPlan,
     redeployed_from_id: uuid.UUID | None = None,
     operator_env: list[OperatorEnvIn] | None = None,
+    region: str = "nyc",
 ) -> None:
     existing_app_id: str | None = None
     prior = (
@@ -897,6 +921,11 @@ async def _submit_to_digitalocean(
         if aid:
             existing_app_id = aid
             break
+    # Region is set at app creation and can't be moved by an update. The
+    # adapter keeps a LIVE app's region on update and uses the requested
+    # ``region`` only when it creates a fresh app (a new deploy, or the
+    # recorded app was deleted) — so the operator's wizard pick is honored on
+    # create without an old/stale app's region overriding it.
 
     deploy_plan = _normalize_do_frontend_api_base(deploy_plan)
     dep.plan = deploy_plan.model_dump()
@@ -909,6 +938,7 @@ async def _submit_to_digitalocean(
         token=token,
         full_name=repo.full_name,
         private=repo.private,
+        region=region,
     )
     try:
         provider_ref = await adapter.apply(
@@ -1058,6 +1088,9 @@ async def trigger_deploy(
         or repo.deploy_planner_model
         or ""
     )
+    # Region the operator picked in the wizard. Validated against the known DO
+    # region slugs; an unknown/missing value falls back to nyc.
+    eff_region = _coerce_region(body.region if body else None)
     if body and (body.llm_provider or body.llm_model):
         repo.deploy_planner_provider = eff_provider or None
         repo.deploy_planner_model = eff_model or None
@@ -1100,7 +1133,12 @@ async def trigger_deploy(
             return await _to_out_async(session, dep)
         if _DEPLOY_PLAN_WORKFLOW in files:
             planner_token = _mint_deploy_token(dep.id, settings)
-            dep.provider_ref = {"planner_token_hash": _hash_token(planner_token)}
+            dep.provider_ref = {
+                "planner_token_hash": _hash_token(planner_token),
+                # Persisted so the async /plan-result callback (no request body)
+                # can submit to DO in the region picked in the wizard.
+                "region": eff_region,
+            }
             pending_env = [
                 {
                     "key": e.key.strip(),
@@ -1230,6 +1268,7 @@ async def trigger_deploy(
         token=token,
         deploy_plan=deploy_plan,
         operator_env=operator_env,
+        region=eff_region,
     )
     if commit and commit.get("sha") and isinstance(dep.provider_ref, dict):
         dep.provider_ref = {**dep.provider_ref, "commit": commit}
@@ -1403,12 +1442,16 @@ async def report_deploy_plan_result(
         await session.flush()
         return await _to_out_async(session, dep)
 
+    # Region was stored on the row at dispatch time (this callback has no
+    # request body). _submit reuses the existing app's region on a redeploy.
+    region = _coerce_region((dep.provider_ref or {}).get("region"))
     await _submit_to_digitalocean(
         session=session,
         dep=dep,
         repo=repo,
         token=token,
         deploy_plan=payload.plan,
+        region=region,
         operator_env=[
             OperatorEnvIn(
                 key=str(e.get("key") or ""),
