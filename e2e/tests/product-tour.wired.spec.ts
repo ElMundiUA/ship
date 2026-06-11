@@ -36,7 +36,7 @@ import { hasPlaywrightStorageState } from "../lib/storage";
  *   8. Settings (`/settings`)           — workspace tabs
  *   9. Members (`/members`)             — roster
  *  10. Integrations (`/integrations`)   — connected vs available
- *  11. Audit (`/audit`)                 — audit log
+ *  11. (retired — /audit page deleted, ELS-237; audit_log lives in the API)
  *  12. Back to dashboard                — final card on tape
  *
  * Knobs:
@@ -303,7 +303,7 @@ test.describe("product tour (deployed dev)", () => {
     // -----------------------------------------------------------------
     // 15. Audit log
     // -----------------------------------------------------------------
-    await visit(page, "/audit", "Audit log");
+    // /audit render page deleted (ELS-237) — audit_log stays API/DB-side.
 
     // -----------------------------------------------------------------
     // 16. Back to workspace home — close on the landing card.

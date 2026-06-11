@@ -377,8 +377,17 @@ export async function SettingsShell({
                   />
                 </div>
               </Card>
-              <DefaultAgentCard workspace={workspace} />
-              <AgentProviderCard workspace={workspace} />
+              {/* ELS-236: declarative knobs ride the generic scope
+                  renderer (GET/PUT /v1/.../config/{scope}) — the
+                  bespoke form-POST BFF routes are retired. */}
+              <ConfigScopeCard
+                workspaceId={workspace.id}
+                scope="agent.default_profile"
+              />
+              <ConfigScopeCard
+                workspaceId={workspace.id}
+                scope="agent.provider"
+              />
               <DispatchRoutineCard
                 workspace={workspace}
                 repos={activatedRepos}
@@ -913,129 +922,6 @@ function TokenRow({ token }: { token: ApiTokenInfo }) {
         </form>
       </td>
     </tr>
-  );
-}
-
-// Mirror of backend ``_PROCESS_AGENT_PROFILES`` — keep in sync with
-// the same set in api/settings/default-agent/route.ts and the backend
-// repos.py guard.
-const AGENT_PROFILE_OPTIONS: { value: string; label: string; hint: string }[] = [
-  { value: "auto", label: "Auto (let orchestrator pick)", hint: "Original behaviour" },
-  { value: "main", label: "Claude Sonnet (main)", hint: "Default for production agents" },
-  { value: "cheaper", label: "Claude Haiku (cheaper)", hint: "Faster, lower spend" },
-  { value: "cursor_agent", label: "Cursor Agent", hint: "Run via Cursor's CLI" },
-  { value: "codex_cli", label: "Codex CLI", hint: "OpenAI Codex CLI" },
-  { value: "ship_cloud_agent", label: "Ship cloud agent", hint: "Hosted Ship runner" },
-  { value: "local_cli", label: "Local CLI", hint: "Whatever shipctl resolves locally" },
-];
-
-function DefaultAgentCard({ workspace }: { workspace: ApiWorkspace }) {
-  const current = workspace.default_agent_profile ?? "";
-  const isUnset = !current;
-  return (
-    <Card>
-      <CardHeader
-        title="Default agent profile"
-        subtitle="Workspace-wide fallback for any process state set to “auto”. Required before the /process editor unlocks."
-      />
-      {isUnset && (
-        <div className="mb-4 rounded-xl border border-sun/30 bg-sun/[0.06] px-3 py-2 text-xs text-sun/95">
-          Pick a default before you can edit processes. Editor is locked until this is set.
-        </div>
-      )}
-      <form
-        action="/api/settings/default-agent"
-        method="POST"
-        className="flex flex-col gap-3 sm:flex-row sm:items-end"
-      >
-        <input type="hidden" name="ws" value={workspace.id} suppressHydrationWarning />
-        <label className="flex-1">
-          <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-white/55">
-            Profile
-          </span>
-          <select
-            name="profile"
-            defaultValue={current || "main"}
-            required
-            className="w-full rounded border border-white/10 bg-white/[0.04] px-2 py-2 text-sm text-white outline-none focus:border-aqua/40"
-          >
-            {AGENT_PROFILE_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label} — {opt.hint}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button
-          type="submit"
-          className="h-10 whitespace-nowrap rounded-full border border-aqua/30 bg-aqua/10 px-4 text-xs font-bold text-aqua transition hover:bg-aqua/15"
-        >
-          Save default
-        </button>
-      </form>
-    </Card>
-  );
-}
-
-// Mirror of backend ``SUPPORTED_PROVIDERS``. Each option is one of the
-// three local-CLI runtimes shipctl can dispatch on the GHA runner.
-const AGENT_PROVIDER_OPTIONS: { value: "cursor" | "codex" | "claude"; label: string; hint: string }[] = [
-  {
-    value: "cursor",
-    label: "Cursor Agent",
-    hint: "Local cursor-agent CLI on the runner",
-  },
-  {
-    value: "codex",
-    label: "OpenAI Codex",
-    hint: "Local @openai/codex CLI on the runner",
-  },
-  {
-    value: "claude",
-    label: "Claude Code",
-    hint: "Local @anthropic-ai/claude-code CLI on the runner",
-  },
-];
-
-function AgentProviderCard({ workspace }: { workspace: ApiWorkspace }) {
-  const current = workspace.agent_provider ?? "cursor";
-  return (
-    <Card>
-      <CardHeader
-        title="Autonomous pipeline runtime"
-        subtitle="Which local CLI runs on the GitHub Actions runner when shipctl dispatches a routine. Switching takes effect from the next cron tick — in-flight runs finish under the previous binding."
-      />
-      <form
-        action="/api/settings/agent-provider"
-        method="POST"
-        className="flex flex-col gap-3 sm:flex-row sm:items-end"
-      >
-        <input type="hidden" name="ws" value={workspace.id} suppressHydrationWarning />
-        <label className="flex-1">
-          <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-white/55">
-            Provider
-          </span>
-          <select
-            name="provider"
-            defaultValue={current}
-            required
-            className="w-full rounded border border-white/10 bg-white/[0.04] px-2 py-2 text-sm text-white outline-none focus:border-aqua/40"
-          >
-            {AGENT_PROVIDER_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label} — {opt.hint}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button
-          type="submit"
-          className="h-10 whitespace-nowrap rounded-full border border-aqua/30 bg-aqua/10 px-4 text-xs font-bold text-aqua transition hover:bg-aqua/15"
-        >
-          Save provider
-        </button>
-      </form>
-    </Card>
   );
 }
 
