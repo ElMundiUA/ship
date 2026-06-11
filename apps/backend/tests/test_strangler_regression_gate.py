@@ -55,6 +55,20 @@ def test_excluded_set_untouched() -> None:
     assert present("priorities"), "dashboard_priorities routes missing"
 
 
+def test_no_double_v1_prefix() -> None:
+    """config.py + planning.py used to self-prefix ``/v1`` under
+    api_router's ``/v1`` — every client (ConfigScopeCard, the settings
+    renderer, mass-planning-preview) calls single-``/v1`` paths, so the
+    doubled routes 404'd for all of them. Pin the fixed mount points."""
+    paths = _route_paths()
+    doubled = sorted(p for p in paths if p.startswith("/v1/v1/"))
+    assert not doubled, f"double-prefixed routes: {doubled}"
+    assert "/v1/workspaces/{workspace_id}/config/{scope}" in paths
+    assert any(
+        p.startswith("/v1/workspaces/{workspace_id}/planning/") for p in paths
+    ), "planning routes not mounted under /v1/workspaces"
+
+
 def test_dashboard_priorities_model_consumers_intact() -> None:
     """WorkspaceProjectPriority feeds project_state_sync,
     project_completion and the Navigator picker — the reason the module
