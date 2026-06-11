@@ -583,6 +583,11 @@ def register_all() -> None:
         cron_expr="5 * * * *",  # hourly at :05 (gated by per-install age)
         job_id="linear_token_refresh",
     )
+    register_cron(
+        fn=_stall_notify_tick,
+        cron_expr="20 * * * *",  # hourly at :20; audit-log cooldown dedup
+        job_id="stall_notify",
+    )
     # E16/ELS-124 retired the Ship-side trigger-workflow scheduler.
     # The tracker poller + dispatcher (``apps/backend/app/services/
     # tracker_poller.py`` + ``dispatcher.py``) now drive every agent
@@ -750,6 +755,44 @@ async def _agent_dispatch_lock_sweep_tick() -> None:
     )
 
     await sweep_dangling_project_locks_tick()
+
+
+@cron_with_lock(lock=CronLockId.STALL_NOTIFY, name="stall_notify")
+async def _stall_notify_tick() -> None:
+    """Forward engine_health stalls through the notify() seam (ELS-231).
+
+    Report-only: never mutates locks or ticket status. Gated by
+    ``SHIP_STALL_NOTIFY`` (default off); per-(lock,reason) cooldown is
+    deduped via ``audit_log action='engine.stall_notified'`` so the
+    hourly schedule can never produce a letter storm. Per-workspace
+    failures are isolated."""
+    from backend.app.core.config import get_settings
+
+    settings = get_settings()
+    if not settings.stall_notify_enabled:
+        return
+    from sqlalchemy import select as sa_select
+
+    from backend.app.db.models.tenancy import Workspace
+    from backend.app.db.session import get_sessionmaker
+    from backend.app.services.stall_notifier import notify_stalls_for_workspace
+
+    sessionmaker = get_sessionmaker()
+    async with sessionmaker() as session:
+        ws_ids = (await session.execute(sa_select(Workspace.id))).scalars().all()
+        emitted = 0
+        for ws_id in ws_ids:
+            try:
+                emitted += await notify_stalls_for_workspace(
+                    session,
+                    workspace_id=ws_id,
+                    cooldown_minutes=settings.stall_notify_cooldown_minutes,
+                )
+            except Exception:  # noqa: BLE001 — one ws must not sink the sweep
+                log.exception("stall_notify: ws=%s failed", ws_id)
+        await session.commit()
+        if emitted:
+            log.info("stall_notify tick: %s notification(s)", emitted)
 
 
 @cron_with_lock(

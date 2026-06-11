@@ -259,6 +259,15 @@ class Settings(BaseSettings):
     notification_channels_enabled: bool = Field(
         default=False, alias="SHIP_NOTIFY_CHANNELS"
     )
+    # Stall notifier (ELS-231): forward engine_health stalls through
+    # notify() on a schedule. Off by default — the residue surface is
+    # query-only until an operator opts into push.
+    stall_notify_enabled: bool = Field(
+        default=False, alias="SHIP_STALL_NOTIFY"
+    )
+    stall_notify_cooldown_minutes: int = Field(
+        default=360, alias="SHIP_STALL_NOTIFY_COOLDOWN_MIN"
+    )
 
     # --- Auth0 (used when auth_mode == "auth0") ---
     auth0_domain: str | None = Field(default=None, alias="AUTH0_DOMAIN")

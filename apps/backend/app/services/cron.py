@@ -163,6 +163,9 @@ class CronLockId(IntEnum):
     # vanished from DigitalOcean flips to red + an activity event, so cards
     # never show a stale green. See :mod:`services.deploy.reconcile`.
     DEPLOYMENTS_RECONCILE = 1024
+    # ELS-231: stall notifier — forwards engine_health stalls through
+    # notify() on a schedule (report-only; never mutates locks).
+    STALL_NOTIFY = 1025
 
 
 # ---------------------------------------------------------------------------
