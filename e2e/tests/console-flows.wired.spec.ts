@@ -159,11 +159,15 @@ test.describe("console surfaces (wired, serial)", () => {
     ).toBeVisible({ timeout: 30_000 });
   });
 
-  test("13 — audit log", async ({ page }) => {
-    await page.goto("/audit");
+  test("13 — audit page retired (ELS-237): route falls through to 404/redirect", async ({ page }) => {
+    const resp = await page.goto("/audit");
+    // The render page is deleted; either Next 404s or the console-mode
+    // gate redirects to the status landing. Both are acceptable — what
+    // must NOT happen is an Audit log heading rendering.
     await expect(
       page.getByRole("heading", { name: "Audit log", exact: true }),
-    ).toBeVisible({ timeout: 30_000 });
+    ).toHaveCount(0);
+    if (resp) expect([200, 404]).toContain(resp.status());
   });
 
   test("14 — rail: workspace nav exposes active workspace pages", async ({
@@ -175,7 +179,6 @@ test.describe("console surfaces (wired, serial)", () => {
       ["Process", /\/process$/],
       ["Reports", /\/reports$/],
       ["Knowledge", /\/knowledge$/],
-      ["Audit log", /\/audit$/],
     ];
     await expect(
       nav.getByRole("link", { name: /^Inbox · \d+$/ }),
