@@ -381,3 +381,116 @@ async def test_omitted_classification_gets_server_defaults(
 
     assert got.headline == derive_headline(summary="details", title="blocked at stage")
     assert got.type == "blocker"
+
+
+# ---------------------------------------------------------------------------
+# Observability + rollback (ELS-226)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_notify_writes_audit_row_with_per_channel_outcomes(
+    db_session, seed_workspace, monkeypatch
+) -> None:
+    from backend.app.db.models.tenancy import AuditLog
+
+    _, _, workspace = seed_workspace
+    workspace.settings = {
+        "notifications": {"channels": {"blocker": ["inbox", "linear"]}}
+    }
+    await db_session.flush()
+
+    gateway = _RecordingGateway()
+
+    async def fake_resolve(**kwargs):
+        return SimpleNamespace(kind="linear", gateway=gateway)
+
+    monkeypatch.setattr(
+        "backend.app.services.tracker_resolver.resolve_for_workspace",
+        fake_resolve,
+    )
+    await notify(
+        db_session,
+        workspace_id=workspace.id,
+        title="audit me",
+        body="b",
+        level=NotifyLevel.BLOCKER,
+        ticket_ref="ELS-99",
+        settings=_settings(True),
+    )
+    await db_session.flush()
+    row = (
+        await db_session.execute(
+            select(AuditLog).where(
+                AuditLog.workspace_id == workspace.id,
+                AuditLog.action == "notify.emit",
+            )
+        )
+    ).scalars().first()
+    assert row is not None
+    assert row.target_kind == "notification"
+    assert row.target_id == "ELS-99"
+    assert row.payload["level"] == "blocker"
+    assert row.payload["requested_channels"] == ["inbox", "linear"]
+    outcomes = {r["channel"]: r for r in row.payload["results"]}
+    assert outcomes["inbox"]["ok"] is True
+    assert outcomes["linear"]["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_audit_failure_never_sinks_the_emit(
+    db_session, seed_workspace, monkeypatch
+) -> None:
+    _, _, workspace = seed_workspace
+
+    import backend.app.services.notify as notify_mod
+
+    class _ExplodingAudit:
+        def __init__(self, **kwargs):
+            raise RuntimeError("audit table on fire")
+
+    monkeypatch.setattr(
+        "backend.app.db.models.tenancy.AuditLog", _ExplodingAudit
+    )
+    result = await notify_mod.notify(
+        db_session,
+        workspace_id=workspace.id,
+        title="t",
+        body="b",
+        level=NotifyLevel.INFO,
+        settings=_settings(False),
+    )
+    assert result.ok  # emit survived
+    items = await _items_for(db_session, workspace.id)
+    assert len(items) == 1
+
+
+@pytest.mark.skipif(
+    not __import__("os").environ.get("RUN_EMAIL_SMOKE"),
+    reason="real-transport smoke; set RUN_EMAIL_SMOKE=1 with SENDGRID creds",
+)
+@pytest.mark.asyncio
+async def test_real_email_transport_smoke(db_session, seed_workspace) -> None:
+    """ELS-226 AC: prove the REAL get_email_sender().send path once —
+    not just the RecordingEmailSender. Gated behind RUN_EMAIL_SMOKE so
+    CI stays hermetic; the runbook documents running it."""
+    import os
+
+    _, _, workspace = seed_workspace
+    workspace.settings = {
+        "notifications": {
+            "email_to": os.environ["EMAIL_SMOKE_TO"],
+            "channels": {"blocker": ["inbox", "email"]},
+        }
+    }
+    await db_session.flush()
+    result = await notify(
+        db_session,
+        workspace_id=workspace.id,
+        title="Ship notification-seam smoke",
+        body="If you can read this, the email channel works end-to-end.",
+        level=NotifyLevel.BLOCKER,
+        settings=_settings(True),
+    )
+    email = result.for_channel(NotifyChannel.EMAIL)
+    assert email is not None and email.ok and not email.skipped

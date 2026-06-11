@@ -344,7 +344,8 @@ async def notify(
         routing = get_channel_routing(workspace, settings=settings)
 
     results: list[ChannelResult] = []
-    for channel in routing.channels_for(level):
+    requested = routing.channels_for(level)
+    for channel in requested:
         impl = _CHANNEL_IMPLS[channel]
         try:
             results.append(await impl.emit(session, ctx, routing))
@@ -358,6 +359,42 @@ async def notify(
                     channel=channel, ok=False, detail=str(exc)[:300]
                 )
             )
+
+    # Observability (ELS-226): one audit row per emission with the
+    # per-channel outcomes. Best-effort — an audit failure must never
+    # sink the emit (same pattern as agent_runs.py).
+    try:
+        from backend.app.db.models.tenancy import AuditLog
+
+        session.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                actor_user_id=None,
+                actor_token_id=None,
+                action="notify.emit",
+                target_kind="notification",
+                target_id=(ctx.ticket_ref or ctx.dedup_key or "")[:255] or None,
+                payload={
+                    "level": level.value,
+                    "title": ctx.title[:200],
+                    "ticket_ref": ctx.ticket_ref,
+                    "requested_channels": [c.value for c in requested],
+                    "results": [
+                        {
+                            "channel": r.channel.value,
+                            "ok": r.ok,
+                            "skipped": r.skipped,
+                            "detail": r.detail,
+                        }
+                        for r in results
+                    ],
+                },
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 — audit failure must not sink the emit
+        logger.warning(
+            "notify: audit write failed ws=%s: %s", workspace_id, exc
+        )
     return NotifyResult(results=tuple(results))
 
 
