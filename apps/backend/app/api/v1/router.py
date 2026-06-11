@@ -25,9 +25,7 @@ from backend.app.api.v1.routes import (
     chat,
     clarifications,
     config,
-    dashboard,
     engine_health,
-    dashboard_live_system,
     deploy,
     digitalocean_oauth,
     dashboard_priorities,
@@ -54,7 +52,6 @@ from backend.app.api.v1.routes import (
     processes,
     runs,
     policies,
-    repo_home,
     repo_routing,
     repo_secrets,
     repos,
@@ -145,7 +142,6 @@ api_router.include_router(telegram.router)
 api_router.include_router(runs.router)
 api_router.include_router(runs.public_router)
 api_router.include_router(processes.router)
-api_router.include_router(dashboard.router)
 # Dashboard v2 prioritizer surface (PR-1). GET / POST under
 # ``/v1/workspaces/{ws}/priorities`` — list+reorder of tracker
 # projects, plus the workspace-level autonomy pause toggle.
@@ -155,12 +151,10 @@ api_router.include_router(dashboard_priorities.router)
 # (masthead glyphs, knowledge, routines, daily-digest, specialist
 # health) so the Console doesn't fan out to half a dozen routes
 # on every render.
-api_router.include_router(dashboard_live_system.router)
 api_router.include_router(engine_health.router)
 # Per-repo Home rollup (RFC-0008 §F — PR-4) — a single snapshot the
 # /r/<slug> page renders as Now + Trends tabs without fanning out to
 # the four source endpoints client-side.
-api_router.include_router(repo_home.router)
 # Process-template surface — ``GET /v1/processes/default`` returns
 # the canonical agent-role bundle Ship installs in every new repo.
 # (Replaced the legacy ``/v1/catalog/default-bundle`` route after
