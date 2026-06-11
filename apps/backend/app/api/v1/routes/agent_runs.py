@@ -765,36 +765,34 @@ async def get_next_task(
                     )
                 )
                 # First detection in this window → drop one blocker
-                # row in the operator inbox. The audit-row dedup
-                # gates this same-window check, so we don't re-issue
-                # blocker letters either.
-                session.add(
-                    InboxItem(
-                        workspace_id=workspace_id,
-                        repo_id=None,
-                        type="blocker",
-                        title=(
-                            f"Tracker {resolved.kind} unreachable — "
-                            f"agents stalled"
-                        )[:300],
-                        summary=(
-                            "The bound tracker adapter is rejecting calls "
-                            "(likely an OAuth token expiry / revocation). "
-                            "Re-authorize the workspace integration to "
-                            "restore agent picks. Subsequent stage picks "
-                            "in this hour are short-circuited to keep the "
-                            "audit log readable.\n\n"
-                            f"First error: {str(exc)[:400]}"
-                        )[:2000],
-                        payload={
-                            "tracker_kind": resolved.kind,
-                            "fsm_stage": state,
-                            "error": str(exc)[:500],
-                        },
-                        status="new",
-                        intake_handle=None,
-                        intake_reason="tracker_outage",
-                    )
+                # letter. The audit-row dedup above gates this
+                # same-window check (caller-side dedup stays — the
+                # notify() seam only routes the emission, ELS-224).
+                from backend.app.services.notify import NotifyLevel, notify
+
+                await notify(
+                    session,
+                    workspace_id=workspace_id,
+                    title=(
+                        f"Tracker {resolved.kind} unreachable — "
+                        f"agents stalled"
+                    )[:300],
+                    body=(
+                        "The bound tracker adapter is rejecting calls "
+                        "(likely an OAuth token expiry / revocation). "
+                        "Re-authorize the workspace integration to "
+                        "restore agent picks. Subsequent stage picks "
+                        "in this hour are short-circuited to keep the "
+                        "audit log readable.\n\n"
+                        f"First error: {str(exc)[:400]}"
+                    )[:2000],
+                    level=NotifyLevel.BLOCKER,
+                    payload={
+                        "tracker_kind": resolved.kind,
+                        "fsm_stage": state,
+                        "error": str(exc)[:500],
+                    },
+                    inbox_overrides={"intake_reason": "tracker_outage"},
                 )
                 await session.flush()
         except Exception as audit_exc:  # noqa: BLE001 — audit failure must not sink the response
@@ -1685,23 +1683,24 @@ async def _record_orphan_skips(
                 },
             )
         )
-    session.add(
-        InboxItem(
-            workspace_id=workspace_id,
-            type="improvement",
-            title=f"Orphan tickets skipped at stage {fsm_stage}"[:300],
-            summary=(
-                f"{len(refs)} ticket(s) at FSM stage {fsm_stage!r} have no "
-                "tracker project attached and were skipped by the agent "
-                "picker. Re-home them under a project (or close)."
-            )[:2000],
-            payload={
-                "kind": "orphan_skipped",
-                "tracker_kind": tracker_kind,
-                "fsm_stage": fsm_stage,
-                "ticket_refs": refs,
-            },
-        )
+    from backend.app.services.notify import NotifyLevel, notify
+
+    await notify(
+        session,
+        workspace_id=workspace_id,
+        title=f"Orphan tickets skipped at stage {fsm_stage}"[:300],
+        body=(
+            f"{len(refs)} ticket(s) at FSM stage {fsm_stage!r} have no "
+            "tracker project attached and were skipped by the agent "
+            "picker. Re-home them under a project (or close)."
+        )[:2000],
+        level=NotifyLevel.INFO,
+        payload={
+            "kind": "orphan_skipped",
+            "tracker_kind": tracker_kind,
+            "fsm_stage": fsm_stage,
+            "ticket_refs": refs,
+        },
     )
     await session.flush()
 
@@ -4019,24 +4018,26 @@ async def finish_agent_run(
     # inbox item so the operator notices, but still record the run.
     if payload.outcome in {"ready_next_step", "needs_clarification", "out_of_scope"} \
             and resolved is None:
-        session.add(
-            InboxItem(
-                workspace_id=workspace_id,
-                repo_id=None,
-                type="blocker",
-                title=f"agent finished but no tracker bound ({payload.outcome})"[:300],
-                summary=(payload.summary or payload.comment or "")[:2000] or None,
-                payload={
-                    "run_id": payload.run_id,
-                    "fsm_stage": payload.fsm_stage,
-                    "ticket_ref": payload.ticket_ref,
-                    "outcome": payload.outcome,
-                    **payload.payload,
-                },
-                status="new",
-                intake_handle=None,
-                intake_reason="agent_run_no_tracker",
-            )
+        from backend.app.services.notify import NotifyLevel, notify
+
+        await notify(
+            session,
+            workspace_id=workspace_id,
+            ticket_ref=payload.ticket_ref,
+            title=f"agent finished but no tracker bound ({payload.outcome})"[:300],
+            body=(payload.summary or payload.comment or "")[:2000],
+            level=NotifyLevel.BLOCKER,
+            payload={
+                "run_id": payload.run_id,
+                "fsm_stage": payload.fsm_stage,
+                "ticket_ref": payload.ticket_ref,
+                "outcome": payload.outcome,
+                **payload.payload,
+            },
+            inbox_overrides={
+                "summary": (payload.summary or payload.comment or "")[:2000] or None,
+                "intake_reason": "agent_run_no_tracker",
+            },
         )
         actions.append("inbox:no_tracker_bound")
 
@@ -4429,25 +4430,28 @@ async def finish_agent_run(
         ticket_snapshot = await _try_ticket_snapshot(resolved.gateway, ref)
         # Mirror to inbox so the operator sees it without scanning the
         # tracker — the agent's question is the inbox row's summary.
-        session.add(
-            InboxItem(
-                workspace_id=workspace_id,
-                repo_id=None,
-                type="clarification",
-                category="decision_needed",
-                title=f"clarification: {payload.ticket_ref}"[:300],
-                summary=(payload.summary or payload.comment or "")[:2000] or None,
-                payload={
-                    "run_id": payload.run_id,
-                    "fsm_stage": payload.fsm_stage,
-                    "ticket_ref": payload.ticket_ref,
-                    **({"source_ticket": ticket_snapshot} if ticket_snapshot else {}),
-                    **payload.payload,
-                },
-                status="new",
-                intake_handle=None,
-                intake_reason="agent_run_clarification",
-            )
+        from backend.app.services.notify import NotifyLevel, notify
+
+        await notify(
+            session,
+            workspace_id=workspace_id,
+            ticket_ref=payload.ticket_ref,
+            title=f"clarification: {payload.ticket_ref}"[:300],
+            body=(payload.summary or payload.comment or "")[:2000],
+            level=NotifyLevel.ACTION,
+            payload={
+                "run_id": payload.run_id,
+                "fsm_stage": payload.fsm_stage,
+                "ticket_ref": payload.ticket_ref,
+                **({"source_ticket": ticket_snapshot} if ticket_snapshot else {}),
+                **payload.payload,
+            },
+            inbox_overrides={
+                "type": "clarification",
+                "category": "decision_needed",
+                "summary": (payload.summary or payload.comment or "")[:2000] or None,
+                "intake_reason": "agent_run_clarification",
+            },
         )
         actions.append("inbox:clarification")
         # ELS-142: project_lock release for needs_clarification /
@@ -4519,26 +4523,29 @@ async def finish_agent_run(
                     "stage on unblock."
                 )
             )[:2000]
-            session.add(
-                InboxItem(
-                    workspace_id=workspace_id,
-                    repo_id=None,
-                    type="blocker",
-                    title=blocker_title,
-                    headline=derive_headline(
-                        summary=blocker_summary, title=blocker_title
-                    ),
-                    summary=blocker_summary,
-                    payload={
-                        "ticket_ref": payload.ticket_ref,
-                        "fsm_stage": payload.fsm_stage,
-                        "run_id": payload.run_id,
-                        **payload.payload,
-                    },
-                    status="new",
-                    intake_handle=f"blocked:{payload.ticket_ref}:{payload.fsm_stage}",
-                    intake_reason="agent_blocked",
-                )
+            from backend.app.services.notify import NotifyLevel, notify
+
+            # headline rides the InboxItem before_insert backstop —
+            # identical derive_headline(summary, title) as before.
+            await notify(
+                session,
+                workspace_id=workspace_id,
+                ticket_ref=payload.ticket_ref,
+                title=blocker_title,
+                body=blocker_summary,
+                level=NotifyLevel.BLOCKER,
+                dedup_key=f"blocked:{payload.ticket_ref}:{payload.fsm_stage}",
+                payload={
+                    "ticket_ref": payload.ticket_ref,
+                    "fsm_stage": payload.fsm_stage,
+                    "run_id": payload.run_id,
+                    **payload.payload,
+                },
+                inbox_overrides={
+                    "title": blocker_title,
+                    "summary": blocker_summary,
+                    "intake_reason": "agent_blocked",
+                },
             )
             actions.append("inbox:blocker:agent_blocked")
 
