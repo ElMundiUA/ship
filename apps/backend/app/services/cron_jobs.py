@@ -768,12 +768,14 @@ async def _inbox_stale_sweep_tick() -> None:
     name="agent_dispatch_lock_sweep",
 )
 async def _agent_dispatch_lock_sweep_tick() -> None:
-    """Periodic cleanup for dangling ``project:*`` dispatch locks.
-    See :mod:`dispatch_lock_sweep` for the algorithm + thresholds."""
+    """Periodic cleanup for expired TTL locks and dangling ``project:*`` locks.
+    See :mod:`dispatch_lock_sweep` for the algorithms + thresholds."""
     from backend.app.services.dispatch_lock_sweep import (
         sweep_dangling_project_locks_tick,
+        sweep_expired_locks_tick,
     )
 
+    await sweep_expired_locks_tick()
     await sweep_dangling_project_locks_tick()
 
 
