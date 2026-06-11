@@ -1128,6 +1128,7 @@ async def _validate_code_review_to_auto_merge(
     workspace_id: uuid.UUID,
     pr_url: str | None,
     settings: Settings,
+    require_approval: bool = True,
 ) -> tuple[bool, str]:
     """Verify the agent's ``code_review → auto_merge`` claim against
     GitHub.
@@ -1214,21 +1215,27 @@ async def _validate_code_review_to_auto_merge(
                 "Authorization": f"Bearer {token}",
                 "Accept": "application/vnd.github+json",
             }
-            # 1. Reviews — need ≥1 APPROVED.
-            reviews_resp = await client.get(
-                f"{api_root}/pulls/{number}/reviews",
-                headers=headers,
-                params={"per_page": "100"},
-            )
-            if reviews_resp.status_code >= 400:
-                return False, f"reviews_api_{reviews_resp.status_code}"
-            reviews = reviews_resp.json() or []
-            has_approval = any(
-                str(r.get("state") or "").upper() == "APPROVED"
-                for r in reviews
-            )
-            if not has_approval:
-                return False, "no_approval"
+            # 1. Reviews — need ≥1 APPROVED. Autonomy-sensitive
+            # (ELS-243, thesis 7): ``require_approval=False`` (the
+            # ``high`` profile) skips ONLY this check — the CI-green
+            # check below is non-negotiable at every level (founder
+            # decision: a bug letting high skip CI would autonomously
+            # merge red code).
+            if require_approval:
+                reviews_resp = await client.get(
+                    f"{api_root}/pulls/{number}/reviews",
+                    headers=headers,
+                    params={"per_page": "100"},
+                )
+                if reviews_resp.status_code >= 400:
+                    return False, f"reviews_api_{reviews_resp.status_code}"
+                reviews = reviews_resp.json() or []
+                has_approval = any(
+                    str(r.get("state") or "").upper() == "APPROVED"
+                    for r in reviews
+                )
+                if not has_approval:
+                    return False, "no_approval"
 
             # 2. PR detail — need head SHA for check-runs.
             pr_resp = await client.get(
@@ -3962,17 +3969,32 @@ async def finish_agent_run(
         and resolved is not None
     ):
         pr_url = _extract_pr_url(payload.comment)
+        # ELS-243 (thesis 7): the approval requirement is autonomy-
+        # sensitive — ``high`` trusts the reviewer bundle + this gate's
+        # CI check and skips the human-approval requirement;
+        # conservative/balanced keep today's behavior. CI-green stays
+        # non-negotiable for every profile inside the validator.
+        from backend.app.services.agent_provider_resolver import (
+            resolve_autonomy_for_workspace,
+        )
+
+        autonomy_profile = await resolve_autonomy_for_workspace(
+            session=session, workspace_id=workspace_id
+        )
         gate_ok, gate_reason = await _validate_code_review_to_auto_merge(
             session,
             workspace_id=workspace_id,
             pr_url=pr_url,
             settings=settings,
+            require_approval=autonomy_profile != "high",
         )
+        actions.append(f"phase4:gate_profile:{autonomy_profile}")
         if not gate_ok:
             logger.info(
                 "phase4 gate rejected code_review→auto_merge "
-                "ws=%s ticket=%s reason=%s pr_url=%s",
+                "ws=%s ticket=%s reason=%s pr_url=%s autonomy=%s",
                 workspace_id, payload.ticket_ref, gate_reason, pr_url,
+                autonomy_profile,
             )
             session.add(
                 AuditLog(
@@ -3988,6 +4010,7 @@ async def finish_agent_run(
                         "reason": gate_reason,
                         "pr_url": pr_url,
                         "run_id": payload.run_id,
+                        "autonomy": autonomy_profile,
                     },
                 )
             )
