@@ -16,6 +16,11 @@ import {
   meToShellUser,
 } from "@/lib/api/session-cache.server";
 import {
+  getRequestPathname,
+  resolveConsoleMode,
+} from "@/lib/console-mode.server";
+import { isPathAllowed } from "@/lib/console-mode";
+import {
   getLayoutWorkspaceSearchParams,
   getResolvedWorkspaceId,
 } from "@/lib/workspace-resolve.server";
@@ -85,6 +90,18 @@ export default async function AuthedLayout({
   const me = await getCachedMe();
   const inboxCounts = await getInboxCounts(workspace.id, token).catch(() => null);
 
+  // ELS-235 (strangler step 0): per-workspace console mode. Non-full
+  // modes 302 disallowed paths to the residual status landing; the
+  // Inbox approval surface stays reachable in EVERY mode so pending
+  // operator approvals are never orphaned.
+  const consoleMode = await resolveConsoleMode(workspace.id, token);
+  if (consoleMode !== "full") {
+    const pathname = await getRequestPathname();
+    if (!isPathAllowed(consoleMode, pathname)) {
+      redirect("/");
+    }
+  }
+
   return (
     <AppShellChrome
       workspace={{
@@ -95,6 +112,7 @@ export default async function AuthedLayout({
       allWorkspaces={toAppShellWorkspaces(workspaces)}
       me={meToShellUser(me)}
       inboxActionableCount={inboxCounts?.actionable_new ?? null}
+      consoleMode={consoleMode}
     >
       {children}
     </AppShellChrome>

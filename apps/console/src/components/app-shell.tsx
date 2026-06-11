@@ -113,18 +113,31 @@ function parseRepoSlug(pathname: string | null): string | null {
   return `${parts[0]}/${parts[1]}`;
 }
 
+// ELS-235: nav hrefs visible per console mode. The Inbox stays in
+// EVERY mode (approval surface must never be orphaned, thesis 4).
+const RESIDUAL_NAV_HREFS = new Set(["/", "/inbox", "/settings"]);
+const OFF_NAV_HREFS = new Set(["/", "/inbox"]);
+
 function navFor(
   pathname: string | null,
-  opts?: { inboxActionableCount?: number | null },
+  opts?: {
+    inboxActionableCount?: number | null;
+    consoleMode?: "full" | "residual" | "off";
+  },
 ): NavGroup[] {
   const slug = parseRepoSlug(pathname);
   const raw = slug
     ? buildRepoNav(slug)
     : buildWorkspaceNav(opts?.inboxActionableCount);
+  const mode = opts?.consoleMode ?? "full";
+  const allowed =
+    mode === "residual" ? RESIDUAL_NAV_HREFS : mode === "off" ? OFF_NAV_HREFS : null;
   return raw
     .map((g) => ({
       section: g.section,
-      items: SHOW_STUBS ? g.items : g.items.filter((i) => !i.stub),
+      items: (SHOW_STUBS ? g.items : g.items.filter((i) => !i.stub)).filter(
+        (i) => allowed === null || allowed.has(i.href),
+      ),
     }))
     .filter((g) => g.items.length > 0);
 }
@@ -276,6 +289,7 @@ export function AppShellChrome({
   allWorkspaces,
   me,
   inboxActionableCount,
+  consoleMode,
 }: {
   children: ReactNode;
   workspace?: AppShellWorkspace;
@@ -283,6 +297,8 @@ export function AppShellChrome({
   me?: AppShellUser | null;
   /** Actionable ``new`` count for sidebar ``Inbox · N`` label. */
   inboxActionableCount?: number | null;
+  /** ELS-235: per-workspace console surface (default full). */
+  consoleMode?: "full" | "residual" | "off";
 }) {
   const pathname = usePathname();
   const [wsOpen, setWsOpen] = useState(false);
@@ -356,7 +372,7 @@ export function AppShellChrome({
     email: "user@example.com",
     initials: "U",
   };
-  const NAV = navFor(pathname, { inboxActionableCount });
+  const NAV = navFor(pathname, { inboxActionableCount, consoleMode });
   const allNavHrefs = NAV.flatMap((g) => g.items.map((i) => i.href));
   const repoSlug = parseRepoSlug(pathname);
   // Repo-mode header chip: show the repo the URL resolves to. In
