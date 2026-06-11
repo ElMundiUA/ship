@@ -78,6 +78,9 @@ class ChannelResult:
     ok: bool
     skipped: bool = False
     detail: str | None = None
+    # The created ORM row (InboxChannel only) — for flipped emit-sites
+    # whose callers return / link the letter (e.g. RunEscalation rows).
+    inbox_item: Any = None
 
 
 @dataclass(frozen=True)
@@ -186,8 +189,9 @@ class InboxChannel:
         if "stale_after" in o:
             kwargs["stale_after"] = o["stale_after"]
 
-        session.add(InboxItem(**kwargs))
-        return ChannelResult(channel=self.channel, ok=True)
+        item = InboxItem(**kwargs)
+        session.add(item)
+        return ChannelResult(channel=self.channel, ok=True, inbox_item=item)
 
 
 # ---------------------------------------------------------------------------
