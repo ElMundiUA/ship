@@ -1038,12 +1038,21 @@ async def get_run_policies_preamble(
 ) -> PoliciesPreambleOut:
     """Return the workspace's prose policies for the run's workspace."""
 
-    from backend.app.services.policies import render_policies_preamble
+    from backend.app.services.policies import (
+        render_autonomy_preamble,
+        render_policies_preamble,
+    )
 
     preamble = await render_policies_preamble(
         session, ctx.workspace_id, role_slug=role
     )
-    return PoliciesPreambleOut(preamble=preamble)
+    # ELS-244: the autonomy action-rights block rides the same
+    # centralised path so chat + CI agents see byte-identical text.
+    autonomy_block = await render_autonomy_preamble(session, ctx.workspace_id)
+    combined = (
+        f"{preamble}\n\n{autonomy_block}" if preamble else autonomy_block
+    )
+    return PoliciesPreambleOut(preamble=combined)
 
 
 # ---------------------------------------------------------------------------

@@ -56,12 +56,15 @@ async def test_assemble_no_policies(db_session, seed_workspace) -> None:
         recent_messages=[],
         new_user_message="hi",
     )
-    # system prompt + session-context frame + final user turn.
-    assert len(out) == 3
+    # system prompt + session-context frame + autonomy block (ELS-244)
+    # + final user turn.
+    assert len(out) == 4
     assert out[0].role == "system"
     assert "You are Ship" in out[0].content
     assert out[1].role == "system"
     assert "## Session context" in out[1].content
+    assert out[2].role == "system"
+    assert "Autonomy profile" in out[2].content
     assert out[-1].role == "user"
 
 
@@ -114,7 +117,8 @@ async def test_assemble_injects_enabled_policies(
     )
 
     # Layering: 0=system prompt, 1=session context (date + workspace),
-    # 2=policies preamble, 3=topic summary, then the live user turn.
+    # 2=policies preamble, 3=autonomy block (ELS-244), 4=topic summary,
+    # then the live user turn.
     assert out[0].role == "system" and "You are Ship" in out[0].content
     assert out[1].role == "system"
     assert "## Session context" in out[1].content
@@ -128,7 +132,10 @@ async def test_assemble_injects_enabled_policies(
     assert "Should not render." not in preamble
 
     assert out[3].role == "system"
-    assert "Running topic summary" in out[3].content
+    assert "Autonomy profile" in out[3].content
+
+    assert out[4].role == "system"
+    assert "Running topic summary" in out[4].content
 
     assert out[-1].role == "user"
     assert out[-1].content == "hi"
