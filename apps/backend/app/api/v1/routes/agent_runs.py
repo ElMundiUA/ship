@@ -89,6 +89,7 @@ from backend.app.services.file_overlap import (
     load_file_coordination_warning_from_audit,
 )
 from backend.app.services.file_overlap_telemetry import evaluate_file_overlap_honour
+from backend.app.services.state_projector import transition_via_projector
 from backend.app.services.tracker_resolver import resolve_for_workspace
 
 
@@ -2454,7 +2455,14 @@ async def transition_ticket(
     ref = _ticket_ref_from(resolved.kind, payload.ticket_ref)
     if payload.comment:
         await resolved.gateway.comment(ref, body=payload.comment)
-    await resolved.gateway.transition(ref, to_state=payload.to_state)
+    await transition_via_projector(
+        session,
+        settings=get_settings(),
+        workspace_id=workspace_id,
+        gateway=resolved.gateway,
+        ref=ref,
+        to_state=payload.to_state,
+    )
 
     session.add(
         AuditLog(
@@ -3092,7 +3100,14 @@ async def post_ticket_action(
 
     if payload.action == "cancel":
         try:
-            await resolved.gateway.transition(ref, to_state="Canceled")
+            await transition_via_projector(
+                session,
+                settings=get_settings(),
+                workspace_id=workspace_id,
+                gateway=resolved.gateway,
+                ref=ref,
+                to_state="Canceled",
+            )
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         if payload.comment:
@@ -4308,8 +4323,12 @@ async def finish_agent_run(
                 and not is_workspace_bundle
                 and not defer_merged_transition
             ):
-                await resolved.gateway.transition(
-                    ref,
+                await transition_via_projector(
+                    session,
+                    settings=get_settings(),
+                    workspace_id=workspace_id,
+                    gateway=resolved.gateway,
+                    ref=ref,
                     to_state=payload.stage_next,
                     from_state=payload.fsm_stage,
                 )
@@ -4362,8 +4381,12 @@ async def finish_agent_run(
                     # the ticket in Done with the PR still open.
                     if defer_merged_transition and payload.stage_next:
                         try:
-                            await resolved.gateway.transition(
-                                ref,
+                            await transition_via_projector(
+                                session,
+                                settings=get_settings(),
+                                workspace_id=workspace_id,
+                                gateway=resolved.gateway,
+                                ref=ref,
                                 to_state=payload.stage_next,
                                 from_state=payload.fsm_stage,
                             )
@@ -4584,7 +4607,14 @@ async def finish_agent_run(
             actions.append("tracker:comment")
         # ``Done`` is the legacy workflow-state path in LinearTracker —
         # it resolves the state by literal name, not via FSM map.
-        await resolved.gateway.transition(ref, to_state="Done")
+        await transition_via_projector(
+            session,
+            settings=get_settings(),
+            workspace_id=workspace_id,
+            gateway=resolved.gateway,
+            ref=ref,
+            to_state="Done",
+        )
         actions.append("tracker:transition:Done")
         await _sweep_inbox_on_ticket_advance(
             session,
@@ -5042,7 +5072,14 @@ async def post_admin_relabel_stages(
         # ("Todo" / "Backlog" / "In Progress" / "Done" / "Canceled")
         # without faking an agent finish.
         try:
-            await resolved.gateway.transition(ref, to_state=payload.set_state)
+            await transition_via_projector(
+                session,
+                settings=get_settings(),
+                workspace_id=workspace_id,
+                gateway=resolved.gateway,
+                ref=ref,
+                to_state=payload.set_state,
+            )
             state_changed_to = payload.set_state
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(

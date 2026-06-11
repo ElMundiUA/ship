@@ -268,6 +268,12 @@ class Settings(BaseSettings):
     stall_notify_cooldown_minutes: int = Field(
         default=360, alias="SHIP_STALL_NOTIFY_COOLDOWN_MIN"
     )
+    # StateProjector strangler (ELS-229): when on, every FSM->tracker
+    # status write funnels through services/state_projector.py. Off
+    # (default) keeps the original direct gateway.transition paths.
+    state_projector_unified: bool = Field(
+        default=False, alias="SHIP_STATE_PROJECTOR_UNIFIED"
+    )
 
     # --- Auth0 (used when auth_mode == "auth0") ---
     auth0_domain: str | None = Field(default=None, alias="AUTH0_DOMAIN")

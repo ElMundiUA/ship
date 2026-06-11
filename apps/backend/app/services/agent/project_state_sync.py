@@ -174,8 +174,17 @@ async def sync_project_tickets_for_state(
         if not ticket_uuid:
             continue
         try:
-            await gateway.transition(
-                TicketRef(
+            from backend.app.core.config import get_settings
+            from backend.app.services.state_projector import (
+                transition_via_projector,
+            )
+
+            await transition_via_projector(
+                session,
+                settings=get_settings(),
+                workspace_id=workspace_id,
+                gateway=gateway,
+                ref=TicketRef(
                     kind=tracker_kind or "linear",
                     workspace_hint=None,
                     id=str(ticket_uuid),
@@ -304,8 +313,17 @@ async def apply_project_state_to_ticket(
         tracker_kind = _derive_tracker_kind(gateway)
 
     try:
-        await gateway.transition(
-            TicketRef(
+        from backend.app.core.config import get_settings
+        from backend.app.services.state_projector import (
+            transition_via_projector,
+        )
+
+        await transition_via_projector(
+            session,
+            settings=get_settings(),
+            workspace_id=workspace_id,
+            gateway=gateway,
+            ref=TicketRef(
                 kind=tracker_kind or "linear",
                 workspace_hint=None,
                 id=str(ticket_uuid),
