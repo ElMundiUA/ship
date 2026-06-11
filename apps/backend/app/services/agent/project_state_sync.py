@@ -46,11 +46,14 @@ logger = logging.getLogger(__name__)
 # Project priority state → (from-Linear-state, to-Linear-state) for
 # the sync transition. ``None`` means "no sync action for this state"
 # — useful for terminal states or transitions we deliberately ignore.
-_TRANSITION_PLAN: dict[str, tuple[str, str] | None] = {
-    "active": ("Backlog", "Todo"),
-    "planning": ("Todo", "Backlog"),
-    "parked": ("Todo", "Backlog"),
-}
+#
+# ELS-228: derived from the single egress-only source of truth in
+# tracker_fsm (never inverted into a control decision).
+from backend.app.services.tracker_fsm import PROJECT_STATE_TICKET_MOVES
+
+_TRANSITION_PLAN: dict[str, tuple[str, str] | None] = dict(
+    PROJECT_STATE_TICKET_MOVES
+)
 
 
 @dataclass(slots=True)
