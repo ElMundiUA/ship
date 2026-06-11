@@ -3,7 +3,8 @@
 /**
  * Generic per-workspace config-scope renderer.
  *
- * Drives off the JSONSchema returned by ``GET /api/settings/config/<scope>``
+ * Drives off the JSONSchema returned by ``GET /v1/workspaces/{ws}/config/{scope}``
+ * (via the generic session proxy — ELS-236 retired the bespoke BFF route)
  * so adding a new ``ConfigScope`` server-side automatically shows up
  * in the UI without an FE change. The form-renderer covers the three
  * shapes the registry currently uses:
@@ -62,7 +63,7 @@ export function ConfigScopeCard({
     setStage("loading");
     setErrMsg(null);
     fetch(
-      `/api/settings/config/${encodeURIComponent(scope)}?ws=${encodeURIComponent(workspaceId)}`,
+      `/api/proxy/v1/workspaces/${encodeURIComponent(workspaceId)}/config/${encodeURIComponent(scope)}`,
       { method: "GET", cache: "no-store" },
     )
       .then(async (res) => {
@@ -94,7 +95,7 @@ export function ConfigScopeCard({
     setErrMsg(null);
     try {
       const res = await fetch(
-        `/api/settings/config/${encodeURIComponent(scope)}?ws=${encodeURIComponent(workspaceId)}`,
+        `/api/proxy/v1/workspaces/${encodeURIComponent(workspaceId)}/config/${encodeURIComponent(scope)}`,
         {
           method: "PUT",
           headers: { "content-type": "application/json" },
