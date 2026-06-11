@@ -251,6 +251,14 @@ class Settings(BaseSettings):
     tracker_poll_fire: bool = Field(
         default=False, alias="SHIP_TRACKER_POLL_FIRE"
     )
+    # Global kill-switch for the notification seam (ELS-219). While
+    # ``False`` the ``notify()`` router forces inbox-only regardless
+    # of per-workspace channel routing — instant global rollback for
+    # the Linear/email egress channels. Same shadow-then-fire pattern
+    # as ``tracker_poll_fire`` above.
+    notification_channels_enabled: bool = Field(
+        default=False, alias="SHIP_NOTIFY_CHANNELS"
+    )
 
     # --- Auth0 (used when auth_mode == "auth0") ---
     auth0_domain: str | None = Field(default=None, alias="AUTH0_DOMAIN")
