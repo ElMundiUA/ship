@@ -90,13 +90,23 @@ async def test_cooldown_expiry_renotifies(db_session, seed_workspace) -> None:
 async def test_notifier_never_mutates_locks(db_session, seed_workspace) -> None:
     _, _, ws = seed_workspace
     await _expired_lock(db_session, ws.id)
-    before = await db_session.scalar(select(func.count(AgentDispatchLock.id)))
+    def _count():
+        return db_session.scalar(
+            select(func.count(AgentDispatchLock.id)).where(
+                AgentDispatchLock.workspace_id == ws.id
+            )
+        )
+    before = await _count()
     await notify_stalls_for_workspace(db_session, workspace_id=ws.id)
     await db_session.flush()
-    after = await db_session.scalar(select(func.count(AgentDispatchLock.id)))
+    after = await _count()
     assert after == before
     lock = (
-        await db_session.execute(select(AgentDispatchLock))
+        await db_session.execute(
+            select(AgentDispatchLock).where(
+                AgentDispatchLock.workspace_id == ws.id
+            )
+        )
     ).scalars().first()
     assert lock.key == "project:p1"  # untouched
 

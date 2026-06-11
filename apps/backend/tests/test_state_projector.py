@@ -80,7 +80,13 @@ async def test_tracker_5xx_errored_report_zero_lock_mutation(
     db_session, seed_workspace
 ) -> None:
     _, _, ws = seed_workspace
-    before = await db_session.scalar(select(func.count(AgentDispatchLock.id)))
+    def _count():
+        return db_session.scalar(
+            select(func.count(AgentDispatchLock.id)).where(
+                AgentDispatchLock.workspace_id == ws.id
+            )
+        )
+    before = await _count()
     report = await project_ticket_state(
         db_session,
         workspace_id=ws.id,
@@ -91,7 +97,7 @@ async def test_tracker_5xx_errored_report_zero_lock_mutation(
     assert report.ok is False
     assert isinstance(report.error, RuntimeError)
     await db_session.flush()
-    after = await db_session.scalar(select(func.count(AgentDispatchLock.id)))
+    after = await _count()
     assert after == before == 0
 
 

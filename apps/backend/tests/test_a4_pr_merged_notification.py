@@ -359,40 +359,7 @@ async def test_notifications_api_list_and_dismiss(
     assert len(with_history.json()["items"]) == 2
 
 
-@pytest.mark.asyncio
-async def test_dashboard_surfaces_notifications(
-    v1_client, db_session, seed_workspace, github_app_env
-) -> None:
-    """The dashboard payload carries the newest open banners inline."""
-    _, raw_token, workspace = seed_workspace
-    install, repo = await _seed_install_and_repo(db_session, workspace.id)
-    workspace_id = workspace.id
+# (test_dashboard_surfaces_notifications retired with the dashboard
+#  render route — ELS-238/239; notification persistence is covered by
+#  the remaining tests in this file.)
 
-    body = _merge_payload(
-        install_id=install.installation_id,
-        repo_external_id=repo.external_id,
-        repo_full_name=repo.full_name,
-        pr_id=7_777_020,
-        title="Fix the thing",
-    )
-    resp = await v1_client.post(
-        "/v1/webhooks/github",
-        content=body,
-        headers={
-            "X-GitHub-Event": "pull_request",
-            "X-Hub-Signature-256": _sign(body),
-        },
-    )
-    assert resp.status_code == 200
-
-    headers = {"Authorization": f"Bearer {raw_token}"}
-    dash = await v1_client.get(
-        f"/v1/workspaces/{workspace_id}/dashboard", headers=headers
-    )
-    assert dash.status_code == 200, dash.text
-    payload = dash.json()
-    assert "notifications" in payload
-    assert any(
-        n["kind"] == "pr_merged" and "Fix the thing" in n["title"]
-        for n in payload["notifications"]
-    )
