@@ -18,19 +18,23 @@ test.describe("console surfaces (wired, serial)", () => {
     );
   });
 
-  test("01 — workspace home loads", async ({ page }) => {
-    // Phase-1 two-mode shell: `/` is the workspace home, not the
-    // per-repo "Operating dashboard" (that moved under
-    // `/r/<owner>/<repo>` and reaches full content in PR-4).
-    await page.goto("/");
+  test("01 — residual status surface loads (ELS-239)", async ({ page }) => {
+    // `/` is the headless-pivot residual surface: engine health +
+    // autonomy/console-surface values + deep links out. The rich
+    // WorkspaceHome (Repos/Fleet) was deleted with its backend render
+    // routes in Phase 4. Multi-workspace operators land on the entry
+    // picker first — pin via ?ws when the env provides a workspace id
+    // (local stacks seed several).
+    const ws = process.env.E2E_WORKSPACE_ID?.trim();
+    await page.goto(ws ? `/?ws=${encodeURIComponent(ws)}` : "/");
     await expect(
-      page.getByRole("heading", { name: "Workspace home", exact: true }),
+      page.getByText("Headless status", { exact: false }).first(),
     ).toBeVisible({ timeout: 30_000 });
     await expect(
-      page.getByRole("heading", { name: "Repos", exact: true }),
+      page.getByRole("heading", { name: "Engine", exact: true }),
     ).toBeVisible();
     await expect(
-      page.getByRole("heading", { name: "Fleet", exact: true }),
+      page.getByText(/Where the work lives/i).first(),
     ).toBeVisible();
   });
 
@@ -68,12 +72,10 @@ test.describe("console surfaces (wired, serial)", () => {
     }
   });
 
-  test("03c — reports surface", async ({ page }) => {
-    await page.goto("/reports");
-    await expect(
-      page.getByRole("heading", { name: "Reports", exact: true }),
-    ).toBeVisible({ timeout: 30_000 });
-  });
+  // 03c (reports surface) retired: /reports was deleted on main in
+  // 7848f89d (ELS-165/166, Inbox Decision UI Phase 3) — reports now
+  // land as inbox rows. Never caught because the wired suite is not
+  // in CI and 01's failure serial-aborted the rest of this block.
 
   test("06 — navigator (agent chat)", async ({ page }) => {
     await page.goto("/chat");
@@ -90,7 +92,7 @@ test.describe("console surfaces (wired, serial)", () => {
   test("08 — knowledge buckets", async ({ page }) => {
     await page.goto("/knowledge");
     await expect(
-      page.getByRole("heading", { name: "Knowledge buckets", exact: true }),
+      page.getByRole("heading", { name: "Knowledge", exact: true }),
     ).toBeVisible({ timeout: 30_000 });
     // Phase 4: the scope pill is mounted in the header and defaults
     // to "workspace" scope when no ?scope= query param is set.
@@ -103,11 +105,10 @@ test.describe("console surfaces (wired, serial)", () => {
     page,
   }) => {
     // One pill test per surface so regressions flag which page lost
-    // the pill rather than one big sweep. All four are the same
-    // assertion shape — default scope is workspace when no query
-    // param is set.
+    // the pill rather than one big sweep. The inbox dropped the pill
+    // with the ELS-146 mailbox redesign — /chat (and /knowledge via
+    // test 08) are the remaining pill surfaces.
     const surfaces = [
-      "/inbox",
       "/chat",
     ] as const;
     for (const path of surfaces) {
@@ -130,7 +131,7 @@ test.describe("console surfaces (wired, serial)", () => {
     // path is at least not an error (no crash on unknown repo_id).
     await page.goto("/knowledge?scope=repo&repo_id=00000000-0000-0000-0000-000000000000");
     await expect(
-      page.getByRole("heading", { name: "Knowledge buckets", exact: true }),
+      page.getByRole("heading", { name: "Knowledge", exact: true }),
     ).toBeVisible({ timeout: 30_000 });
     const pill = page.getByTestId("scope-pill");
     await expect(pill).toBeVisible({ timeout: 10_000 });
@@ -145,17 +146,21 @@ test.describe("console surfaces (wired, serial)", () => {
     ).toBeVisible({ timeout: 30_000 });
   });
 
-  test("11 — integrations", async ({ page }) => {
+  test("11 — integrations (redirects into settings tab)", async ({ page }) => {
+    // Sprint B collapsed /integrations into the settings mega-page —
+    // next.config issues a permanent redirect that keeps the query.
     await page.goto("/integrations");
+    await expect(page).toHaveURL(/\/settings\?.*tab=integrations/);
     await expect(
-      page.getByRole("heading", { name: "Integrations", exact: true }),
+      page.getByRole("heading", { name: "Workspace settings", exact: true }),
     ).toBeVisible({ timeout: 30_000 });
   });
 
-  test("12 — members (team)", async ({ page }) => {
+  test("12 — members (redirects into settings tab)", async ({ page }) => {
     await page.goto("/members");
+    await expect(page).toHaveURL(/\/settings\?.*tab=members/);
     await expect(
-      page.getByRole("heading", { name: "Members", exact: true }),
+      page.getByRole("heading", { name: "Workspace settings", exact: true }),
     ).toBeVisible({ timeout: 30_000 });
   });
 
@@ -173,71 +178,44 @@ test.describe("console surfaces (wired, serial)", () => {
   test("14 — rail: workspace nav exposes active workspace pages", async ({
     page,
   }) => {
-    await page.goto("/");
+    // Same multi-workspace pinning as test 01 — bare "/" lands on the
+    // entry picker when the operator has several workspaces.
+    const ws = process.env.E2E_WORKSPACE_ID?.trim();
+    await page.goto(ws ? `/?ws=${encodeURIComponent(ws)}` : "/");
     const nav = page.locator("aside nav");
     const checks: [string, RegExp][] = [
-      ["Process", /\/process$/],
-      ["Reports", /\/reports$/],
-      ["Knowledge", /\/knowledge$/],
+      ["Process", /\/process(\?|$)/],
+      ["Knowledge", /\/knowledge(\?|$)/],
+      ["Policies", /\/settings\/policy(\?|$)/],
     ];
     await expect(
-      nav.getByRole("link", { name: /^Inbox · \d+$/ }),
+      nav.getByRole("link", { name: /^Inbox(?: · \d+)?$/ }),
     ).toBeVisible();
-    await nav.getByRole("link", { name: /^Inbox · \d+$/ }).click();
-    await expect(page).toHaveURL(/\/inbox$/);
+    await nav.getByRole("link", { name: /^Inbox(?: · \d+)?$/ }).click();
+    await expect(page).toHaveURL(/\/inbox(\?|$)/);
     for (const [label, pathRe] of checks) {
       await nav.getByRole("link", { name: label, exact: true }).click();
       await expect(page).toHaveURL(pathRe);
     }
-    await nav.getByRole("link", { name: "Home", exact: true }).click();
+    await nav.getByRole("link", { name: "Dashboard", exact: true }).click();
     await expect(page).toHaveURL(/\/(?:$|\?)/);
   });
 
   test("14b — header Navigator launcher opens /chat", async ({ page }) => {
-    await page.goto("/");
+    // The residual "/" surface renders AppShellChrome without the
+    // header bar (ELS-239), so the launcher lives on the header'd
+    // pages — assert it from the Inbox, the always-on approval
+    // surface.
+    await page.goto("/inbox");
     const launcher = page.getByTestId("navigator-launcher");
     await expect(launcher).toBeVisible({ timeout: 15_000 });
     await launcher.click();
     await expect(page).toHaveURL(/\/chat(?:\?|$)/);
   });
 
-  test("15 — repo mode: click a repo card → /r/<owner>/<repo>", async ({
-    page,
-  }) => {
-    // Phase-1 two-mode shell: the workspace home lists activated
-    // repos as channels. Clicking one must land on
-    // `/r/<owner>/<repo>` and swap the sidebar to the repo nav.
-    // We pick the first repo tile that the backend fed in.
-    await page.goto("/");
-    const firstRepoLink = page.getByTestId("repo-channel").first();
-    const ok = await firstRepoLink
-      .waitFor({ state: "visible", timeout: 10_000 })
-      .then(() => true)
-      .catch(() => false);
-    if (!ok) {
-      test.info().annotations.push({
-        type: "skip",
-        description:
-          "No activated repos in this workspace; repo-mode flow can't be exercised.",
-      });
-      return;
-    }
-    await firstRepoLink.click();
-    await expect(page).toHaveURL(/\/r\/[^/]+\/[^/?#]+(?:\?|$)/, {
-      timeout: 15_000,
-    });
-    // Repo-mode sidebar shows repo-scoped operate items (Lanes,
-    // Requests). The workspace-only "Fleet requests" entry must
-    // NOT appear on the same rail.
-    const nav = page.locator("aside nav");
-    await expect(
-      nav.getByRole("link", { name: "Lanes", exact: true }),
-    ).toBeVisible({ timeout: 10_000 });
-    await expect(
-      nav.getByRole("link", { name: "Requests", exact: true }),
-    ).toBeVisible();
-    await expect(
-      nav.getByRole("link", { name: "Fleet requests", exact: true }),
-    ).toHaveCount(0);
-  });
+  // 15 (repo mode /r/<owner>/<repo>) retired with Phase 4: the repo
+  // dashboard + its repo-channel tiles were deleted (ELS-238/239) —
+  // repo state now lives in GitHub, the residual surface only deep-
+  // links out. test_strangler_regression_gate.py pins the backend
+  // half (repo_home render route gone).
 });
