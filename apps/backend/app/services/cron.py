@@ -166,6 +166,11 @@ class CronLockId(IntEnum):
     # ELS-231: stall notifier — forwards engine_health stalls through
     # notify() on a schedule (report-only; never mutates locks).
     STALL_NOTIFY = 1025
+    # ELS-233: scheduled ticket-creating routines (trigger c) — one id
+    # per routine kind, fresh numbers (never reuse retired ids).
+    SCHEDULED_ROUTINE_DAILY = 1026
+    SCHEDULED_ROUTINE_RETRO = 1027
+    SCHEDULED_ROUTINE_TECHDEBT = 1028
 
 
 # ---------------------------------------------------------------------------

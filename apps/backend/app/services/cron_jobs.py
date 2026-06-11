@@ -588,6 +588,26 @@ def register_all() -> None:
         cron_expr="20 * * * *",  # hourly at :20; audit-log cooldown dedup
         job_id="stall_notify",
     )
+    # ELS-233 — trigger-(c) ticket-creating routines. cron_exprs live
+    # on the specs (single source); idempotency per (kind, period_key)
+    # via the audit ledger, so a retried tick can never dup a ticket.
+    from backend.app.services.scheduled_routines import SPECS as _ROUTINE_SPECS
+
+    register_cron(
+        fn=_scheduled_routine_daily_tick,
+        cron_expr=_ROUTINE_SPECS["daily"].cron_expr,
+        job_id="scheduled_routine_daily",
+    )
+    register_cron(
+        fn=_scheduled_routine_retro_tick,
+        cron_expr=_ROUTINE_SPECS["retro"].cron_expr,
+        job_id="scheduled_routine_retro",
+    )
+    register_cron(
+        fn=_scheduled_routine_techdebt_tick,
+        cron_expr=_ROUTINE_SPECS["techdebt"].cron_expr,
+        job_id="scheduled_routine_techdebt",
+    )
     # E16/ELS-124 retired the Ship-side trigger-workflow scheduler.
     # The tracker poller + dispatcher (``apps/backend/app/services/
     # tracker_poller.py`` + ``dispatcher.py``) now drive every agent
@@ -755,6 +775,42 @@ async def _agent_dispatch_lock_sweep_tick() -> None:
     )
 
     await sweep_dangling_project_locks_tick()
+
+
+@cron_with_lock(
+    lock=CronLockId.SCHEDULED_ROUTINE_DAILY, name="scheduled_routine_daily"
+)
+async def _scheduled_routine_daily_tick() -> None:
+    """Trigger-(c) daily review ticket (ELS-233). Opt-in per workspace."""
+    from backend.app.services.scheduled_routines import (
+        run_routine_for_all_workspaces,
+    )
+
+    await run_routine_for_all_workspaces("daily")
+
+
+@cron_with_lock(
+    lock=CronLockId.SCHEDULED_ROUTINE_RETRO, name="scheduled_routine_retro"
+)
+async def _scheduled_routine_retro_tick() -> None:
+    """Trigger-(c) weekly retro ticket (ELS-233). Opt-in per workspace."""
+    from backend.app.services.scheduled_routines import (
+        run_routine_for_all_workspaces,
+    )
+
+    await run_routine_for_all_workspaces("retro")
+
+
+@cron_with_lock(
+    lock=CronLockId.SCHEDULED_ROUTINE_TECHDEBT, name="scheduled_routine_techdebt"
+)
+async def _scheduled_routine_techdebt_tick() -> None:
+    """Trigger-(c) weekly tech-debt sweep ticket (ELS-233). Opt-in."""
+    from backend.app.services.scheduled_routines import (
+        run_routine_for_all_workspaces,
+    )
+
+    await run_routine_for_all_workspaces("techdebt")
 
 
 @cron_with_lock(lock=CronLockId.STALL_NOTIFY, name="stall_notify")
