@@ -26,11 +26,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.db.models.tenancy import Workspace
 
 
-AgentProviderKind = Literal["cursor", "codex", "claude"]
+AgentProviderKind = Literal["cursor", "codex", "claude", "ship"]
 
 
+# ``ship`` is the thesis-6 self-spawn runtime (ELS-241): valid at the
+# DB/resolver layer, but deliberately NOT offered by the self-serve
+# ``agent.provider`` config scope — it is internal/dogfood-gated and
+# additionally refused by the CLI dispatcher unless
+# ``SHIP_ALLOW_SELF_SPAWN=true``.
 SUPPORTED_PROVIDERS: Final[frozenset[str]] = frozenset(
-    {"cursor", "codex", "claude"}
+    {"cursor", "codex", "claude", "ship"}
 )
 DEFAULT_PROVIDER: Final[AgentProviderKind] = "cursor"
 
