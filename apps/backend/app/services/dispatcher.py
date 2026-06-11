@@ -1072,6 +1072,12 @@ async def maybe_dispatch(
     # on PAC-23: planning finished, cascade fired dev_implementation,
     # the same ticket's project lock was still held → silent refusal
     # → chain stalls one stage in.
+    # ELS-242 (thesis 6): the carve-out is for ``cascade`` ONLY. A
+    # nested self-spawn run (``trigger_kind='self_spawn'``) is a fresh
+    # entrant by design — it contends for the project lock, counts
+    # against the per-workspace cap and burns cascade budget like any
+    # other dispatch, under EVERY autonomy profile. Adding 'self_spawn'
+    # here would reopen the fork-bomb / project_lock-leak class.
     is_cascade = trigger_kind == "cascade"
     if project_id and not is_anchor and not is_cascade:
         project_lock_key = f"project:{project_id}"
