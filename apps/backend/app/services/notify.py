@@ -134,13 +134,17 @@ class InboxChannel:
 
         o = ctx.inbox_overrides
         item_type = o.get("type") or _LEVEL_TO_INBOX_TYPE[ctx.level]
-        title = _truncate(o.get("title") or ctx.title, _TITLE_MAX_LEN)
-        summary_src = o.get("summary", ctx.body)
-        summary = (
-            _truncate(summary_src or "", _SUMMARY_MAX_LEN) or None
-            if summary_src is not None
-            else None
-        )
+        # Override title/summary are used VERBATIM (the flipped emit-site
+        # already applied its own truncation — byte-identity). The default
+        # ctx fields get the intake truncation conventions.
+        if "title" in o:
+            title = o["title"]
+        else:
+            title = _truncate(ctx.title, _TITLE_MAX_LEN)
+        if "summary" in o:
+            summary = o["summary"]
+        else:
+            summary = _truncate(ctx.body or "", _SUMMARY_MAX_LEN) or None
 
         kwargs: dict[str, Any] = {
             "workspace_id": ctx.workspace_id,

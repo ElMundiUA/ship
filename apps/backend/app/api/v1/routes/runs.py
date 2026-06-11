@@ -564,27 +564,30 @@ async def _emit_self_heal_blocker_inbox(
     )
     if int(exists or 0) > 0:
         return
-    from backend.app.services.inbox.headline import derive_headline
+    from backend.app.services.notify import NotifyLevel, notify
 
     summary = (run.summary or routine.lane_id or "Self-heal")[:500]
     title = f"Self-heal could not fix: {summary}"[:255]
-    session.add(
-        InboxItem(
-            workspace_id=run.workspace_id,
-            repo_id=routine.repo_id,
-            type="blocker",
-            title=title,
-            headline=derive_headline(summary=summary, title=title),
-            summary=summary,
-            payload={
-                "kind": "self_heal_failed",
-                "routine_id": str(routine.id),
-                "run_id": str(run.id),
-            },
-            status="new",
-            source_table="self_heal_run",
-            source_id=run.id,
-        )
+    # headline rides the InboxItem before_insert backstop — same
+    # derive_headline(summary, title) the site called explicitly before.
+    await notify(
+        session,
+        workspace_id=run.workspace_id,
+        repo_id=routine.repo_id,
+        title=title,
+        body=summary,
+        level=NotifyLevel.BLOCKER,
+        payload={
+            "kind": "self_heal_failed",
+            "routine_id": str(routine.id),
+            "run_id": str(run.id),
+        },
+        inbox_overrides={
+            "title": title,
+            "summary": summary,
+            "source_table": "self_heal_run",
+            "source_id": run.id,
+        },
     )
 
 

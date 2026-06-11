@@ -719,10 +719,12 @@ async def _file_no_target_repo_letter(
 ) -> None:
     """Ask the operator to bind a repo when routing can't resolve one.
 
-    Deduped per ticket via ``no-target-repo:<ticket>``. Beats the old
-    behaviour of dumping the run on an arbitrary (often key-less) repo.
+    Deduped per ticket via ``no-target-repo:<ticket>`` — the dedup
+    pre-check stays HERE (caller-side, per the notification-seam rule);
+    only the emission itself routes through :func:`notify`.
     """
     from backend.app.db.models.inbox import InboxItem
+    from backend.app.services.notify import NotifyLevel, notify
 
     handle = f"no-target-repo:{ticket_ref}"
     existing = (
@@ -737,30 +739,31 @@ async def _file_no_target_repo_letter(
     if existing is not None:
         return
     proj = project_name or project_id or "(no project)"
-    session.add(
-        InboxItem(
-            workspace_id=workspace_id,
-            repo_id=None,
-            type="clarification",
-            title=f"{ticket_ref}: no target repo — pick one"[:300],
-            summary=(
-                f"Ship can't dispatch {ticket_ref}: its project ({proj}) has "
-                f"no repo binding and the workspace has no default repo set. "
-                f"Bind the project to a repo, or set a workspace default repo, "
-                f"in Settings → repo routing — then it dispatches on the next "
-                f"tick."
-            )[:2000],
-            payload={
-                "ticket_ref": ticket_ref,
-                "project_id": project_id,
-                "project_name": project_name,
-            },
-            status="new",
-            category="decision_needed",
-            priority=8,
-            intake_handle=handle,
-            intake_reason="no_target_repo",
-        )
+    await notify(
+        session,
+        workspace_id=workspace_id,
+        ticket_ref=ticket_ref,
+        title=f"{ticket_ref}: no target repo — pick one"[:300],
+        body=(
+            f"Ship can't dispatch {ticket_ref}: its project ({proj}) has "
+            f"no repo binding and the workspace has no default repo set. "
+            f"Bind the project to a repo, or set a workspace default repo, "
+            f"in Settings → repo routing — then it dispatches on the next "
+            f"tick."
+        )[:2000],
+        level=NotifyLevel.ACTION,
+        dedup_key=handle,
+        payload={
+            "ticket_ref": ticket_ref,
+            "project_id": project_id,
+            "project_name": project_name,
+        },
+        inbox_overrides={
+            "type": "clarification",
+            "category": "decision_needed",
+            "priority": 8,
+            "intake_reason": "no_target_repo",
+        },
     )
 
 
