@@ -111,6 +111,51 @@ async def _write_default_agent_profile(
     ws.default_agent_profile = value
 
 
+_CONSOLE_SURFACES = ("full", "residual", "off")
+
+
+async def _read_console_surface(_s: AsyncSession, ws: Workspace) -> Any:
+    raw = (ws.settings or {}).get("console") or {}
+    value = raw.get("surface")
+    return value if value in _CONSOLE_SURFACES else "full"
+
+
+async def _write_console_surface(_s: AsyncSession, ws: Workspace, value: Any) -> None:
+    if value not in _CONSOLE_SURFACES:
+        raise ValueError(
+            f"console.surface must be one of {sorted(_CONSOLE_SURFACES)}"
+        )
+    settings = dict(ws.settings or {})
+    console = dict(settings.get("console") or {})
+    console["surface"] = str(value)
+    settings["console"] = console
+    # Reassign (not mutate) so SQLAlchemy's JSONB change detection fires.
+    ws.settings = settings
+
+
+async def _read_autonomy_profile(_s: AsyncSession, ws: Workspace) -> Any:
+    from backend.app.services.agent_provider_resolver import (
+        DEFAULT_AUTONOMY,
+        SUPPORTED_AUTONOMY_PROFILES,
+    )
+
+    value = ws.autonomy
+    return value if value in SUPPORTED_AUTONOMY_PROFILES else DEFAULT_AUTONOMY
+
+
+async def _write_autonomy_profile(_s: AsyncSession, ws: Workspace, value: Any) -> None:
+    from backend.app.services.agent_provider_resolver import (
+        SUPPORTED_AUTONOMY_PROFILES,
+    )
+
+    if value not in SUPPORTED_AUTONOMY_PROFILES:
+        raise ValueError(
+            "autonomy.profile must be one of "
+            f"{sorted(SUPPORTED_AUTONOMY_PROFILES)}"
+        )
+    ws.autonomy = str(value)
+
+
 _CATALOG_KEYS = ("global", "workspace", "project")
 
 
@@ -198,6 +243,48 @@ _SCOPE_LIST: tuple[ConfigScope, ...] = (
         read=_read_catalog_sources,
         write=_write_catalog_sources,
         audit_event="workspace.catalog_sources.set",
+    ),
+    ConfigScope(
+        slug="console.surface",
+        description=(
+            "How much of the web console this workspace renders: "
+            "``full`` (everything), ``residual`` (status + Inbox + "
+            "irreducible controls only), ``off`` (health page only — "
+            "the Inbox approval surface stays reachable). The headless "
+            "kill-switch for the Phase-4 console strangler."
+        ),
+        schema={
+            "type": "string",
+            "enum": list(_CONSOLE_SURFACES),
+            "description": (
+                "Console surface mode. Default is ``full``; flipping "
+                "is reversible at any time."
+            ),
+        },
+        read=_read_console_surface,
+        write=_write_console_surface,
+        audit_event="workspace.console_surface.set",
+    ),
+    ConfigScope(
+        slug="autonomy.profile",
+        description=(
+            "Thesis-7 autonomy dial: how much the agent may do on its "
+            "own (skip approvals, self-merge, self-pick work). One of "
+            "``high`` / ``balanced`` / ``conservative``. Never touches "
+            "the lease/cap/cascade control plane."
+        ),
+        schema={
+            "type": "string",
+            "enum": ["high", "balanced", "conservative"],
+            "description": (
+                "Agent action-rights profile. ``balanced`` is the "
+                "default; ``high`` is opt-in and requires a populated "
+                "knowledge surface to work well."
+            ),
+        },
+        read=_read_autonomy_profile,
+        write=_write_autonomy_profile,
+        audit_event="workspace.autonomy.set",
     ),
 )
 

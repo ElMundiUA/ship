@@ -27,6 +27,7 @@ from backend.app.api.v1.routes import (
     clarifications,
     config,
     dashboard,
+    engine_health,
     dashboard_live_system,
     deploy,
     digitalocean_oauth,
@@ -157,6 +158,7 @@ api_router.include_router(dashboard_priorities.router)
 # on every render.
 api_router.include_router(dashboard_live_system.router)
 api_router.include_router(analytics_dora.router)
+api_router.include_router(engine_health.router)
 # Per-repo Home rollup (RFC-0008 §F — PR-4) — a single snapshot the
 # /r/<slug> page renders as Now + Trends tabs without fanning out to
 # the four source endpoints client-side.

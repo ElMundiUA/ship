@@ -235,7 +235,11 @@ from backend.app.services.tracker_fsm import (
 #         collection, max_tokens 8192, and a deterministic verify-guard +
 #         corrective retry. Re-seed repos so the Actions path plans as well as
 #         the manual-key path.
-BUNDLE_VERSION: str = "0.40"
+# ``0.41`` → ELS-228 (headless pivot P2): tracker_fsm's projection maps unified
+#         into the single egress-only FSM_TO_NATIVE_STATE table. The rendered
+#         ``.ship/tracker-fsm.md`` output is unchanged — version bumped because
+#         the renderer source moved under the unified table.
+BUNDLE_VERSION: str = "0.41"
 
 # First bundle whose ``ship-agent-run.yml`` declares the ``ship_run_id``
 # ``workflow_dispatch`` input. The E16 cron dispatcher must NOT send this
