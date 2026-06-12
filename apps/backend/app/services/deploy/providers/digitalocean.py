@@ -180,6 +180,30 @@ def _root_relative_dockerfile(source_dir: str | None, dockerfile_path: str) -> s
     return f"{sd}/{df}"
 
 
+def _normalize_route_path(path: str | None) -> str:
+    """Canonicalize a plan route into a DigitalOcean ingress path PREFIX.
+
+    DO route paths are literal prefixes; globs are NOT supported. An LLM
+    planner may emit ``/*`` (informally "everything"), but DO then matches no
+    request and the app 404s on ``/`` (confirmed live: ``/*`` → 404, ``/`` →
+    200). Strip a trailing wildcard so ``/*`` → ``/`` and ``/api/*`` →
+    ``/api``; plain prefixes pass through unchanged. Provider-specific (other
+    targets, e.g. AWS ALB, accept globs), so it lives in the adapter next to
+    ``_root_relative_dockerfile`` — not in the planner or the provider-neutral
+    plan.
+    """
+    p = (path or "/").strip() or "/"
+    if not p.startswith("/"):
+        p = "/" + p
+    if p.endswith("/*"):
+        p = p[:-2] or "/"
+    elif p.endswith("*"):
+        p = p[:-1] or "/"
+    if p != "/":
+        p = "/" + p.strip("/")
+    return p
+
+
 def _build_service(
     comp,
     *,
@@ -208,7 +232,7 @@ def _build_service(
     if comp.http_port:
         svc["http_port"] = comp.http_port
     routes = comp.routes or ["/"]
-    svc["routes"] = [{"path": r} for r in routes]
+    svc["routes"] = [{"path": _normalize_route_path(r)} for r in routes]
     hc = _build_health_check(comp)
     if hc:
         svc["health_check"] = hc
@@ -235,7 +259,7 @@ def _build_static_site(
     if comp.output_dir:
         site["output_dir"] = comp.output_dir
     routes = comp.routes or ["/"]
-    site["routes"] = [{"path": r} for r in routes]
+    site["routes"] = [{"path": _normalize_route_path(r)} for r in routes]
     envs = _build_envs(comp.env, operator)
     if envs:
         site["envs"] = envs
@@ -524,20 +548,42 @@ class DigitalOceanAppPlatform:
             # commit ("error checking out commit: object not found"). So after
             # applying the spec we explicitly create_deployment(force_build) to
             # force a fresh source fetch of the branch's real HEAD.
-            logger.info("Updating DO app %s ('%s')", existing_app_id, plan.app_name)
-            current_app = await do.get_app(
-                existing_app_id, token=self._token, client=self._client
-            )
-            spec = merge_current_envs(spec, current_app.get("spec") or {})
-            app = await do.update_app(
-                existing_app_id, spec, token=self._token, client=self._client
-            )
-            app_id = app["id"]
-            fresh = await do.create_deployment(
-                app_id, token=self._token, force_build=True, client=self._client
-            )
-            dep_id = fresh.get("id")
-        else:
+            try:
+                logger.info(
+                    "Updating DO app %s ('%s')", existing_app_id, plan.app_name
+                )
+                current_app = await do.get_app(
+                    existing_app_id, token=self._token, client=self._client
+                )
+                spec = merge_current_envs(spec, current_app.get("spec") or {})
+                # Region IS changeable on DO — editing the spec's region field
+                # migrates the app and redeploys it. Honor the requested region
+                # (the console pre-fills it to the app's current region on a
+                # plain redeploy, so this is a no-op unless the operator
+                # deliberately picks a different one). NOTE: a managed DB stays
+                # in the old region — that's on the operator to move.
+                spec["region"] = self._region
+                app = await do.update_app(
+                    existing_app_id, spec, token=self._token, client=self._client
+                )
+                app_id = app["id"]
+                fresh = await do.create_deployment(
+                    app_id, token=self._token, force_build=True, client=self._client
+                )
+                dep_id = fresh.get("id")
+            except do.DigitalOceanAPIError as exc:
+                # The recorded app was deleted on DO (torn down in the dashboard
+                # or by a prior teardown), so our stored app_id is stale. Don't
+                # fail the deploy on the 404 — drop it and create a fresh app
+                # below (in the requested region). Other errors still surface.
+                if exc.status != 404:
+                    raise
+                logger.info(
+                    "DO app %s no longer exists (404) — creating a fresh app",
+                    existing_app_id,
+                )
+                existing_app_id = None
+        if not existing_app_id:
             logger.info(
                 "Creating DO app '%s' (%d components)",
                 plan.app_name,

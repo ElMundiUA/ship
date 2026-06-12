@@ -2611,76 +2611,6 @@ export function getLiveSystem(
   );
 }
 
-// ---------------------------------------------------------------------------
-// Analytics — DORA metrics over a rolling window
-// ---------------------------------------------------------------------------
-
-export interface ApiDoraDfPoint {
-  date: string;
-  count: number;
-}
-export interface ApiDoraLtPoint {
-  week_start: string;
-  median_hours: number | null;
-  sample: number;
-}
-export interface ApiDoraCfrPoint {
-  date: string;
-  total: number;
-  failed: number;
-}
-export interface ApiDoraIncident {
-  failed_at: string;
-  recovered_at: string | null;
-  hours: number | null;
-  workflow_name: string | null;
-}
-export interface ApiDoraResponse {
-  window_days: number;
-  computed_at: string;
-  deployment_frequency: {
-    total_deploys: number;
-    per_day_average: number;
-    per_day_median: number;
-    per_day_p90: number;
-    label: string;
-    time_series: ApiDoraDfPoint[];
-  };
-  lead_time: {
-    median_hours: number | null;
-    p90_hours: number | null;
-    label: string;
-    sample_size: number;
-    time_series: ApiDoraLtPoint[];
-  };
-  change_failure_rate: {
-    rate: number;
-    label: string;
-    total_deploys: number;
-    failed_deploys: number;
-    hotfix_prs: number;
-    time_series: ApiDoraCfrPoint[];
-  };
-  mttr: {
-    median_hours: number | null;
-    p90_hours: number | null;
-    label: string;
-    incidents: ApiDoraIncident[];
-  };
-}
-
-export function getDoraAnalytics(
-  workspaceId: string,
-  days: number,
-  token?: string,
-): Promise<ApiDoraResponse> {
-  const qs = `?days=${encodeURIComponent(String(days))}`;
-  return apiFetch<ApiDoraResponse>(
-    `/v1/workspaces/${encodeURIComponent(workspaceId)}/analytics/dora${qs}`,
-    { token },
-  );
-}
-
 export function dismissNotification(
   workspaceId: string,
   notificationId: string,
@@ -4343,6 +4273,8 @@ export interface ApiDeployment {
   error_message: string | null;
   /** Coarse failure category; "github_access" = private repo unreachable by DO. */
   error_kind: string | null;
+  /** DigitalOcean region slug this app was deployed to (for redeploy pre-fill). */
+  region?: string | null;
   started_at: string | null;
   finished_at: string | null;
   created_at: string;
@@ -4400,19 +4332,20 @@ export function triggerDeploy(
   llm?: { provider?: string; model?: string; apiKey?: string } | null,
   env?: ApiDeploymentEnvInput[],
   token?: string,
+  region?: string,
 ): Promise<ApiDeployment> {
+  const body: Record<string, unknown> = { env };
+  if (llm) {
+    body.llm_provider = llm.provider;
+    body.llm_model = llm.model;
+    body.llm_api_key = llm.apiKey;
+  }
+  if (region) body.region = region;
   return apiFetch<ApiDeployment>(
     `/v1/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repoId)}/deploy`,
     {
       method: "POST",
-      body: llm
-        ? {
-            llm_provider: llm.provider,
-            llm_model: llm.model,
-            llm_api_key: llm.apiKey,
-            env,
-          }
-        : { env },
+      body,
       token,
     },
   );
@@ -4448,6 +4381,17 @@ export function rollbackVersion(
 ): Promise<ApiDeployment> {
   return apiFetch<ApiDeployment>(
     `/v1/workspaces/${encodeURIComponent(workspaceId)}/deployments/${encodeURIComponent(deploymentId)}/rollback`,
+    { method: "POST", body: {}, token },
+  );
+}
+
+export function cancelDeployment(
+  workspaceId: string,
+  deploymentId: string,
+  token?: string,
+): Promise<ApiDeployment> {
+  return apiFetch<ApiDeployment>(
+    `/v1/workspaces/${encodeURIComponent(workspaceId)}/deployments/${encodeURIComponent(deploymentId)}/cancel`,
     { method: "POST", body: {}, token },
   );
 }

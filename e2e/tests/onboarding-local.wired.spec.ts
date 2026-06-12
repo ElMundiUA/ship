@@ -107,8 +107,14 @@ test.describe("onboarding — laptop profile", () => {
   });
 
   test("O4 — logged-out browser bounces to /login", async ({ browser }) => {
-    // No storageState — fresh context, no session cookie.
-    const ctx = await browser.newContext();
+    // Explicitly empty storageState: @playwright/test merges the
+    // project-level `use.storageState` into bare browser.newContext()
+    // calls, so when E2E_STORAGE_STATE is set globally a "fresh"
+    // context would silently arrive authenticated and render the
+    // wizard instead of bouncing.
+    const ctx = await browser.newContext({
+      storageState: { cookies: [], origins: [] },
+    });
     const page = await ctx.newPage();
     await page.goto("/onboarding");
     // Auth middleware kicks in before the page renders; final URL

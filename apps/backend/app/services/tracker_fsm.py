@@ -143,11 +143,78 @@ SHIP_DEFAULT_STATES: Final[tuple[FsmState, ...]] = (
 )
 
 
+# ---------------------------------------------------------------------------
+# EGRESS-ONLY projection maps (ELS-228 — the single source of truth)
+# ---------------------------------------------------------------------------
+#
+# These tables answer exactly one question: "when Ship projects an FSM
+# stage / project state onto the tracker, which NATIVE slot does it
+# write?" They are WRITE maps for the human read-model.
+#
+# INVARIANT (thesis 2, headless-but-stateful): these maps are consumed
+# only on the egress path (Ship -> tracker) — by the provisioner, the
+# Linear adapter's transition(), and project_state_sync. They must
+# NEVER be inverted to parse a native status/label back into an FSM
+# stage for a control decision (lease / cap / cascade). The STATUS
+# field read by tracker_poller is the sole transition trigger and is
+# handled independently of these maps. A guard test pins that neither
+# dispatcher.py nor tracker_poller.py imports them.
+
+# FSM stage -> native workflow-state NAME the projection targets,
+# per tracker kind. The Linear block is the authoritative source the
+# provisioner copies into ``Integration.config`` (which the adapter
+# then resolves to live state IDs per team).
+FSM_TO_NATIVE_STATE: Final[dict[str, dict[str, str]]] = {
+    "linear": {
+        # E16/ELS-123 bundle stages.
+        "planning": "Todo",
+        "dev_implementation": "In Progress",
+        "devops_implementation": "In Progress",
+        "validation": "In Progress",
+        # ``code_review`` and ``auto_merge`` both run while the ticket
+        # sits in Linear's ``Review`` column; ``merged`` flips to Done.
+        "code_review": "Review",
+        "auto_merge": "Review",
+        "merged": "Done",
+        # Self-heal runs out-of-band against any open ticket.
+        "self_heal": "Todo",
+        # Decomposition bundle lives on the planning anchor.
+        "decomposition": "In Progress",
+        "planning_done": "Done",
+        # Legacy pre-E16 stage names — kept so an in-flight ticket
+        # carrying ``stage:task_intake`` still maps to a Linear state.
+        # ELS-124 cutover strips them from the map.
+        "task_intake": "Todo",
+        "ba_requirements": "Todo",
+        "tech_arch_plan": "Todo",
+        "qa_arch_plan": "Todo",
+        "qa_manual": "In Progress",
+        "qa_automation": "In Progress",
+        "pr_review": "Review",
+        "wbs": "In Progress",
+        "architecture": "In Progress",
+        "test_architecture": "In Progress",
+        "tasks": "In Progress",
+    },
+}
+
+# Dashboard project state -> (from_state, to_state) ticket sweep the
+# projection performs when a project flips state. Same egress-only
+# invariant as above; consumed by project_state_sync.
+PROJECT_STATE_TICKET_MOVES: Final[dict[str, tuple[str, str] | None]] = {
+    "active": ("Backlog", "Todo"),
+    "planning": ("Todo", "Backlog"),
+    "parked": ("Todo", "Backlog"),
+}
+
+
 # Per-tracker display hints. None of these are authoritative: they're
 # suggestions the wizard writes into the markdown so operators know
-# which native status slot Ship will target when it reconciles. Left
-# intentionally narrow — if a team runs with non-default Linear
-# workflows they edit the file; Ship reads whatever the file says.
+# which native status slot Ship will target when it reconciles (the
+# authoritative write map is FSM_TO_NATIVE_STATE above — the hints are
+# its human-readable sibling). Left intentionally narrow — if a team
+# runs with non-default Linear workflows they edit the file; Ship
+# reads whatever the file says.
 #
 # Public so the iter 7 ``/v1/workspaces/{ws}/tracker-fsm`` endpoint
 # can hand them to the console without re-parsing the markdown.

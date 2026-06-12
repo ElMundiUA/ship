@@ -59,6 +59,12 @@ COMMANDS
                                          runtime, exit on terminal status.
                                          Spawned per routine by 'shipctl trigger'
                                          in the seed workflow.
+    shipctl local "<ask>" [--role <slug>] [--provider <name>] [--dry-run] [--escalate] [--json]
+                                       — local scratch session (trigger a):
+                                         throwaway worktree, no ticket, no
+                                         lease, stops before push; offers
+                                         a→b escalation via ticket create.
+                                         Gated by local_executor.enabled.
 
   Telemetry & feedback
     shipctl telemetry status|on|off|show-id|reset-id|flush|export|delete-my-data|buffer

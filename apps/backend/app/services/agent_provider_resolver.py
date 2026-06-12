@@ -26,11 +26,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.db.models.tenancy import Workspace
 
 
-AgentProviderKind = Literal["cursor", "codex", "claude"]
+AgentProviderKind = Literal["cursor", "codex", "claude", "ship"]
 
 
+# ``ship`` is the thesis-6 self-spawn runtime (ELS-241): valid at the
+# DB/resolver layer, but deliberately NOT offered by the self-serve
+# ``agent.provider`` config scope — it is internal/dogfood-gated and
+# additionally refused by the CLI dispatcher unless
+# ``SHIP_ALLOW_SELF_SPAWN=true``.
 SUPPORTED_PROVIDERS: Final[frozenset[str]] = frozenset(
-    {"cursor", "codex", "claude"}
+    {"cursor", "codex", "claude", "ship"}
 )
 DEFAULT_PROVIDER: Final[AgentProviderKind] = "cursor"
 
@@ -63,10 +68,49 @@ async def resolve_for_workspace(
     return ResolvedAgentProvider(kind=kind, workspace_id=workspace_id)
 
 
+# ---------------------------------------------------------------------------
+# Thesis-7 autonomy dial (ELS-221)
+# ---------------------------------------------------------------------------
+
+AutonomyProfile = Literal["high", "balanced", "conservative"]
+
+SUPPORTED_AUTONOMY_PROFILES: Final[frozenset[str]] = frozenset(
+    {"high", "balanced", "conservative"}
+)
+# ``balanced`` everywhere; ``high`` is opt-in (never seeded by
+# migration). The dial governs AGENT action-rights only — it must
+# never be consulted by the lease / cap / cascade control plane.
+DEFAULT_AUTONOMY: Final[AutonomyProfile] = "balanced"
+
+
+async def resolve_autonomy_for_workspace(
+    *,
+    session: AsyncSession,
+    workspace_id: uuid.UUID,
+) -> AutonomyProfile:
+    """Return the workspace's autonomy profile.
+
+    Mirrors :func:`resolve_for_workspace`: a missing row or an
+    out-of-enum value (legacy DB, migration not applied) falls back to
+    the safe :data:`DEFAULT_AUTONOMY` instead of raising.
+    """
+
+    row = await session.scalar(
+        select(Workspace.autonomy).where(Workspace.id == workspace_id)
+    )
+    if row in SUPPORTED_AUTONOMY_PROFILES:
+        return row  # type: ignore[return-value]
+    return DEFAULT_AUTONOMY
+
+
 __all__ = [
     "AgentProviderKind",
+    "AutonomyProfile",
+    "DEFAULT_AUTONOMY",
     "DEFAULT_PROVIDER",
     "ResolvedAgentProvider",
+    "SUPPORTED_AUTONOMY_PROFILES",
     "SUPPORTED_PROVIDERS",
     "resolve_for_workspace",
+    "resolve_autonomy_for_workspace",
 ]

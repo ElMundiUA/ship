@@ -9,9 +9,9 @@ table:
   key)`` via INSERT ... ON CONFLICT DO NOTHING; success means
   "nobody else is working on this key", failure means "another agent
   is in flight (or recently was)".
-- ``dispatcher.sweep_expired`` — deletes rows whose ``expires_at`` is
-  in the past, freeing the slot. Run on the same cadence as the
-  tracker poller.
+- ``dispatcher.sweep_expired_locks`` — deletes rows whose ``expires_at`` is
+  in the past, freeing the slot. Run on the agent-dispatch lock sweep
+  cron (5-minute cadence) alongside the ``project:*`` heuristic sweeper.
 
 Keys are opaque strings — the dispatcher writes ``ticket:<ticket_ref>``
 today; future namespaces (``daily:<routine_id>``, ``project:<anchor>``)

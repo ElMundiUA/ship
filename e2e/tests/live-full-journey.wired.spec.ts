@@ -83,7 +83,6 @@ test.describe("live staging full journey aggregate (wired)", () => {
         ["/knowledge", /Knowledge buckets/i],
         ["/integrations", /^Integrations$/i],
         ["/members", /^Members$/i],
-        ["/audit", /Audit log/i],
       ];
       for (const [path, heading] of surfaces) {
         await page.goto(path);

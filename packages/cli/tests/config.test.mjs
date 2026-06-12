@@ -582,3 +582,46 @@ test("write/read preserves lane key order", () => {
   assert.ok(zBlock.indexOf("key:") < zBlock.indexOf("store:"));
   assert.ok(zBlock.indexOf("store:") < zBlock.indexOf("reset_on:"));
 });
+
+/* ---------------------------------------------------------------------------
+ * Headless-pivot config spine (ELS-218): console + autonomy blocks
+ * ------------------------------------------------------------------------- */
+
+test("validateConfig accepts console + autonomy blocks (v2)", () => {
+  const cfg = DEFAULT_CONFIG();
+  cfg.console = { surface: "residual" };
+  cfg.autonomy = { profile: "high" };
+  const res = validateConfig(cfg);
+  assert.equal(res.ok, true, JSON.stringify(res.errors || []));
+  // No unknown-key warnings for the two new top-level blocks.
+  const unknown = (res.warnings || []).filter((w) => w.includes("unknown key"));
+  assert.deepEqual(unknown, [], JSON.stringify(res.warnings));
+});
+
+test("validateConfig rejects out-of-enum console.surface", () => {
+  const cfg = DEFAULT_CONFIG();
+  cfg.console = { surface: "hidden" };
+  const res = validateConfig(cfg);
+  assert.equal(res.ok, false);
+  assert.ok(
+    res.errors.some((e) => e.startsWith("console.surface:")),
+    JSON.stringify(res.errors),
+  );
+});
+
+test("validateConfig rejects out-of-enum autonomy.profile", () => {
+  const cfg = DEFAULT_CONFIG();
+  cfg.autonomy = { profile: "yolo" };
+  const res = validateConfig(cfg);
+  assert.equal(res.ok, false);
+  assert.ok(
+    res.errors.some((e) => e.startsWith("autonomy.profile:")),
+    JSON.stringify(res.errors),
+  );
+});
+
+test("validateConfig: console/autonomy absent stays valid (defaults)", () => {
+  const cfg = DEFAULT_CONFIG();
+  const res = validateConfig(cfg);
+  assert.equal(res.ok, true, JSON.stringify(res.errors || []));
+});
