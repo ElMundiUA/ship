@@ -117,6 +117,23 @@ async def test_notification_acknowledged(
 
 
 @pytest.mark.asyncio
+async def test_inbox_update_spec_param_matches_gate_contract(
+    db_session, v1_client, seed_workspace
+) -> None:
+    """The stakes gate keys on ``inbox_item_id`` — pin that the
+    published inputSchema requires exactly that name, so the spec and
+    the gate can't drift apart silently again (the original gate read
+    ``item_id`` and no-opped on every real call)."""
+    _, raw, _ = seed_workspace
+    res = await _post(v1_client, raw, _rpc("tools/list"))
+    tools = {t["name"]: t for t in res.json()["result"]["tools"]}
+    schema = tools["inbox_update"]["inputSchema"]
+    assert "inbox_item_id" in schema["properties"]
+    assert "inbox_item_id" in schema.get("required", [])
+    assert "item_id" not in schema["properties"]
+
+
+@pytest.mark.asyncio
 async def test_approval_without_echo_refused(
     db_session, v1_client, seed_workspace
 ) -> None:
@@ -143,10 +160,15 @@ async def test_approval_without_echo_refused(
             "tools/call",
             {
                 "name": "inbox_update",
+                # The REAL ToolSpec contract: ``inbox_item_id`` +
+                # ``disposition``. The gate originally keyed on
+                # ``item_id`` and silently no-opped for genuine MCP
+                # calls (caught live 2026-06-13) — these tests must
+                # speak the same dialect as real clients.
                 "arguments": {
-                    "item_id": str(item.id),
+                    "inbox_item_id": str(item.id),
                     "action": "dispose",
-                    "resolution": "approved",
+                    "disposition": "approve",
                 },
             },
         ),
@@ -179,9 +201,9 @@ async def test_approval_with_exact_echo_passes_gate(
             {
                 "name": "inbox_update",
                 "arguments": {
-                    "item_id": str(item.id),
+                    "inbox_item_id": str(item.id),
                     "action": "dispose",
-                    "resolution": "approved",
+                    "disposition": "approve",
                     "approval_echo": "Approve deploy of api to prod",
                 },
             },
@@ -218,9 +240,9 @@ async def test_destructive_items_are_web_only(
             {
                 "name": "inbox_update",
                 "arguments": {
-                    "item_id": str(item.id),
+                    "inbox_item_id": str(item.id),
                     "action": "dispose",
-                    "resolution": "approved",
+                    "disposition": "approve",
                     "approval_echo": "Delete repository acme/legacy",
                 },
             },
