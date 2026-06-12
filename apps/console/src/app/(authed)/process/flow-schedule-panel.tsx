@@ -19,6 +19,7 @@ import { classifyCron, formatNextRun } from "@/lib/cron-next";
 import { processConfigFromApiProcess } from "./process-config";
 import { ProcessConfigProposalFields } from "./process-config-proposal-fields";
 import { ProcessReviewSummary, processChangeSummary } from "./process-review-summary";
+import { DEFAULT_TIMES, knownTimes } from "./flow-schedule-times";
 import {
   BUILTIN_ROUTINE_CATALOG,
   HIDDEN_ROUTINE_IDS,
@@ -34,7 +35,6 @@ const WEEKDAYS = [
   { id: 6, label: "Sat" },
   { id: 0, label: "Sun" },
 ] as const;
-const DEFAULT_TIMES = ["09:00", "13:00", "17:00"];
 const DRAG_SPECIALIST_MIME = "application/x-ship-specialist";
 
 export function FlowSchedulePanel({
@@ -525,17 +525,6 @@ function normalizedSchedule(process: ApiProcess): ApiProcessSchedule {
         : "UTC",
     slots: [],
   };
-}
-
-function knownTimes(schedule: ApiProcessSchedule, extras: string[] = []): string[] {
-  const times = new Set(
-    [...schedule.slots.map((slot) => slot.local_time), ...extras]
-      .filter((value): value is string => Boolean(value)),
-  );
-  if (times.size === 0) {
-    for (const time of DEFAULT_TIMES) times.add(time);
-  }
-  return Array.from(times).sort();
 }
 
 function assignmentMap(schedule: ApiProcessSchedule): Map<string, string[]> {
