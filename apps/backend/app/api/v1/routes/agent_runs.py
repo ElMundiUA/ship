@@ -3987,6 +3987,42 @@ async def finish_agent_run(
             tracker_kind=(prev.payload or {}).get("tracker_kind"),
         )
 
+    # W8.3 (ELS-258): a finishing run may be a WORKFLOW coding leaf —
+    # correlate by run_id, persist the outcome on the step row and
+    # release its workflow:* lock (mirrors how ticket dispatch
+    # releases on finish). Ticket-less leaves stop here: they carry
+    # no FSM side-effects.
+    from backend.app.services.workflow.leaves import complete_coding_step
+
+    matched_workflow_step = await complete_coding_step(
+        session,
+        workspace_id=workspace_id,
+        run_id=payload.run_id,
+        success=payload.outcome in ("ready_next_step", "done"),
+        output={
+            "outcome": payload.outcome,
+            "comment": (payload.comment or "")[:2000],
+        },
+    )
+    if matched_workflow_step and not (payload.ticket_ref or "").strip():
+        session.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                action="agent_run.finish",
+                target_kind="workflow_step",
+                target_id=payload.run_id,
+                payload={"outcome": payload.outcome, "workflow_leaf": True},
+            )
+        )
+        await session.flush()
+        return FinishOut(
+            ok=True,
+            outcome=payload.outcome,
+            run_id=payload.run_id,
+            actions=["workflow_step_completed"],
+            tracker_kind=None,
+        )
+
     # ELS-120 safety net — fire BEFORE tracker resolution so the gate
     # works on workspaces with no tracker bound too. A code-changing
     # finish without a PR URL means the agent bypassed the sidecar
