@@ -776,14 +776,28 @@ async def _inbox_stale_sweep_tick() -> None:
 )
 async def _agent_dispatch_lock_sweep_tick() -> None:
     """Periodic cleanup for expired TTL locks and dangling ``project:*`` locks.
-    See :mod:`dispatch_lock_sweep` for the algorithms + thresholds."""
+    See :mod:`dispatch_lock_sweep` for the algorithms + thresholds.
+
+    Also the workflow reconcile tick (W8.3): re-advances non-terminal
+    workflow runs — queued rows whose chat-side background task lost
+    the commit race or died with its replica (dogfood bug #1,
+    2026-06-12: a live pr-review sat in `queued` forever), and running
+    rows whose coding leaves completed via the finish webhook.
+    Idempotent by gate design, so the 5-min cadence is safe."""
     from backend.app.services.dispatch_lock_sweep import (
         sweep_dangling_project_locks_tick,
         sweep_expired_locks_tick,
     )
+    from backend.app.services.workflow.runtime import reconcile_stuck_runs
 
     await sweep_expired_locks_tick()
     await sweep_dangling_project_locks_tick()
+    try:
+        advanced = await reconcile_stuck_runs()
+        if advanced:
+            log.info("workflow reconcile: advanced %d stale run(s)", advanced)
+    except Exception:  # noqa: BLE001 — reconcile must not break the sweep
+        log.exception("workflow reconcile tick failed")
 
 
 @cron_with_lock(
