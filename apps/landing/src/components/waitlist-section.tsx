@@ -24,18 +24,25 @@ async function fetchBetaCapacity(): Promise<BetaCapacity | null> {
   }
 }
 
-export async function WaitlistSection() {
+type WaitlistSectionProps = {
+  /** Email-only on homepage; full form on /beta */
+  variant?: "full" | "email-only";
+};
+
+export async function WaitlistSection({ variant = "full" }: WaitlistSectionProps) {
   const capacity = await fetchBetaCapacity();
 
   return (
     <div className="space-y-6">
       {capacity ? (
         <>
-          <div className="text-center">
-            <p className="text-sm font-semibold text-aqua">
-              {capacity.accepted} / {capacity.cap} closed-beta seats taken
-            </p>
-          </div>
+          {variant === "full" ? (
+            <div className="text-center">
+              <p className="text-sm font-semibold text-aqua">
+                {capacity.accepted} / {capacity.cap} closed-beta seats taken
+              </p>
+            </div>
+          ) : null}
 
           {capacity.full ? (
             <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-6 sm:p-8">
@@ -44,17 +51,19 @@ export async function WaitlistSection() {
               </p>
             </div>
           ) : (
-            <WaitlistForm />
+            <WaitlistForm variant={variant} />
           )}
         </>
       ) : (
         <>
-          <div className="text-center">
-            <p className="text-sm font-semibold text-aqua">
-              Closed beta access by invite — request below
-            </p>
-          </div>
-          <WaitlistForm />
+          {variant === "full" ? (
+            <div className="text-center">
+              <p className="text-sm font-semibold text-aqua">
+                Closed beta access by invite — request below
+              </p>
+            </div>
+          ) : null}
+          <WaitlistForm variant={variant} />
         </>
       )}
     </div>

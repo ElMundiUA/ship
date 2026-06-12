@@ -2,8 +2,62 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  color-scheme: dark;
+@layer base {
+  :root {
+    --background: 222 47% 6%;
+    --foreground: 204 100% 95%;
+    --card: 222 47% 8%;
+    --card-foreground: 204 100% 95%;
+    --popover: 222 47% 8%;
+    --popover-foreground: 204 100% 95%;
+    --primary: 38 47% 61%;
+    --primary-foreground: 222 47% 6%;
+    --secondary: 0 0% 100%;
+    --secondary-foreground: 204 100% 95%;
+    --muted: 222 20% 14%;
+    --muted-foreground: 0 0% 70%;
+    --accent: 38 47% 61%;
+    --accent-foreground: 222 47% 6%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 0 0% 100%;
+    --input: 0 0% 100%;
+    --ring: 38 47% 61%;
+    --radius: 1rem;
+    color-scheme: dark;
+  }
+}
+
+@keyframes hero-demo-pulse-keyframes {
+  0%,
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(207, 169, 107, 0.35);
+  }
+  50% {
+    transform: scale(1.02);
+    box-shadow: 0 0 24px 4px rgba(207, 169, 107, 0.25);
+  }
+}
+
+@keyframes hero-demo-glow-keyframes {
+  0%,
+  100% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .hero-demo-pulse {
+    animation: hero-demo-pulse-keyframes 2s ease-in-out infinite;
+  }
+
+  .hero-demo-glow {
+    animation: hero-demo-glow-keyframes 2s ease-in-out infinite;
+  }
 }
 
 html {

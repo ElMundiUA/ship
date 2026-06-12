@@ -32,14 +32,17 @@ const sans = DM_Sans({
 export const metadata: Metadata = {
   metadataBase: resolveMetadataBase(),
   title: {
-    default: "Ship — workspace for AI-assisted product delivery",
+    default: "Ship — if you can describe it, you can ship it",
     template: "%s — Ship",
   },
   description:
-    "Ship connects repos, trackers, policies, knowledge, processes, and evidence so solo founders and product owners can steer AI-assisted delivery without losing ownership.",
+    "Ship turns your idea into a live app for non-technical founders — describe what you want, Ship builds it, you share a real preview.",
   applicationName: "Ship",
   authors: [{ name: "Denys Kuzin" }],
   keywords: [
+    "founder",
+    "no-code alternative",
+    "idea to app",
     "AI-assisted delivery",
     "product delivery workspace",
     "AI agent orchestration",
@@ -56,18 +59,18 @@ export const metadata: Metadata = {
     "Codex",
   ],
   openGraph: {
-    title: "Ship — workspace for AI-assisted product delivery",
+    title: "Ship — if you can describe it, you can ship it",
     description:
-      "Humans own intent. Machines act inside fences. Every action leaves a trail you can read without forensics.",
+      "Describe your idea in plain English. Ship scaffolds, builds, and ships a preview you can share — built for founders.",
     siteName: "Ship",
     type: "website",
     locale: "en_US",
   },
   twitter: {
     card: "summary_large_image",
-    title: "Ship — workspace for AI-assisted product delivery",
+    title: "Ship — if you can describe it, you can ship it",
     description:
-      "Humans own intent. Machines act inside fences. Every action leaves a trail you can read without forensics.",
+      "Describe your idea in plain English. Ship scaffolds, builds, and ships a preview you can share.",
   },
   alternates: {
     canonical: "/",
