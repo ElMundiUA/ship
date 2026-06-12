@@ -61,6 +61,10 @@ from backend.app.db.session import get_sessionmaker
 from backend.app.integrations.linear.tracker_adapter import LinearTracker
 from backend.app.security.encryption import safe_decrypt
 from backend.app.services.cron import CronLockId
+from backend.app.services.linear_provisioner import (
+    matched_overlay_labels,
+    resolve_fsm_stage_from_labels,
+)
 
 
 log = logging.getLogger(__name__)
@@ -119,42 +123,9 @@ query ShipTrackerPoll($filter: IssueFilter, $after: String) {
 """
 
 
-# Stage labels Linear carries are prefixed (``stage:planning``,
-# ``stage:dev_implementation``, …). Strip the prefix to recover the
-# raw FSM stage id the dispatcher needs.
-_STAGE_LABEL_PREFIX = "stage:"
-
-
 def _extract_fsm_stage(labels: list[str], state: str | None = None) -> str | None:
-    """Return the bare stage id from a Linear labels list, or ``None``.
-
-    Default-entry fallback: a Linear-native ticket the operator
-    files directly often has **no** ``stage:*`` labels at all. If
-    the state is ``Todo``, treat that as the implicit entry into
-    the SDLC chain (``task_intake`` is the entry stage; the
-    dispatcher's _STAGE_TO_ROUTINE maps it to the planning bundle).
-    Caught on askslayer/PAC-32..36 2026-05-17: 5 fresh tickets in
-    Todo sat with ``dispatch.no_routine`` audit rows for 2+ hours
-    because the poller refused to invent a stage for them.
-
-    Terminal-state short-circuit (2026-05-18): a finished chain
-    leaves accumulated ``stage:*`` breadcrumbs on the ticket. When
-    the auto-merger transitions to Done, the next poll tick sees
-    a state change → fires ``tracker.event.received`` → maps to
-    fsm_stage via this function. Returning the **first** stage
-    label (``planning``) re-dispatched the whole chain — ELS-143
-    spun three full SDLC cycles before we caught it. Done /
-    Canceled / Duplicate mean "no more work expected"; return None
-    so the dispatcher noops.
-    """
-    if state in ("Done", "Canceled", "Duplicate"):
-        return None
-    for label in labels:
-        if isinstance(label, str) and label.startswith(_STAGE_LABEL_PREFIX):
-            return label[len(_STAGE_LABEL_PREFIX):].strip() or None
-    if state == "Todo":
-        return "task_intake"
-    return None
+    """Delegate to the shared label resolver (ELS-278)."""
+    return resolve_fsm_stage_from_labels(labels, state=state)
 
 
 # Agent comments end with ``[Ship SDLC:role-<name>]`` per system.md
@@ -457,6 +428,188 @@ async def _clear_clarification_and_dispatch(
     )
 
 
+async def _lookup_pending_dispatch_stage(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    ticket_ref: str,
+) -> tuple[str | None, datetime | None]:
+    """Return the stage that should fire after an overlay unfreeze.
+
+    Primary source: latest ``agent_run.overlay_frozen_skipped`` row.
+    Fallback: latest ``agent_run.finish`` with ``outcome=ready_next_step``
+    → ``stage_next`` (covers cascade consumed while frozen).
+    """
+    skip_row = (
+        await session.execute(
+            select(AuditLog)
+            .where(
+                AuditLog.workspace_id == workspace_id,
+                AuditLog.action == "agent_run.overlay_frozen_skipped",
+                AuditLog.target_id == ticket_ref,
+            )
+            .order_by(AuditLog.created_at.desc())
+            .limit(1)
+        )
+    ).scalars().first()
+    if skip_row and isinstance(skip_row.payload, dict):
+        stage = skip_row.payload.get("fsm_stage")
+        if isinstance(stage, str) and stage:
+            return stage, skip_row.created_at
+
+    finish_row = (
+        await session.execute(
+            select(AuditLog)
+            .where(
+                AuditLog.workspace_id == workspace_id,
+                AuditLog.action == "agent_run.finish",
+                AuditLog.payload["ticket_ref"].astext == ticket_ref,
+                AuditLog.payload["outcome"].astext == "ready_next_step",
+            )
+            .order_by(AuditLog.created_at.desc())
+            .limit(1)
+        )
+    ).scalars().first()
+    if finish_row and isinstance(finish_row.payload, dict):
+        stage = finish_row.payload.get("stage_next")
+        if isinstance(stage, str) and stage:
+            return stage, finish_row.created_at
+    return None, None
+
+
+async def _dispatch_already_fired_since(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    ticket_ref: str,
+    fsm_stage: str,
+    since: datetime | None,
+) -> bool:
+    """True when a dispatch for ``fsm_stage`` landed after ``since``."""
+    if since is None:
+        return False
+    row = (
+        await session.execute(
+            select(AuditLog.id)
+            .where(
+                AuditLog.workspace_id == workspace_id,
+                AuditLog.action == "agent_run.dispatch",
+                AuditLog.target_id == ticket_ref,
+                AuditLog.payload["fsm_stage"].astext == fsm_stage,
+                AuditLog.created_at > since,
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return row is not None
+
+
+async def _overlay_skip_still_pending(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    ticket_ref: str,
+) -> bool:
+    """True when the latest overlay skip has not yet been resumed."""
+    skip_row = (
+        await session.execute(
+            select(AuditLog)
+            .where(
+                AuditLog.workspace_id == workspace_id,
+                AuditLog.action == "agent_run.overlay_frozen_skipped",
+                AuditLog.target_id == ticket_ref,
+            )
+            .order_by(AuditLog.created_at.desc())
+            .limit(1)
+        )
+    ).scalars().first()
+    if skip_row is None or not isinstance(skip_row.payload, dict):
+        return False
+    stage = skip_row.payload.get("fsm_stage")
+    if not isinstance(stage, str) or not stage:
+        return False
+    return not await _dispatch_already_fired_since(
+        session,
+        workspace_id=workspace_id,
+        ticket_ref=ticket_ref,
+        fsm_stage=stage,
+        since=skip_row.created_at,
+    )
+
+
+async def _resume_after_overlay_unfreeze(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    ticket_ref: str,
+    labels: list[str],
+    new_state: str,
+    client: httpx.AsyncClient | None,
+) -> bool:
+    """Emit a synthetic transition so the pending stage re-cascades.
+
+    Returns ``True`` when a resume event was written. Mirrors the
+    clarification-answer path but keys off overlay-label removal
+    instead of operator comments (ELS-278).
+    """
+    if new_state in ("Done", "Canceled", "Duplicate"):
+        return False
+    if matched_overlay_labels(labels):
+        return False
+
+    pending_stage, anchor_at = await _lookup_pending_dispatch_stage(
+        session, workspace_id=workspace_id, ticket_ref=ticket_ref
+    )
+    if not pending_stage:
+        return False
+
+    from backend.app.services.dispatcher import redirect_infra_bounce
+
+    pending_stage = redirect_infra_bounce(pending_stage, labels)
+    if not pending_stage:
+        return False
+
+    if await _dispatch_already_fired_since(
+        session,
+        workspace_id=workspace_id,
+        ticket_ref=ticket_ref,
+        fsm_stage=pending_stage,
+        since=anchor_at,
+    ):
+        return False
+
+    session.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=None,
+            actor_token_id=None,
+            action="agent_run.overlay_unfreeze_resumed",
+            target_kind="ticket",
+            target_id=ticket_ref,
+            payload={
+                "fsm_stage": pending_stage,
+                "trigger": "tracker_poll_overlay_unfreeze",
+            },
+        )
+    )
+    log.info(
+        "tracker_poll: overlay unfreeze resume on %s "
+        "(ws=%s, re-cascading stage=%s)",
+        ticket_ref, workspace_id, pending_stage,
+    )
+    await _write_transition_event(
+        session,
+        workspace_id=workspace_id,
+        ticket_ref=ticket_ref,
+        old_state=None,
+        new_state=new_state,
+        updated_at=None,
+        fsm_stage=pending_stage,
+        client=client,
+    )
+    return True
+
+
 async def _fetch_updated_issues(
     *,
     token: str,
@@ -509,13 +662,17 @@ async def _fetch_updated_issues(
 
 async def _load_cursor(
     session: AsyncSession, installation_id: uuid.UUID
-) -> tuple[str | None, dict[str, str], dict[str, str]]:
-    """Return ``(updated_at_iso, last_seen_states, comment_cursor)``.
+) -> tuple[str | None, dict[str, str], dict[str, str], dict[str, list[str]]]:
+    """Return ``(updated_at_iso, last_seen_states, comment_cursor, overlay_labels)``.
 
     ``comment_cursor`` maps ticket_ref → the ``createdAt`` of the
     newest comment already ingested (or baselined) by the comment-
     inbound path (ELS-251); it rides the same cursor JSONB so the
     dedup guarantee survives restarts exactly like state dedup does.
+
+    ``overlay_labels`` maps ticket_ref → the overlay-freeze labels
+    seen on the last tick (ELS-278) so label removal can be diffed
+    without a Linear workflow-state change.
     """
     row = (
         await session.execute(
@@ -527,11 +684,18 @@ async def _load_cursor(
         )
     ).scalar_one_or_none()
     if row is None or not row.cursor:
-        return None, {}, {}
+        return None, {}, {}, {}
+    raw_overlay = row.cursor.get("overlay_labels") or {}
+    overlay_labels = {
+        ref: list(labels)
+        for ref, labels in raw_overlay.items()
+        if isinstance(ref, str) and isinstance(labels, list)
+    }
     return (
         row.cursor.get("updated_at"),
         dict(row.cursor.get("states") or {}),
         dict(row.cursor.get("comments") or {}),
+        overlay_labels,
     )
 
 
@@ -542,6 +706,7 @@ async def _save_cursor(
     states: dict[str, str],
     *,
     comments: dict[str, str] | None = None,
+    overlay_labels: dict[str, list[str]] | None = None,
     status: str = "ready",
     last_error: str | None = None,
 ) -> None:
@@ -555,6 +720,8 @@ async def _save_cursor(
     payload: dict[str, Any] = {"states": states}
     if comments:
         payload["comments"] = comments
+    if overlay_labels:
+        payload["overlay_labels"] = overlay_labels
     if updated_at_iso:
         payload["updated_at"] = updated_at_iso
     existing = (
@@ -706,7 +873,7 @@ async def _poll_installation(
         )
         return 0, 0
 
-    cursor_iso, last_states, comment_cursor = await _load_cursor(
+    cursor_iso, last_states, comment_cursor, last_overlay_labels = await _load_cursor(
         session, install.id
     )
 
@@ -763,6 +930,37 @@ async def _poll_installation(
             )
             events += 1
         last_states[ref] = new_state
+        current_overlays = matched_overlay_labels(labels)
+        prior_overlays = last_overlay_labels.get(ref) or []
+        overlay_unfrozen = bool(prior_overlays) and not current_overlays
+        cold_start_unfrozen = (
+            ref not in last_overlay_labels
+            and not current_overlays
+            and await _overlay_skip_still_pending(
+                session,
+                workspace_id=install.workspace_id,
+                ticket_ref=ref,
+            )
+        )
+        if overlay_unfrozen or cold_start_unfrozen:
+            try:
+                resumed = await _resume_after_overlay_unfreeze(
+                    session,
+                    workspace_id=install.workspace_id,
+                    ticket_ref=ref,
+                    labels=labels,
+                    new_state=new_state,
+                    client=client,
+                )
+                if resumed:
+                    events += 1
+            except Exception as exc:  # noqa: BLE001 — best-effort
+                log.warning(
+                    "tracker_poll: overlay unfreeze resume failed "
+                    "ws=%s ref=%s err=%s",
+                    install.workspace_id, ref, exc,
+                )
+        last_overlay_labels[ref] = current_overlays
         # Clarification-answer detection: if the ticket carries
         # ``needs:clarification`` AND there's a non-agent comment
         # newer than the last agent comment, the operator has
@@ -855,6 +1053,7 @@ async def _poll_installation(
         next_cursor,
         last_states,
         comments=comment_cursor,
+        overlay_labels=last_overlay_labels,
         status="ready",
     )
     return events, len(issues)

@@ -39,6 +39,7 @@ from backend.app.integrations.linear.webhook import (
     InvalidWebhookSignature,
     verify_signature,
 )
+from backend.app.services.linear_provisioner import resolve_fsm_stage_from_labels
 from backend.app.services.tracker_poller import _write_transition_event
 
 
@@ -47,15 +48,18 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["linear-webhook"])
 
 
-def _extract_fsm_stage(labels: list[dict[str, Any]] | None) -> str | None:
-    """Pick the ``stage:<id>`` value off an issue's labels list."""
+def _extract_fsm_stage(
+    labels: list[dict[str, Any]] | None, state: str | None = None
+) -> str | None:
+    """Pick the highest-order ``stage:<id>`` from an issue's labels."""
     if not labels:
         return None
-    for label in labels:
-        name = str(label.get("name") or "")
-        if name.startswith("stage:"):
-            return name.split(":", 1)[1] or None
-    return None
+    names = [
+        str(label.get("name") or "")
+        for label in labels
+        if isinstance(label, dict) and label.get("name")
+    ]
+    return resolve_fsm_stage_from_labels(names, state=state)
 
 
 @router.post("/webhooks/linear", status_code=status.HTTP_200_OK)
@@ -117,7 +121,7 @@ async def linear_webhook(
     updated_at = (
         str(data.get("updatedAt") or "").strip() or None
     )
-    fsm_stage = _extract_fsm_stage(data.get("labels"))
+    fsm_stage = _extract_fsm_stage(data.get("labels"), state=new_state)
 
     # We need the canonical {ticket_ref, team_id, new_state} triple
     # to feed the dispatcher. Without them this is signal-less noise.
