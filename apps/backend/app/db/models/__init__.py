@@ -65,7 +65,12 @@ from backend.app.db.models.repo_intel import RepoIntel, RepoIntelTriggeredBy
 from backend.app.db.models.repo_secrets import RepoSecret
 from backend.app.db.models.telegram import (
     TelegramChatLink,
+    TelegramPendingAction,
     TelegramThreadMap,
+)
+from backend.app.db.models.workflow import (
+    AgentWorkflowRun,
+    AgentWorkflowStepRun,
 )
 from backend.app.db.models.tenancy import (
     ApiToken,
@@ -84,6 +89,9 @@ from backend.app.db.models.tenancy import (
 
 __all__ = [
     "AgentDispatchLock",
+    "AgentWorkflowRun",
+    "AgentWorkflowStepRun",
+    "TelegramPendingAction",
     "AgentRequest",
     "AgentRole",
     "ApiToken",

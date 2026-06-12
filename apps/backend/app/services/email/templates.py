@@ -431,3 +431,78 @@ def _inline(text: str) -> str:
     )
     escaped = _ITALIC_RE.sub(lambda m: f"<em>{m.group(1)}</em>", escaped)
     return escaped
+
+
+# ---------------------------------------------------------------------------
+# Engine notification (ELS-222 — notify() EmailChannel)
+# ---------------------------------------------------------------------------
+
+_NOTIFICATION_HTML = _env.from_string(
+    """\
+<!doctype html>
+<html lang="en">
+  <body style="margin:0;padding:0;background:#0b0d12;color:#eef1f5;font-family:Inter,-apple-system,Segoe UI,Roboto,sans-serif;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#0b0d12;">
+      <tr>
+        <td align="center" style="padding:32px 16px;">
+          <table role="presentation" width="640" cellpadding="0" cellspacing="0" style="max-width:640px;background:#11141b;border:1px solid #1d2230;border-radius:16px;overflow:hidden;">
+            <tr>
+              <td style="padding:24px 32px 4px 32px;">
+                <div style="font-size:11px;letter-spacing:0.18em;text-transform:uppercase;color:#7e8aa3;">Ship · {{ level }}</div>
+                <h1 style="margin:8px 0 0 0;font-size:20px;line-height:1.35;color:#ffffff;">
+                  {{ subject }}
+                </h1>
+                {% if ticket_ref %}
+                <div style="margin-top:6px;font-size:12px;color:#9aa3b8;">{{ ticket_ref }}</div>
+                {% endif %}
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:16px 32px 24px 32px;font-size:14px;line-height:1.6;color:#cbd2df;">
+                {{ body_html|safe }}
+              </td>
+            </tr>
+          </table>
+          <div style="max-width:640px;margin-top:12px;font-size:11px;color:#5e6880;">
+            Sent by the Ship engine. Routing is configured per workspace
+            (notifications.channels).
+          </div>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>
+"""
+)
+
+_NOTIFICATION_TEXT = _env.from_string(
+    """\
+[Ship {{ level }}] {{ subject }}
+{% if ticket_ref %}{{ ticket_ref }}
+{% endif %}
+{{ body_text }}
+"""
+)
+
+
+def render_notification_email(
+    *,
+    subject: str,
+    body_markdown: str,
+    level: str,
+    ticket_ref: str | None = None,
+) -> RenderedEmail:
+    """Render an engine ``notify()`` emission for the email channel."""
+    body_html = _markdown_to_safe_html(body_markdown)
+    ctx = {
+        "subject": subject,
+        "body_html": body_html,
+        "body_text": body_markdown.strip(),
+        "level": level.upper(),
+        "ticket_ref": ticket_ref,
+    }
+    return RenderedEmail(
+        subject=f"[Ship {level.upper()}] {subject}",
+        html=_NOTIFICATION_HTML.render(**ctx),
+        text=_NOTIFICATION_TEXT.render(**ctx),
+    )

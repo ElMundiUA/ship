@@ -45,9 +45,7 @@ from backend.app.db.models.agent_memory import (
     KnowledgeBucket,
 )
 from backend.app.db.models.agent_surface import Improvement
-from backend.app.db.models.inbox import InboxItem
 from backend.app.db.models.tenancy import AuditLog, Workspace
-from backend.app.services.inbox.headline import derive_headline
 from backend.app.services.agent.client import AgentClient, ChatMessage
 from backend.app.services.agent.embedding import embed_text
 from backend.app.services.knowledge_harvest import NOTE_KIND
@@ -380,31 +378,33 @@ async def _synthesise_bucket(
         if decision.action == "new"
         else f"Draft update: {decision.title}"
     )[:300]
-    session.add(
-        InboxItem(
-            workspace_id=workspace_id,
-            repo_id=None,
-            type="improvement",
-            title=draft_title,
-            headline=derive_headline(summary=summary, title=draft_title),
-            summary=summary,
-            payload={
-                "kind": "auto_routed_draft",
-                "article_id": str(article.id),
-                "bucket_id": str(bucket.id),
-                "bucket_slug": bucket.slug,
-                "article_slug": decision.slug,
-                "action": decision.action,
-                "version": new_version,
-                "source_note_count": len(pending),
-                "source_note_ids": [str(n.id) for n in pending],
-            },
-            status="new",
-            source_table="bucket_articles",
-            source_id=article.id,
-            intake_handle=None,
-            intake_reason="knowledge_draft_review",
-        )
+    from backend.app.services.notify import NotifyLevel, notify
+
+    await notify(
+        session,
+        workspace_id=workspace_id,
+        title=draft_title,
+        body=summary or "",
+        level=NotifyLevel.ACTION,
+        payload={
+            "kind": "auto_routed_draft",
+            "article_id": str(article.id),
+            "bucket_id": str(bucket.id),
+            "bucket_slug": bucket.slug,
+            "article_slug": decision.slug,
+            "action": decision.action,
+            "version": new_version,
+            "source_note_count": len(pending),
+            "source_note_ids": [str(n.id) for n in pending],
+        },
+        inbox_overrides={
+            "type": "improvement",
+            "title": draft_title,
+            "summary": summary,
+            "source_table": "bucket_articles",
+            "source_id": article.id,
+            "intake_reason": "knowledge_draft_review",
+        },
     )
 
     session.add(
@@ -546,21 +546,23 @@ async def _emit_archive_proposal(
     }
     archive_title = f"Stale article? {target.title}"[:300]
     archive_summary = (decision.archive_reason or "")[:1000] or None
-    session.add(
-        InboxItem(
-            workspace_id=workspace_id,
-            repo_id=None,
-            type="improvement",
-            title=archive_title,
-            headline=derive_headline(summary=archive_summary, title=archive_title),
-            summary=archive_summary,
-            payload=payload,
-            status="new",
-            source_table="bucket_articles",
-            source_id=target.id,
-            intake_handle=None,
-            intake_reason="knowledge_archive_review",
-        )
+    from backend.app.services.notify import NotifyLevel, notify
+
+    await notify(
+        session,
+        workspace_id=workspace_id,
+        title=archive_title,
+        body=archive_summary or "",
+        level=NotifyLevel.ACTION,
+        payload=payload,
+        inbox_overrides={
+            "type": "improvement",
+            "title": archive_title,
+            "summary": archive_summary,
+            "source_table": "bucket_articles",
+            "source_id": target.id,
+            "intake_reason": "knowledge_archive_review",
+        },
     )
     session.add(
         AuditLog(

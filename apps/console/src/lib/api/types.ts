@@ -347,6 +347,9 @@ export type ApiActivatedRepo = {
   preset: string | null;
   installed_bundle_version: string | null;
   current_bundle_version: string;
+  /** Persisted deploy-planner preference; null → backend default. */
+  deploy_planner_provider: string | null;
+  deploy_planner_model: string | null;
 };
 
 export type ApiWizardSeedResult = {

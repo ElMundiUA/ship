@@ -2,70 +2,48 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
-import { AppShell } from "@/components/app-shell";
+import { AppShell, AppShellChrome } from "@/components/app-shell";
 import { ApiUnavailable } from "@/components/api-unavailable";
-import { ButtonPrimary } from "@/components/ui";
 import { WorkspaceEntryPicker } from "@/components/workspace-entry-picker";
-import { WorkspaceHome } from "@/components/workspace-home";
 import {
   type ApiActivatedRepo,
-  type ApiLiveSystem,
-  type ApiOpsDashboard,
-  type ApiPrioritiesResponse,
   ApiHttpError,
-  ApiUnavailableError,
+  apiFetch,
   getInboxCounts,
-  getLiveSystem,
   getMe,
-  getOpsDashboard,
-  getPriorities,
   isApiConfigured,
   listActivatedRepos,
-  listInboxItems,
-  listIntegrations,
   listWorkspaces,
 } from "@/lib/api/client";
-import {
-  INBOX_ACTIONABLE_CATEGORIES,
-  type InboxCountsResponse,
-  type InboxListResponse,
-} from "@/lib/inbox-types";
 import type { ApiWorkspace } from "@/lib/api/types";
 import { getSessionToken } from "@/lib/api/session";
 import { getResolvedWorkspaceId } from "@/lib/workspace-resolve.server";
 import {
   pickWorkspace,
   toAppShellWorkspaces,
-  withWorkspaceQuery,
 } from "@/lib/workspace-scope";
-import {
-  type OpsReportWindow,
-  parseOpsReportWindow,
-} from "@/lib/ops-window";
 
 export const dynamic = "force-dynamic";
 
 type SearchParams = { [key: string]: string | string[] | undefined };
 
 /**
- * Workspace home (``/``).
+ * Workspace home (``/``) — the RESIDUAL status surface (ELS-239).
  *
- * Phase-1 two-mode shell: ``/`` is **workspace mode** — a landing
- * for workspace-unique primitives (Fleet Requests · Policy ·
- * Adoption · Knowledge graph) and a channel-list view of the
- * activated repos. Per-repo dashboards moved to
- * ``/r/<owner>/<repo>`` and land with real content in PR-4.
+ * The headless end-state of the frontend: Ship is not a destination.
+ * Domain views live in Linear (tickets/projects) and GitHub (PRs/CI);
+ * this page only answers "is the engine alive, where is it stuck" (the
+ * thesis-2 residue, via /engine-health), shows the active autonomy +
+ * console-surface profile, and deep-links out. The rich WorkspaceHome
+ * dashboard (ops mirror, priorities, live-system) was deleted with its
+ * backend render endpoints — see the headless-pivot ledger.
  *
- * Auth + onboarding flow is preserved from the old operating
- * dashboard:
- *   - no session → ``/login?next=/``
+ * Auth + onboarding flow preserved from the old dashboard:
  *   - no workspace yet → ``/onboarding?step=github``
- *   - more than one workspace and no URL ``?ws=`` or persisted pick → choose
- *     a workspace (avoids sending invitees into the personal JIT shell / default)
- *   - greenfield for the *selected* workspace (zero repos / zero runs) → onboarding
- *   - ``?skipWizard=1`` escape hatch for returning operators.
+ *   - several workspaces and no ``?ws=`` → entry picker
+ *   - zero activated repos → onboarding (``?skipWizard=1`` escape hatch)
  */
-export default async function CloudHomePage({
+export default async function WorkspaceStatusPage({
   searchParams,
 }: {
   searchParams?: Promise<SearchParams>;
@@ -79,7 +57,6 @@ export default async function CloudHomePage({
   const token = await getSessionToken();
   if (!token) redirect("/login?next=%2F&reason=session_expired");
 
-  // Check if user's email is pending (sentinel pattern from Auth0 email-less login)
   try {
     const user = await getMe(token);
     if (
@@ -89,11 +66,10 @@ export default async function CloudHomePage({
       redirect("/complete-profile?next=%2F");
     }
   } catch {
-    // Ignore errors fetching user profile; proceed to load workspaces
+    // Ignore profile fetch errors; proceed to load workspaces.
   }
 
   const skipWizard = params.skipWizard === "1";
-  const opsWindow = parseOpsReportWindow(params.window, "7d");
 
   let list: ApiWorkspace[];
   try {
@@ -118,190 +94,172 @@ export default async function CloudHomePage({
       </WorkspaceGateLayout>
     );
   }
-
-  const result = await loadLiveContext(token, list, wsParam, opsWindow);
-  if (result === "unauthorized") redirect("/login?next=%2F&reason=session_expired");
-  if (result === "down") return renderDownState();
-
-  if (!skipWizard && isGreenfieldWorkspace(result)) {
-    return renderGreenfieldWelcome(result);
-  }
-
-  return renderWorkspaceHome(result, { opsWindow, skipWizard });
-}
-
-export type SetupResume = {
-  step: "tracker" | "roles" | "confirm";
-  label: string;
-  href: string;
-};
-
-type LiveContext = {
-  workspace: ApiWorkspace;
-  allWorkspaces: ApiWorkspace[];
-  data: ApiOpsDashboard;
-  repos: ApiActivatedRepo[];
-  /** Earliest incomplete onboarding step, or null if setup is done. */
-  setupResume: SetupResume | null;
-  /** Inbox preview for "What needs you" — top items + counts. Best-effort:
-   *  if the call fails we degrade to empty arrays so the rest of the
-   *  dashboard still renders. */
-  inboxItems: InboxListResponse | null;
-  inboxCounts: InboxCountsResponse | null;
-  /** Dashboard v2 prioritizer payload — projects, ordering, autonomy
-   *  state, last-action trust anchor. Best-effort: a fetch failure
-   *  hides the prioritizer block so the rest of the dashboard still
-   *  renders. */
-  priorities: ApiPrioritiesResponse | null;
-  /** Dashboard v2 Live System aggregator — masthead glyphs, knowledge,
-   *  routines, daily, specialists. ``null`` on a fetch failure → the
-   *  middle column renders the loading placeholder rather than reading
-   *  broken. */
-  liveSystem: ApiLiveSystem | null;
-};
-
-/**
- * A workspace is "greenfield" when the operator has signed in but the
- * backend hasn't seen any wiring yet: zero activated repos, zero
- * pipelines, zero PRs, zero lane runs. Auth0 JIT creates the shell
- * org/workspace on first login, so we can't rely on
- * ``workspaces.length === 0`` anymore to detect "hasn't started setup".
- */
-function isGreenfieldWorkspace(ctx: LiveContext): boolean {
-  return (
-    ctx.repos.length === 0 &&
-    ctx.data.system_status.overall_status === "ok" &&
-    ctx.data.blockers.length === 0 &&
-    ctx.data.work_in_progress.length === 0 &&
-    ctx.data.shipped.features_shipped_count === 0 &&
-    ctx.data.shipped.fixes_count === 0 &&
-    ctx.data.shipped.rollbacks_count === 0
-  );
-}
-
-const TRACKER_KINDS = new Set(["github", "linear", "notion", "jira", "azure_devops", "gitlab"]);
-
-async function loadLiveContext(
-  token: string,
-  list: ApiWorkspace[],
-  wsParam: string | undefined,
-  opsWindow: OpsReportWindow,
-): Promise<LiveContext | "unauthorized" | "down"> {
   const workspace = pickWorkspace(list, wsParam);
-  try {
-    const [data, repos, integrations, inboxItems, inboxCounts, priorities, liveSystem] =
-      await Promise.all([
-        getOpsDashboard(workspace.id, token, { window: opsWindow }),
-        listActivatedRepos(workspace.id, token).catch(
-          () => [] as ApiActivatedRepo[],
-        ),
-        listIntegrations(workspace.id, token).catch(() => []),
-        listInboxItems(
-          workspace.id,
-          {
-            statuses: ["new"],
-            categories: INBOX_ACTIONABLE_CATEGORIES,
-            sort: "priority_desc_created_asc",
-            limit: 5,
-          },
-          token,
-        ).catch(() => null as InboxListResponse | null),
-        getInboxCounts(workspace.id, token).catch(
-          () => null as InboxCountsResponse | null,
-        ),
-        getPriorities(workspace.id, token).catch(
-          () => null as ApiPrioritiesResponse | null,
-        ),
-        getLiveSystem(workspace.id, token).catch(
-          () => null as ApiLiveSystem | null,
-        ),
-      ]);
 
-    const setupResume = resolveSetupResume(workspace, repos, integrations);
+  // Residual data: engine health (the thesis-2 residue), the two
+  // pivot config scopes, repos for GitHub deep links, Inbox count.
+  // Everything best-effort — a failed card never blanks the page.
+  const [health, autonomy, surface, repos, inboxCounts] = await Promise.all([
+    apiFetch<EngineHealth>(
+      `/v1/workspaces/${workspace.id}/engine-health`,
+      { token },
+    ).catch(() => null),
+    fetchScopeValue(workspace.id, "autonomy.profile", token),
+    fetchScopeValue(workspace.id, "console.surface", token),
+    listActivatedRepos(workspace.id, token).catch(
+      () => [] as ApiActivatedRepo[],
+    ),
+    getInboxCounts(workspace.id, token).catch(() => null),
+  ]);
 
-    return {
-      workspace,
-      allWorkspaces: list,
-      data,
-      repos,
-      setupResume,
-      inboxItems,
-      inboxCounts,
-      priorities,
-      liveSystem,
-    };
-  } catch (err) {
-    if (err instanceof ApiHttpError && err.status === 401) return "unauthorized";
-    if (err instanceof ApiUnavailableError) return "down";
-    return "down";
-  }
-}
-
-function resolveSetupResume(
-  workspace: ApiWorkspace,
-  repos: ApiActivatedRepo[],
-  integrations: Awaited<ReturnType<typeof listIntegrations>>,
-): SetupResume | null {
-  if (repos.length === 0) return null;
-
-  const wsId = workspace.id;
-  const base = `/onboarding`;
-
-  const hasTracker = integrations.some((i) => TRACKER_KINDS.has(i.kind));
-  if (!hasTracker) {
-    return { step: "tracker", label: "Connect a tracker", href: `${base}?step=tracker&ws=${wsId}` };
+  if (repos.length === 0 && !skipWizard) {
+    redirect("/onboarding?step=github");
   }
 
-  if (workspace.default_agent_profile === null) {
-    return { step: "roles", label: "Pick an agent role", href: `${base}?step=roles&ws=${wsId}` };
-  }
-
-  const allUnseeded = repos.every((r) => r.installed_bundle_version === null);
-  if (allUnseeded) {
-    return { step: "confirm", label: "Open your seed PR", href: `${base}?step=confirm&ws=${wsId}` };
-  }
-
-  return null;
-}
-
-function renderWorkspaceHome(
-  ctx: LiveContext,
-  opts: { opsWindow: OpsReportWindow; skipWizard: boolean },
-) {
-  const { workspace, data, allWorkspaces } = ctx;
-  const multi = allWorkspaces.length > 1;
-  const { opsWindow, skipWizard } = opts;
   return (
-    <AppShell
-      title="Workspace home"
-      kicker={workspace.slug}
-      workspace={{ id: workspace.id, name: workspace.name, slug: workspace.slug }}
-      allWorkspaces={toAppShellWorkspaces(allWorkspaces)}
-      actions={
-        <ButtonPrimary>
-          <Link
-            href={withWorkspaceQuery("/inbox", workspace.id, multi)}
-          >
-            Review actions →
-          </Link>
-        </ButtonPrimary>
-      }
+    <AppShellChrome
+      workspace={{
+        id: workspace.id,
+        name: workspace.name,
+        slug: workspace.slug,
+      }}
+      allWorkspaces={toAppShellWorkspaces(list)}
+      inboxActionableCount={inboxCounts?.actionable_new ?? null}
     >
-      <WorkspaceHome
-        summary={data}
-        repos={ctx.repos}
-        workspaceId={workspace.id}
-        multiWs={multi}
-        inboxItems={ctx.inboxItems}
-        inboxCounts={ctx.inboxCounts}
-        priorities={ctx.priorities}
-        liveSystem={ctx.liveSystem}
-        opsWindow={opsWindow}
-        skipWizard={skipWizard}
-        setupResume={skipWizard ? null : ctx.setupResume}
-      />
-    </AppShell>
+      <div className="mx-auto max-w-3xl space-y-6 px-6 py-8">
+        <header>
+          <h1 className="font-display text-xl font-bold text-white">
+            {workspace.name}
+          </h1>
+          <p className="mt-1 text-sm text-white/55">
+            Headless status — the work itself lives in Linear and GitHub.
+          </p>
+        </header>
+
+        <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+          <h2 className="text-[11px] font-bold uppercase tracking-widest text-white/55">
+            Engine
+          </h2>
+          {health === null ? (
+            <p className="mt-2 text-sm text-white/55">
+              Health unavailable (older backend or transient error).
+            </p>
+          ) : (
+            <div className="mt-2 space-y-1 text-sm">
+              <p className={health.healthy ? "text-aqua" : "text-coral"}>
+                {health.healthy
+                  ? "Healthy — no stalled work"
+                  : `Stalled: ${health.stalled.length} lock(s) need attention`}
+              </p>
+              <p className="text-white/55">
+                Last dispatch:{" "}
+                {health.last_dispatch_at
+                  ? new Date(health.last_dispatch_at).toLocaleString()
+                  : "never"}{" "}
+                · active locks: {health.active_locks} · expired unswept:{" "}
+                {health.expired_unswept_locks}
+              </p>
+              {health.stalled.slice(0, 5).map((s) => (
+                <p key={s.lock_key} className="text-xs text-coral/80">
+                  {s.lock_key} — {s.reason} ({Math.round(s.age_minutes)}m)
+                </p>
+              ))}
+            </div>
+          )}
+          <p className="mt-3 text-xs text-white/45">
+            Autonomy: <b className="text-white/70">{autonomy ?? "balanced"}</b>{" "}
+            · Console surface:{" "}
+            <b className="text-white/70">{surface ?? "full"}</b> — change both
+            in{" "}
+            <Link href="/settings/config" className="text-aqua hover:underline">
+              Settings → Config
+            </Link>
+          </p>
+        </section>
+
+        <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+          <h2 className="text-[11px] font-bold uppercase tracking-widest text-white/55">
+            Where the work lives
+          </h2>
+          <ul className="mt-2 space-y-2 text-sm">
+            <li>
+              <a
+                href="https://linear.app"
+                target="_blank"
+                rel="noreferrer"
+                className="text-aqua hover:underline"
+              >
+                Linear →
+              </a>{" "}
+              <span className="text-white/45">
+                tickets, projects, agent comments
+              </span>
+            </li>
+            {repos.map((r) => (
+              <li key={r.id}>
+                <a
+                  href={r.html_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-aqua hover:underline"
+                >
+                  {r.full_name} →
+                </a>{" "}
+                <span className="text-white/45">PRs, CI, agent branches</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+
+        <section className="flex gap-3 text-sm">
+          <Link
+            href="/inbox"
+            className="rounded-full border border-aqua/30 bg-aqua/10 px-4 py-2 font-bold text-aqua hover:bg-aqua/15"
+          >
+            Inbox
+            {inboxCounts?.actionable_new ? ` · ${inboxCounts.actionable_new}` : ""}
+          </Link>
+          <Link
+            href="/settings/config"
+            className="rounded-full border border-white/15 px-4 py-2 font-bold text-white/70 hover:text-white"
+          >
+            Settings
+          </Link>
+        </section>
+      </div>
+    </AppShellChrome>
   );
+}
+
+type EngineHealth = {
+  healthy: boolean;
+  last_dispatch_at: string | null;
+  last_finish_at: string | null;
+  active_locks: number;
+  expired_unswept_locks: number;
+  stalled: {
+    lock_key: string;
+    reason: string;
+    age_minutes: number;
+  }[];
+};
+
+async function fetchScopeValue(
+  workspaceId: string,
+  scope: string,
+  token: string,
+): Promise<string | null> {
+  try {
+    const detail = await apiFetch<{ current_value?: unknown }>(
+      `/v1/workspaces/${workspaceId}/config/${scope}`,
+      { token },
+    );
+    return typeof detail.current_value === "string"
+      ? detail.current_value
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 function renderDownState(details?: string) {
@@ -312,81 +270,6 @@ function renderDownState(details?: string) {
   );
 }
 
-const SETUP_STEPS: { title: string; body: string }[] = [
-  {
-    title: "Connect GitHub",
-    body: "Install the Ship GitHub App on the org or account that owns the repos.",
-  },
-  {
-    title: "Activate a repo",
-    body: "Pick a repository so Ship can land its bundle and watch the activity.",
-  },
-  {
-    title: "Bind a tracker",
-    body: "Connect Linear or use GitHub Issues so work has a record of intent.",
-  },
-  {
-    title: "Set policies and seed knowledge",
-    body: "Define what agents may do and the context they may use.",
-  },
-  {
-    title: "Review the dashboard and Inbox",
-    body: "Watch what runs, resolve decisions, keep evidence near the work.",
-  },
-];
-
-function renderGreenfieldWelcome(ctx: LiveContext) {
-  const { workspace, allWorkspaces } = ctx;
-  const onboardingHref = `/onboarding?step=github&ws=${encodeURIComponent(workspace.id)}`;
-  return (
-    <AppShell
-      title="Welcome"
-      kicker={workspace.slug}
-      workspace={{ id: workspace.id, name: workspace.name, slug: workspace.slug }}
-      allWorkspaces={toAppShellWorkspaces(allWorkspaces)}
-    >
-      <div className="mx-auto max-w-3xl space-y-10">
-        <header className="space-y-3">
-          <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-white/40">
-            Welcome to {workspace.name}
-          </p>
-          <h1 className="font-display text-3xl font-bold leading-tight text-white">
-            Five steps to make the workspace earn its keep.
-          </h1>
-          <p className="text-sm text-white/55">
-            You can leave and come back any time — your progress persists.
-          </p>
-        </header>
-        <ol className="space-y-6">
-          {SETUP_STEPS.map((step, idx) => (
-            <li key={step.title} className="flex gap-5">
-              <span className="font-display text-2xl font-bold text-aqua tabular-nums">
-                {idx + 1}
-              </span>
-              <div>
-                <p className="text-base font-semibold text-white">{step.title}</p>
-                <p className="mt-1 text-sm leading-relaxed text-white/55">
-                  {step.body}
-                </p>
-              </div>
-            </li>
-          ))}
-        </ol>
-        <div>
-          <ButtonPrimary>
-            <Link href={onboardingHref}>Continue setup →</Link>
-          </ButtonPrimary>
-        </div>
-      </div>
-    </AppShell>
-  );
-}
-
-/**
- * Strips the main sidebar on purpose: while no ``?ws=`` is set, the default
- * nav would send multi-workspace users to surfaces that still resolve
- * ``list[0]`` and defeat the chooser.
- */
 function WorkspaceGateLayout({ children }: { children: ReactNode }) {
   return (
     <div className="min-h-screen bg-ink text-mist">
@@ -408,16 +291,7 @@ function WorkspaceGateLayout({ children }: { children: ReactNode }) {
           </form>
         </div>
       </header>
-      <main className="mx-auto w-full max-w-5xl px-6 py-10 lg:px-8">
-        <h1 className="font-display text-xl font-bold text-white sm:text-2xl">
-          Open a workspace
-        </h1>
-        <p className="mt-1 text-sm text-white/50">
-          Choose which organization to load before the dashboard.
-        </p>
-        {children}
-      </main>
+      <main className="px-6 py-10 lg:px-8">{children}</main>
     </div>
   );
 }
-

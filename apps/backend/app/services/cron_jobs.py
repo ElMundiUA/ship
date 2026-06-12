@@ -27,6 +27,8 @@ from backend.app.services.cron import (
     register_cron,
 )
 from backend.app.db.models.tenancy import Workspace
+from backend.app.services.deploy.health import recheck_active_deployments
+from backend.app.services.deploy.reconcile import reconcile_active_deployments
 from backend.app.services.knowledge_claim_extractor import (
     extract_pending_workspace,
 )
@@ -581,6 +583,38 @@ def register_all() -> None:
         cron_expr="5 * * * *",  # hourly at :05 (gated by per-install age)
         job_id="linear_token_refresh",
     )
+    register_cron(
+        fn=_stall_notify_tick,
+        cron_expr="20 * * * *",  # hourly at :20; audit-log cooldown dedup
+        job_id="stall_notify",
+    )
+    # ELS-233 — trigger-(c) ticket-creating routines. cron_exprs live
+    # on the specs (single source); idempotency per (kind, period_key)
+    # via the audit ledger, so a retried tick can never dup a ticket.
+    from backend.app.services.scheduled_routines import SPECS as _ROUTINE_SPECS
+
+    register_cron(
+        fn=_scheduled_routine_daily_tick,
+        cron_expr=_ROUTINE_SPECS["daily"].cron_expr,
+        job_id="scheduled_routine_daily",
+    )
+    register_cron(
+        fn=_scheduled_routine_retro_tick,
+        cron_expr=_ROUTINE_SPECS["retro"].cron_expr,
+        job_id="scheduled_routine_retro",
+    )
+    register_cron(
+        fn=_scheduled_routine_techdebt_tick,
+        cron_expr=_ROUTINE_SPECS["techdebt"].cron_expr,
+        job_id="scheduled_routine_techdebt",
+    )
+    # W8.5 (ELS-261) — nightly codebase-audit workflow, 03:30 UTC
+    # weekdays (off the routine crons' slots; per-workspace opt-in).
+    register_cron(
+        fn=_workflow_nightly_tick,
+        cron_expr="30 3 * * 1-5",
+        job_id="workflow_nightly",
+    )
     # E16/ELS-124 retired the Ship-side trigger-workflow scheduler.
     # The tracker poller + dispatcher (``apps/backend/app/services/
     # tracker_poller.py`` + ``dispatcher.py``) now drive every agent
@@ -666,6 +700,62 @@ def register_all() -> None:
         cron_expr="*/15 * * * *",  # every 15 min — drains deferred seed merges fast
         job_id="seed_auto_merge",
     )
+    register_cron(
+        fn=_deployments_health_tick,
+        cron_expr="*/15 * * * *",  # every 15 min — re-probe live deployment health
+        job_id="deployments_health",
+    )
+    register_cron(
+        fn=_deployments_reconcile_tick,
+        cron_expr="*/30 * * * *",  # every 30 min — detect apps removed on DO
+        job_id="deployments_reconcile",
+    )
+
+
+@cron_with_lock(
+    lock=CronLockId.DEPLOYMENTS_RECONCILE, name="deployments_reconcile"
+)
+async def _deployments_reconcile_tick() -> None:
+    """Every 30 min: detect deployments whose DO app was removed externally
+    and flip them to red + an activity event (no stale green cards)."""
+    sm = get_sessionmaker()
+    async with sm() as session:
+        try:
+            checked, drifted = await reconcile_active_deployments(session)
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            log.exception("deployments_reconcile tick failed")
+            return
+    if checked:
+        log.info(
+            "deployments_reconcile tick: checked=%d drifted=%d", checked, drifted
+        )
+
+
+@cron_with_lock(lock=CronLockId.DEPLOYMENTS_HEALTH, name="deployments_health")
+async def _deployments_health_tick() -> None:
+    """Every 15 min: re-probe the healthcheck of every ACTIVE deployment.
+
+    Keeps the ``healthy`` flag on the Deployments cards honest even when no
+    one has the console open — a site that goes down later flips the dot to
+    red on the next tick (and back to green when it recovers).
+    """
+    sm = get_sessionmaker()
+    async with sm() as session:
+        try:
+            checked, changed = await recheck_active_deployments(session)
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            log.exception("deployments_health tick failed")
+            return
+    if checked:
+        log.info(
+            "deployments_health tick: urls_checked=%d rows_changed=%d",
+            checked,
+            changed,
+        )
 
 
 @cron_with_lock(lock=CronLockId.INBOX_STALE_SWEEP, name="inbox_stale_sweep")
@@ -685,13 +775,171 @@ async def _inbox_stale_sweep_tick() -> None:
     name="agent_dispatch_lock_sweep",
 )
 async def _agent_dispatch_lock_sweep_tick() -> None:
-    """Periodic cleanup for dangling ``project:*`` dispatch locks.
-    See :mod:`dispatch_lock_sweep` for the algorithm + thresholds."""
+    """Periodic cleanup for expired TTL locks and dangling ``project:*`` locks.
+    See :mod:`dispatch_lock_sweep` for the algorithms + thresholds.
+
+    Also the workflow reconcile tick (W8.3): re-advances non-terminal
+    workflow runs — queued rows whose chat-side background task lost
+    the commit race or died with its replica (dogfood bug #1,
+    2026-06-12: a live pr-review sat in `queued` forever), and running
+    rows whose coding leaves completed via the finish webhook.
+    Idempotent by gate design, so the 5-min cadence is safe."""
     from backend.app.services.dispatch_lock_sweep import (
         sweep_dangling_project_locks_tick,
+        sweep_expired_locks_tick,
+    )
+    from backend.app.services.workflow.runtime import reconcile_stuck_runs
+
+    await sweep_expired_locks_tick()
+    await sweep_dangling_project_locks_tick()
+    try:
+        advanced = await reconcile_stuck_runs()
+        if advanced:
+            log.info("workflow reconcile: advanced %d stale run(s)", advanced)
+    except Exception:  # noqa: BLE001 — reconcile must not break the sweep
+        log.exception("workflow reconcile tick failed")
+
+
+@cron_with_lock(
+    lock=CronLockId.SCHEDULED_ROUTINE_DAILY, name="scheduled_routine_daily"
+)
+async def _scheduled_routine_daily_tick() -> None:
+    """Trigger-(c) daily review ticket (ELS-233). Opt-in per workspace."""
+    from backend.app.services.scheduled_routines import (
+        run_routine_for_all_workspaces,
     )
 
-    await sweep_dangling_project_locks_tick()
+    await run_routine_for_all_workspaces("daily")
+
+
+@cron_with_lock(
+    lock=CronLockId.SCHEDULED_ROUTINE_RETRO, name="scheduled_routine_retro"
+)
+async def _scheduled_routine_retro_tick() -> None:
+    """Trigger-(c) weekly retro ticket (ELS-233). Opt-in per workspace."""
+    from backend.app.services.scheduled_routines import (
+        run_routine_for_all_workspaces,
+    )
+
+    await run_routine_for_all_workspaces("retro")
+
+
+@cron_with_lock(
+    lock=CronLockId.SCHEDULED_ROUTINE_TECHDEBT, name="scheduled_routine_techdebt"
+)
+async def _scheduled_routine_techdebt_tick() -> None:
+    """Trigger-(c) weekly tech-debt sweep ticket (ELS-233). Opt-in."""
+    from backend.app.services.scheduled_routines import (
+        run_routine_for_all_workspaces,
+    )
+
+    await run_routine_for_all_workspaces("techdebt")
+
+
+@cron_with_lock(lock=CronLockId.WORKFLOW_NIGHTLY, name="workflow_nightly")
+async def _workflow_nightly_tick() -> None:
+    """Trigger-(c) for the thesis-8 workflow primitive (ELS-261).
+
+    Enqueues the nightly ``codebase-audit`` workflow per OPT-IN
+    workspace (``settings.workflows.nightly`` — fail-closed: missing/
+    false/disabled means skip). Every spawn the runtime makes goes
+    through the WorkflowDispatchGate on the ``workflow:`` prefix —
+    its own accounting pool, so a fleet of nightly audits can never
+    starve SDLC ticket dispatch (mirrors WORKSPACE_BUNDLE_CAP's
+    separation).
+
+    Shadow mode mirrors ``maybe_dispatch``: with
+    ``SHIP_TRACKER_POLL_FIRE=false`` we record a
+    ``workflow.would_have_run`` audit row and spawn nothing.
+    """
+    from backend.app.core.config import get_settings as _gs
+    from backend.app.db.models.tenancy import AuditLog as _AuditLog
+    from backend.app.db.models.tenancy import Workspace as _Workspace
+    from backend.app.services.workflow.registry import resolve_spec
+    from backend.app.services.workflow.runtime import run_workflow
+
+    settings = _gs()
+    spec = resolve_spec("codebase-audit")
+    if spec is None:
+        log.warning("workflow_nightly: codebase-audit spec missing; skip")
+        return
+
+    sm = get_sessionmaker()
+    workspace_ids = await _all_workspace_ids()
+    for ws_id in workspace_ids:
+        try:
+            async with sm() as session:
+                ws = await session.get(_Workspace, ws_id)
+                if ws is None:
+                    continue
+                enabled = bool(
+                    ((ws.settings or {}).get("workflows") or {}).get(
+                        "nightly", False
+                    )
+                )
+                if not enabled:
+                    continue  # fail-closed: opt-in only
+                if not settings.tracker_poll_fire:
+                    session.add(
+                        _AuditLog(
+                            workspace_id=ws_id,
+                            action="workflow.would_have_run",
+                            target_kind="workflow_run",
+                            target_id="codebase-audit",
+                            payload={"trigger_kind": "cron", "shadow": True},
+                        )
+                    )
+                    await session.commit()
+                    continue
+                await run_workflow(
+                    session,
+                    workspace_id=ws_id,
+                    spec=spec,
+                    inputs={"focus": "nightly"},
+                    trigger_kind="cron",
+                    triggered_by=f"cron:{int(CronLockId.WORKFLOW_NIGHTLY)}",
+                )
+                await session.commit()
+        except Exception:  # noqa: BLE001 — one workspace never blocks the tick
+            log.exception("workflow_nightly: workspace %s failed", ws_id)
+
+
+@cron_with_lock(lock=CronLockId.STALL_NOTIFY, name="stall_notify")
+async def _stall_notify_tick() -> None:
+    """Forward engine_health stalls through the notify() seam (ELS-231).
+
+    Report-only: never mutates locks or ticket status. Gated by
+    ``SHIP_STALL_NOTIFY`` (default off); per-(lock,reason) cooldown is
+    deduped via ``audit_log action='engine.stall_notified'`` so the
+    hourly schedule can never produce a letter storm. Per-workspace
+    failures are isolated."""
+    from backend.app.core.config import get_settings
+
+    settings = get_settings()
+    if not settings.stall_notify_enabled:
+        return
+    from sqlalchemy import select as sa_select
+
+    from backend.app.db.models.tenancy import Workspace
+    from backend.app.db.session import get_sessionmaker
+    from backend.app.services.stall_notifier import notify_stalls_for_workspace
+
+    sessionmaker = get_sessionmaker()
+    async with sessionmaker() as session:
+        ws_ids = (await session.execute(sa_select(Workspace.id))).scalars().all()
+        emitted = 0
+        for ws_id in ws_ids:
+            try:
+                emitted += await notify_stalls_for_workspace(
+                    session,
+                    workspace_id=ws_id,
+                    cooldown_minutes=settings.stall_notify_cooldown_minutes,
+                )
+            except Exception:  # noqa: BLE001 — one ws must not sink the sweep
+                log.exception("stall_notify: ws=%s failed", ws_id)
+        await session.commit()
+        if emitted:
+            log.info("stall_notify tick: %s notification(s)", emitted)
 
 
 @cron_with_lock(

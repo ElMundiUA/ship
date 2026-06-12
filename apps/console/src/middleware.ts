@@ -43,6 +43,9 @@ function withActiveWorkspaceRequestHeader(
   if (ws && isLikelyWorkspaceId(ws)) {
     requestHeaders.set(SHIP_ACTIVE_WS_REQUEST_HEADER, ws);
   }
+  // ELS-235: layouts can't see the pathname server-side; forward it so
+  // the authed layout can gate routes per console-mode.
+  requestHeaders.set("x-ship-pathname", request.nextUrl.pathname);
   return requestHeaders;
 }
 

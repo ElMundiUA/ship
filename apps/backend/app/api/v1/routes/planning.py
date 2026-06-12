@@ -41,7 +41,9 @@ from backend.app.services.planning.requirements_extraction import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/v1/workspaces/{workspace_id}/planning", tags=["planning"])
+# NOTE: no ``/v1`` here — ``api_router`` already mounts every child under
+# ``/v1``; a self-prefix doubles it to ``/v1/v1/…`` (see config.py).
+router = APIRouter(prefix="/workspaces/{workspace_id}/planning", tags=["planning"])
 
 
 # ---------------------------------------------------------------------------

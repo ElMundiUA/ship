@@ -145,4 +145,4 @@ def test_blocked_handler_adds_signal_label_in_source() -> None:
     # the "blocked" entry — both are in OVERLAY_FREEZE_LABEL_PREFIXES.
     assert 'await add_signal(ref, key="needs_clarification")' in body
     # And the dedicated inbox letter
-    assert 'intake_reason="agent_blocked"' in body
+    assert '"intake_reason": "agent_blocked"' in body  # flipped onto notify() (ELS-224)

@@ -89,6 +89,7 @@ from backend.app.services.file_overlap import (
     load_file_coordination_warning_from_audit,
 )
 from backend.app.services.file_overlap_telemetry import evaluate_file_overlap_honour
+from backend.app.services.state_projector import transition_via_projector
 from backend.app.services.tracker_resolver import resolve_for_workspace
 
 
@@ -765,36 +766,34 @@ async def get_next_task(
                     )
                 )
                 # First detection in this window → drop one blocker
-                # row in the operator inbox. The audit-row dedup
-                # gates this same-window check, so we don't re-issue
-                # blocker letters either.
-                session.add(
-                    InboxItem(
-                        workspace_id=workspace_id,
-                        repo_id=None,
-                        type="blocker",
-                        title=(
-                            f"Tracker {resolved.kind} unreachable — "
-                            f"agents stalled"
-                        )[:300],
-                        summary=(
-                            "The bound tracker adapter is rejecting calls "
-                            "(likely an OAuth token expiry / revocation). "
-                            "Re-authorize the workspace integration to "
-                            "restore agent picks. Subsequent stage picks "
-                            "in this hour are short-circuited to keep the "
-                            "audit log readable.\n\n"
-                            f"First error: {str(exc)[:400]}"
-                        )[:2000],
-                        payload={
-                            "tracker_kind": resolved.kind,
-                            "fsm_stage": state,
-                            "error": str(exc)[:500],
-                        },
-                        status="new",
-                        intake_handle=None,
-                        intake_reason="tracker_outage",
-                    )
+                # letter. The audit-row dedup above gates this
+                # same-window check (caller-side dedup stays — the
+                # notify() seam only routes the emission, ELS-224).
+                from backend.app.services.notify import NotifyLevel, notify
+
+                await notify(
+                    session,
+                    workspace_id=workspace_id,
+                    title=(
+                        f"Tracker {resolved.kind} unreachable — "
+                        f"agents stalled"
+                    )[:300],
+                    body=(
+                        "The bound tracker adapter is rejecting calls "
+                        "(likely an OAuth token expiry / revocation). "
+                        "Re-authorize the workspace integration to "
+                        "restore agent picks. Subsequent stage picks "
+                        "in this hour are short-circuited to keep the "
+                        "audit log readable.\n\n"
+                        f"First error: {str(exc)[:400]}"
+                    )[:2000],
+                    level=NotifyLevel.BLOCKER,
+                    payload={
+                        "tracker_kind": resolved.kind,
+                        "fsm_stage": state,
+                        "error": str(exc)[:500],
+                    },
+                    inbox_overrides={"intake_reason": "tracker_outage"},
                 )
                 await session.flush()
         except Exception as audit_exc:  # noqa: BLE001 — audit failure must not sink the response
@@ -1130,6 +1129,7 @@ async def _validate_code_review_to_auto_merge(
     workspace_id: uuid.UUID,
     pr_url: str | None,
     settings: Settings,
+    require_approval: bool = True,
 ) -> tuple[bool, str]:
     """Verify the agent's ``code_review → auto_merge`` claim against
     GitHub.
@@ -1216,21 +1216,27 @@ async def _validate_code_review_to_auto_merge(
                 "Authorization": f"Bearer {token}",
                 "Accept": "application/vnd.github+json",
             }
-            # 1. Reviews — need ≥1 APPROVED.
-            reviews_resp = await client.get(
-                f"{api_root}/pulls/{number}/reviews",
-                headers=headers,
-                params={"per_page": "100"},
-            )
-            if reviews_resp.status_code >= 400:
-                return False, f"reviews_api_{reviews_resp.status_code}"
-            reviews = reviews_resp.json() or []
-            has_approval = any(
-                str(r.get("state") or "").upper() == "APPROVED"
-                for r in reviews
-            )
-            if not has_approval:
-                return False, "no_approval"
+            # 1. Reviews — need ≥1 APPROVED. Autonomy-sensitive
+            # (ELS-243, thesis 7): ``require_approval=False`` (the
+            # ``high`` profile) skips ONLY this check — the CI-green
+            # check below is non-negotiable at every level (founder
+            # decision: a bug letting high skip CI would autonomously
+            # merge red code).
+            if require_approval:
+                reviews_resp = await client.get(
+                    f"{api_root}/pulls/{number}/reviews",
+                    headers=headers,
+                    params={"per_page": "100"},
+                )
+                if reviews_resp.status_code >= 400:
+                    return False, f"reviews_api_{reviews_resp.status_code}"
+                reviews = reviews_resp.json() or []
+                has_approval = any(
+                    str(r.get("state") or "").upper() == "APPROVED"
+                    for r in reviews
+                )
+                if not has_approval:
+                    return False, "no_approval"
 
             # 2. PR detail — need head SHA for check-runs.
             pr_resp = await client.get(
@@ -1685,23 +1691,24 @@ async def _record_orphan_skips(
                 },
             )
         )
-    session.add(
-        InboxItem(
-            workspace_id=workspace_id,
-            type="improvement",
-            title=f"Orphan tickets skipped at stage {fsm_stage}"[:300],
-            summary=(
-                f"{len(refs)} ticket(s) at FSM stage {fsm_stage!r} have no "
-                "tracker project attached and were skipped by the agent "
-                "picker. Re-home them under a project (or close)."
-            )[:2000],
-            payload={
-                "kind": "orphan_skipped",
-                "tracker_kind": tracker_kind,
-                "fsm_stage": fsm_stage,
-                "ticket_refs": refs,
-            },
-        )
+    from backend.app.services.notify import NotifyLevel, notify
+
+    await notify(
+        session,
+        workspace_id=workspace_id,
+        title=f"Orphan tickets skipped at stage {fsm_stage}"[:300],
+        body=(
+            f"{len(refs)} ticket(s) at FSM stage {fsm_stage!r} have no "
+            "tracker project attached and were skipped by the agent "
+            "picker. Re-home them under a project (or close)."
+        )[:2000],
+        level=NotifyLevel.INFO,
+        payload={
+            "kind": "orphan_skipped",
+            "tracker_kind": tracker_kind,
+            "fsm_stage": fsm_stage,
+            "ticket_refs": refs,
+        },
     )
     await session.flush()
 
@@ -2448,7 +2455,14 @@ async def transition_ticket(
     ref = _ticket_ref_from(resolved.kind, payload.ticket_ref)
     if payload.comment:
         await resolved.gateway.comment(ref, body=payload.comment)
-    await resolved.gateway.transition(ref, to_state=payload.to_state)
+    await transition_via_projector(
+        session,
+        settings=get_settings(),
+        workspace_id=workspace_id,
+        gateway=resolved.gateway,
+        ref=ref,
+        to_state=payload.to_state,
+    )
 
     session.add(
         AuditLog(
@@ -3086,7 +3100,14 @@ async def post_ticket_action(
 
     if payload.action == "cancel":
         try:
-            await resolved.gateway.transition(ref, to_state="Canceled")
+            await transition_via_projector(
+                session,
+                settings=get_settings(),
+                workspace_id=workspace_id,
+                gateway=resolved.gateway,
+                ref=ref,
+                to_state="Canceled",
+            )
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         if payload.comment:
@@ -3218,7 +3239,10 @@ class CreateTicketIn(BaseModel):
     in the wrong inbox.
     """
 
-    project_id: str = Field(min_length=1, max_length=128)
+    # Optional since ELS-249: the local-executor a→b escalation files
+    # tickets without a project anchor — the tracker adapter lands
+    # them in the team's default backlog and task_intake routes them.
+    project_id: str | None = Field(default=None, max_length=128)
     title: str = Field(min_length=1, max_length=300)
     body: str = Field(min_length=1, max_length=32 * 1024)
     labels: list[str] = Field(default_factory=list, max_length=20)
@@ -3329,6 +3353,62 @@ async def post_create_ticket(
     await session.flush()
     return CreateTicketOut(
         ok=True, ticket_ref=created.display_id, url=created.url or None
+    )
+
+
+class LocalEscalationIn(BaseModel):
+    """Ask text a ``shipctl local`` session submits for escalation
+    classification (ELS-247/249)."""
+
+    ask: str = Field(min_length=1, max_length=16 * 1024)
+    scratch_summary: str | None = Field(default=None, max_length=8 * 1024)
+
+
+class LocalEscalationOut(BaseModel):
+    verdict: Literal["ESCALATE", "NEUTRAL"]
+    reason: str = ""
+    suggested_title: str | None = None
+
+
+@router.post("/local-executor/classify", response_model=LocalEscalationOut)
+async def post_local_executor_classify(
+    workspace_id: uuid.UUID,
+    payload: LocalEscalationIn,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> LocalEscalationOut:
+    """Classify a local-executor ask as ESCALATE (big async feature
+    that belongs in a tracked ticket) or NEUTRAL.
+
+    Suggestion-only contract (E20): the CLI renders the verdict as an
+    offer; the local run proceeds either way. Degrades to the regex
+    fast-path when no LLM key is configured — never 412s, because a
+    missing suggestion must not break ``shipctl local``.
+    """
+    from backend.app.services.agent.client import pick_default_client
+    from backend.app.services.agent.drafting_intent import DraftingIntentService
+
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+
+    try:
+        client = pick_default_client(settings)
+    except RuntimeError:
+        # No LLM configured: the service's regex fast-path still runs;
+        # the LLM fallback raises inside classify_local_escalation's
+        # try block and degrades to NEUTRAL by contract.
+        client = None
+
+    service = DraftingIntentService(settings=settings, client=client)
+    decision = await service.classify_local_escalation(
+        operator_ask=payload.ask,
+        scratch_summary=payload.scratch_summary,
+    )
+    verdict = "ESCALATE" if decision.verdict == "ESCALATE" else "NEUTRAL"
+    return LocalEscalationOut(
+        verdict=verdict,
+        reason=decision.reason,
+        suggested_title=decision.suggested_title,
     )
 
 
@@ -3907,6 +3987,42 @@ async def finish_agent_run(
             tracker_kind=(prev.payload or {}).get("tracker_kind"),
         )
 
+    # W8.3 (ELS-258): a finishing run may be a WORKFLOW coding leaf —
+    # correlate by run_id, persist the outcome on the step row and
+    # release its workflow:* lock (mirrors how ticket dispatch
+    # releases on finish). Ticket-less leaves stop here: they carry
+    # no FSM side-effects.
+    from backend.app.services.workflow.leaves import complete_coding_step
+
+    matched_workflow_step = await complete_coding_step(
+        session,
+        workspace_id=workspace_id,
+        run_id=payload.run_id,
+        success=payload.outcome in ("ready_next_step", "done"),
+        output={
+            "outcome": payload.outcome,
+            "comment": (payload.comment or "")[:2000],
+        },
+    )
+    if matched_workflow_step and not (payload.ticket_ref or "").strip():
+        session.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                action="agent_run.finish",
+                target_kind="workflow_step",
+                target_id=payload.run_id,
+                payload={"outcome": payload.outcome, "workflow_leaf": True},
+            )
+        )
+        await session.flush()
+        return FinishOut(
+            ok=True,
+            outcome=payload.outcome,
+            run_id=payload.run_id,
+            actions=["workflow_step_completed"],
+            tracker_kind=None,
+        )
+
     # ELS-120 safety net — fire BEFORE tracker resolution so the gate
     # works on workspaces with no tracker bound too. A code-changing
     # finish without a PR URL means the agent bypassed the sidecar
@@ -3963,17 +4079,32 @@ async def finish_agent_run(
         and resolved is not None
     ):
         pr_url = _extract_pr_url(payload.comment)
+        # ELS-243 (thesis 7): the approval requirement is autonomy-
+        # sensitive — ``high`` trusts the reviewer bundle + this gate's
+        # CI check and skips the human-approval requirement;
+        # conservative/balanced keep today's behavior. CI-green stays
+        # non-negotiable for every profile inside the validator.
+        from backend.app.services.agent_provider_resolver import (
+            resolve_autonomy_for_workspace,
+        )
+
+        autonomy_profile = await resolve_autonomy_for_workspace(
+            session=session, workspace_id=workspace_id
+        )
         gate_ok, gate_reason = await _validate_code_review_to_auto_merge(
             session,
             workspace_id=workspace_id,
             pr_url=pr_url,
             settings=settings,
+            require_approval=autonomy_profile != "high",
         )
+        actions.append(f"phase4:gate_profile:{autonomy_profile}")
         if not gate_ok:
             logger.info(
                 "phase4 gate rejected code_review→auto_merge "
-                "ws=%s ticket=%s reason=%s pr_url=%s",
+                "ws=%s ticket=%s reason=%s pr_url=%s autonomy=%s",
                 workspace_id, payload.ticket_ref, gate_reason, pr_url,
+                autonomy_profile,
             )
             session.add(
                 AuditLog(
@@ -3989,6 +4120,7 @@ async def finish_agent_run(
                         "reason": gate_reason,
                         "pr_url": pr_url,
                         "run_id": payload.run_id,
+                        "autonomy": autonomy_profile,
                     },
                 )
             )
@@ -4019,24 +4151,26 @@ async def finish_agent_run(
     # inbox item so the operator notices, but still record the run.
     if payload.outcome in {"ready_next_step", "needs_clarification", "out_of_scope"} \
             and resolved is None:
-        session.add(
-            InboxItem(
-                workspace_id=workspace_id,
-                repo_id=None,
-                type="blocker",
-                title=f"agent finished but no tracker bound ({payload.outcome})"[:300],
-                summary=(payload.summary or payload.comment or "")[:2000] or None,
-                payload={
-                    "run_id": payload.run_id,
-                    "fsm_stage": payload.fsm_stage,
-                    "ticket_ref": payload.ticket_ref,
-                    "outcome": payload.outcome,
-                    **payload.payload,
-                },
-                status="new",
-                intake_handle=None,
-                intake_reason="agent_run_no_tracker",
-            )
+        from backend.app.services.notify import NotifyLevel, notify
+
+        await notify(
+            session,
+            workspace_id=workspace_id,
+            ticket_ref=payload.ticket_ref,
+            title=f"agent finished but no tracker bound ({payload.outcome})"[:300],
+            body=(payload.summary or payload.comment or "")[:2000],
+            level=NotifyLevel.BLOCKER,
+            payload={
+                "run_id": payload.run_id,
+                "fsm_stage": payload.fsm_stage,
+                "ticket_ref": payload.ticket_ref,
+                "outcome": payload.outcome,
+                **payload.payload,
+            },
+            inbox_overrides={
+                "summary": (payload.summary or payload.comment or "")[:2000] or None,
+                "intake_reason": "agent_run_no_tracker",
+            },
         )
         actions.append("inbox:no_tracker_bound")
 
@@ -4284,8 +4418,12 @@ async def finish_agent_run(
                 and not is_workspace_bundle
                 and not defer_merged_transition
             ):
-                await resolved.gateway.transition(
-                    ref,
+                await transition_via_projector(
+                    session,
+                    settings=get_settings(),
+                    workspace_id=workspace_id,
+                    gateway=resolved.gateway,
+                    ref=ref,
                     to_state=payload.stage_next,
                     from_state=payload.fsm_stage,
                 )
@@ -4338,8 +4476,12 @@ async def finish_agent_run(
                     # the ticket in Done with the PR still open.
                     if defer_merged_transition and payload.stage_next:
                         try:
-                            await resolved.gateway.transition(
-                                ref,
+                            await transition_via_projector(
+                                session,
+                                settings=get_settings(),
+                                workspace_id=workspace_id,
+                                gateway=resolved.gateway,
+                                ref=ref,
                                 to_state=payload.stage_next,
                                 from_state=payload.fsm_stage,
                             )
@@ -4429,25 +4571,28 @@ async def finish_agent_run(
         ticket_snapshot = await _try_ticket_snapshot(resolved.gateway, ref)
         # Mirror to inbox so the operator sees it without scanning the
         # tracker — the agent's question is the inbox row's summary.
-        session.add(
-            InboxItem(
-                workspace_id=workspace_id,
-                repo_id=None,
-                type="clarification",
-                category="decision_needed",
-                title=f"clarification: {payload.ticket_ref}"[:300],
-                summary=(payload.summary or payload.comment or "")[:2000] or None,
-                payload={
-                    "run_id": payload.run_id,
-                    "fsm_stage": payload.fsm_stage,
-                    "ticket_ref": payload.ticket_ref,
-                    **({"source_ticket": ticket_snapshot} if ticket_snapshot else {}),
-                    **payload.payload,
-                },
-                status="new",
-                intake_handle=None,
-                intake_reason="agent_run_clarification",
-            )
+        from backend.app.services.notify import NotifyLevel, notify
+
+        await notify(
+            session,
+            workspace_id=workspace_id,
+            ticket_ref=payload.ticket_ref,
+            title=f"clarification: {payload.ticket_ref}"[:300],
+            body=(payload.summary or payload.comment or "")[:2000],
+            level=NotifyLevel.ACTION,
+            payload={
+                "run_id": payload.run_id,
+                "fsm_stage": payload.fsm_stage,
+                "ticket_ref": payload.ticket_ref,
+                **({"source_ticket": ticket_snapshot} if ticket_snapshot else {}),
+                **payload.payload,
+            },
+            inbox_overrides={
+                "type": "clarification",
+                "category": "decision_needed",
+                "summary": (payload.summary or payload.comment or "")[:2000] or None,
+                "intake_reason": "agent_run_clarification",
+            },
         )
         actions.append("inbox:clarification")
         # ELS-142: project_lock release for needs_clarification /
@@ -4519,26 +4664,29 @@ async def finish_agent_run(
                     "stage on unblock."
                 )
             )[:2000]
-            session.add(
-                InboxItem(
-                    workspace_id=workspace_id,
-                    repo_id=None,
-                    type="blocker",
-                    title=blocker_title,
-                    headline=derive_headline(
-                        summary=blocker_summary, title=blocker_title
-                    ),
-                    summary=blocker_summary,
-                    payload={
-                        "ticket_ref": payload.ticket_ref,
-                        "fsm_stage": payload.fsm_stage,
-                        "run_id": payload.run_id,
-                        **payload.payload,
-                    },
-                    status="new",
-                    intake_handle=f"blocked:{payload.ticket_ref}:{payload.fsm_stage}",
-                    intake_reason="agent_blocked",
-                )
+            from backend.app.services.notify import NotifyLevel, notify
+
+            # headline rides the InboxItem before_insert backstop —
+            # identical derive_headline(summary, title) as before.
+            await notify(
+                session,
+                workspace_id=workspace_id,
+                ticket_ref=payload.ticket_ref,
+                title=blocker_title,
+                body=blocker_summary,
+                level=NotifyLevel.BLOCKER,
+                dedup_key=f"blocked:{payload.ticket_ref}:{payload.fsm_stage}",
+                payload={
+                    "ticket_ref": payload.ticket_ref,
+                    "fsm_stage": payload.fsm_stage,
+                    "run_id": payload.run_id,
+                    **payload.payload,
+                },
+                inbox_overrides={
+                    "title": blocker_title,
+                    "summary": blocker_summary,
+                    "intake_reason": "agent_blocked",
+                },
             )
             actions.append("inbox:blocker:agent_blocked")
 
@@ -4554,7 +4702,14 @@ async def finish_agent_run(
             actions.append("tracker:comment")
         # ``Done`` is the legacy workflow-state path in LinearTracker —
         # it resolves the state by literal name, not via FSM map.
-        await resolved.gateway.transition(ref, to_state="Done")
+        await transition_via_projector(
+            session,
+            settings=get_settings(),
+            workspace_id=workspace_id,
+            gateway=resolved.gateway,
+            ref=ref,
+            to_state="Done",
+        )
         actions.append("tracker:transition:Done")
         await _sweep_inbox_on_ticket_advance(
             session,
@@ -5012,7 +5167,14 @@ async def post_admin_relabel_stages(
         # ("Todo" / "Backlog" / "In Progress" / "Done" / "Canceled")
         # without faking an agent finish.
         try:
-            await resolved.gateway.transition(ref, to_state=payload.set_state)
+            await transition_via_projector(
+                session,
+                settings=get_settings(),
+                workspace_id=workspace_id,
+                gateway=resolved.gateway,
+                ref=ref,
+                to_state=payload.set_state,
+            )
             state_changed_to = payload.set_state
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(

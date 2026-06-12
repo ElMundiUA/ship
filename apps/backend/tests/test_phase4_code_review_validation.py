@@ -93,6 +93,7 @@ def _run_with_mocked_gh(
     pr_detail,
     check_runs,
     pr_url: str | None = _PR_URL,
+    require_approval: bool = True,
 ):
     """Drive the validator with mocked install row + httpx transport."""
     transport = httpx.MockTransport(_gh_handler(
@@ -121,6 +122,7 @@ def _run_with_mocked_gh(
                 workspace_id=uuid.uuid4(),
                 pr_url=pr_url,
                 settings=_build_settings(),
+                require_approval=require_approval,
             )
         )
 
@@ -295,3 +297,49 @@ def test_no_install_is_rejected() -> None:
     )
     assert ok is False
     assert reason == "no_install"
+
+
+# ---------------------------------------------------------------------------
+# ELS-243 — autonomy-sensitive approval, CI-green non-negotiable
+# ---------------------------------------------------------------------------
+
+
+def test_high_autonomy_passes_without_approval_when_ci_green() -> None:
+    ok, reason = _run_with_mocked_gh(
+        reviews=[],  # nobody approved
+        pr_detail={"head": {"sha": _HEAD_SHA}},
+        check_runs=[{"status": "completed", "conclusion": "success"}],
+        require_approval=False,
+    )
+    assert ok is True and reason == "ok"
+
+
+def test_conservative_still_blocks_without_approval() -> None:
+    ok, reason = _run_with_mocked_gh(
+        reviews=[],
+        pr_detail={"head": {"sha": _HEAD_SHA}},
+        check_runs=[{"status": "completed", "conclusion": "success"}],
+        require_approval=True,
+    )
+    assert ok is False and reason == "no_approval"
+
+
+def test_ci_red_blocks_even_without_approval_requirement() -> None:
+    """CI-green is non-negotiable for EVERY profile (founder decision)."""
+    ok, reason = _run_with_mocked_gh(
+        reviews=[],
+        pr_detail={"head": {"sha": _HEAD_SHA}},
+        check_runs=[{"status": "completed", "conclusion": "failure"}],
+        require_approval=False,
+    )
+    assert ok is False and reason == "ci_red"
+
+
+def test_ci_incomplete_blocks_even_on_high() -> None:
+    ok, reason = _run_with_mocked_gh(
+        reviews=[],
+        pr_detail={"head": {"sha": _HEAD_SHA}},
+        check_runs=[{"status": "in_progress", "conclusion": None}],
+        require_approval=False,
+    )
+    assert ok is False and reason == "ci_incomplete"

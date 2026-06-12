@@ -780,6 +780,14 @@ class TopicService:
             out.append(
                 ChatMessage(role="system", content=policies_preamble)
             )
+        # ELS-244: autonomy action-rights block — same renderer as the
+        # CI preamble endpoint, so both surfaces stay byte-identical.
+        from backend.app.services.policies import render_autonomy_preamble
+
+        autonomy_block = await render_autonomy_preamble(
+            self._session, self._workspace_id
+        )
+        out.append(ChatMessage(role="system", content=autonomy_block))
         # ELS-74: drafting mode. When the thread carries
         # ``intent='shape_project'`` the dashboard's "+ New project" CTA
         # opened it; bias Navigator toward shaping a brief and waiting
