@@ -57,15 +57,24 @@ class WorkflowSpecError(ValueError):
     offending step when one exists."""
 
 
+FETCH_PROVIDER = "fetch"
+
+
 class AgentLeaf(BaseModel):
     """Leaf executor selection (T5: spawn, never re-implement).
 
-    ``kind=coding`` spawns a tool CLI via ``runAgent`` (claude / codex
-    / cursor / ship); ``kind=reasoning`` runs an in-process Navigator
-    subagent turn, role-prompted.
+    - ``kind=coding`` spawns a tool CLI via ``runAgent`` (claude /
+      codex / cursor / ship);
+    - ``kind=reasoning`` runs an in-process Navigator subagent turn,
+      role-prompted;
+    - ``kind=fetch`` is DETERMINISTIC — no LLM at all: the server
+      HTTP-GETs ``inputs.url`` (GitHub PR URLs are auto-resolved to
+      the API diff endpoint with the workspace's installation token)
+      and returns ``{content, url, truncated}``. The context step the
+      pr-review dogfood was missing.
     """
 
-    kind: Literal["coding", "reasoning"]
+    kind: Literal["coding", "reasoning", "fetch"]
     provider: str = REASONING_PROVIDER
     role: str | None = None
     prompt: str | None = None
@@ -78,6 +87,12 @@ class AgentLeaf(BaseModel):
                     f"unknown coding provider '{self.provider}' "
                     f"(known: {', '.join(CODING_PROVIDERS)})"
                 )
+        elif self.kind == "fetch":
+            if self.provider not in (REASONING_PROVIDER, FETCH_PROVIDER):
+                raise ValueError(
+                    f"fetch leaves use provider 'fetch' (got '{self.provider}')"
+                )
+            self.provider = FETCH_PROVIDER
         else:
             if self.provider not in (REASONING_PROVIDER,):
                 raise ValueError(

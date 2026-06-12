@@ -513,7 +513,16 @@ async def _run_leaf(
             return "blocked"
 
         row = await session.get(AgentWorkflowStepRun, decision.step_row_id)
-        runner = executors.run_coding if is_coding else executors.run_reasoning
+        if step.agent is not None and step.agent.kind == "fetch":
+            runner = executors.run_fetch
+            if runner is None:
+                raise RuntimeError(
+                    f"step '{step.id}': no fetch executor injected"
+                )
+        elif is_coding:
+            runner = executors.run_coding
+        else:
+            runner = executors.run_reasoning
         try:
             output = await runner(
                 session,

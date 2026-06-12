@@ -1,45 +1,75 @@
 # Multi-axis PR review + adversarial verify (W8.8, dogfood).
 # Fired from the code_review FSM gate (trigger b) or from chat.
+#
+# v2 (fetch-diff): step 'diff' deterministically pulls the PR diff
+# server-side (GitHub API + installation token) so every axis reviews
+# the ACTUAL change — the v1 tool-less leaves emitted boilerplate and
+# the verify step rightly returned 'uncertain — no evidence'.
 name: pr-review
-version: "1"
+version: "2"
 inputs:
   pr_url: string
 max_fanout: 4
 max_depth: 2
 steps:
+  - id: diff
+    kind: pipeline
+    agent: {kind: fetch}
+    inputs:
+      url: "{{ inputs.pr_url }}"
   - id: fan
     kind: parallel
+    needs: [diff]
     steps:
       - id: axis.correctness
         kind: pipeline
-        agent: {kind: reasoning, role: reviewer}
+        agent:
+          kind: reasoning
+          role: reviewer
+          prompt: "Review ONLY the correctness axis of this PR diff: logic errors, broken contracts, races, edge cases. Cite file+hunk for every finding. If the diff is clean on this axis, say so explicitly."
         inputs:
           axis: correctness
           pr_url: "{{ inputs.pr_url }}"
+          diff: "{{ steps.diff.output.content }}"
       - id: axis.security
         kind: pipeline
-        agent: {kind: reasoning, role: security-reviewer}
+        agent:
+          kind: reasoning
+          role: security-reviewer
+          prompt: "Review ONLY the security axis of this PR diff: injection, authz/authn gaps, secret handling, unsafe deserialization, SSRF. Cite file+hunk for every finding. If the diff is clean on this axis, say so explicitly."
         inputs:
           axis: security
           pr_url: "{{ inputs.pr_url }}"
+          diff: "{{ steps.diff.output.content }}"
       - id: axis.simplification
         kind: pipeline
-        agent: {kind: reasoning, role: reviewer}
+        agent:
+          kind: reasoning
+          role: reviewer
+          prompt: "Review ONLY the simplification axis of this PR diff: duplication, dead code, needless complexity, missed reuse of existing helpers. Cite file+hunk for every finding. If the diff is clean on this axis, say so explicitly."
         inputs:
           axis: simplification
           pr_url: "{{ inputs.pr_url }}"
+          diff: "{{ steps.diff.output.content }}"
       - id: axis.test-coverage
         kind: pipeline
-        agent: {kind: reasoning, role: qa-architect}
+        agent:
+          kind: reasoning
+          role: qa-architect
+          prompt: "Review ONLY the test-coverage axis of this PR diff: changed behavior without tests, asserts that can't fail, missing negative cases. Cite file+hunk for every finding. If the diff is clean on this axis, say so explicitly."
         inputs:
           axis: test-coverage
           pr_url: "{{ inputs.pr_url }}"
+          diff: "{{ steps.diff.output.content }}"
   - id: join
     kind: barrier
     needs: [fan]
   - id: synth
     kind: synthesize
     needs: [join]
+    agent:
+      kind: reasoning
+      prompt: "Merge the four axis reviews into one deduplicated findings list. Keep ONLY findings grounded in a cited file+hunk; drop generic advice. Severity reflects blast radius."
     inputs:
       correctness: "{{ steps.axis.correctness.output }}"
       security: "{{ steps.axis.security.output }}"
@@ -58,12 +88,16 @@ steps:
               severity: {type: string, enum: [low, medium, high]}
               title: {type: string}
               detail: {type: string}
+              location: {type: string}
   - id: recheck
     kind: verify
     needs: [synth]
+    agent:
+      kind: reasoning
+      prompt: "Adversarially re-check the HIGHEST-severity finding against the diff below. Confirm only if the cited hunk actually shows the problem; refute if it does not."
     inputs:
       top_finding: "{{ steps.synth.output.findings }}"
-      pr_url: "{{ inputs.pr_url }}"
+      diff: "{{ steps.diff.output.content }}"
     output_schema:
       type: object
       required: [verdict]

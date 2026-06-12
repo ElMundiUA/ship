@@ -299,6 +299,14 @@ async def test_pr_review_runs_end_to_end(db_session, seed_workspace) -> None:
     assert spec is not None
 
     verify_inputs: dict = {}
+    axis_inputs: list[dict] = []
+
+    async def fetch(_s, _st, _ws, step, inputs, run_id, **_kw):
+        return {
+            "content": "diff --git a/app.py b/app.py\n+raise",
+            "url": inputs["url"],
+            "truncated": False,
+        }
 
     async def reasoning(_s, _st, _ws, step, inputs, run_id, **_kw):
         if step.kind == "synthesize":
@@ -311,6 +319,7 @@ async def test_pr_review_runs_end_to_end(db_session, seed_workspace) -> None:
         if step.kind == "verify":
             verify_inputs.update(inputs)
             return {"verdict": "confirmed", "reason": "reproduced"}
+        axis_inputs.append(inputs)
         return {"axis": inputs.get("axis"), "notes": ["n1"]}
 
     async def coding(*_a, **_kw):  # pr-review has no coding leaves
@@ -322,11 +331,17 @@ async def test_pr_review_runs_end_to_end(db_session, seed_workspace) -> None:
         spec=spec,
         inputs={"pr_url": "https://github.com/x/y/pull/1"},
         trigger_kind="gate",
-        executors=LeafExecutors(run_reasoning=reasoning, run_coding=coding),
+        executors=LeafExecutors(
+            run_reasoning=reasoning, run_coding=coding, run_fetch=fetch
+        ),
     )
     assert run.status == "completed"
-    # verify consumed the synthesized findings.
+    # v2: every axis saw the ACTUAL diff content from the fetch step.
+    assert len(axis_inputs) == 4
+    assert all("+raise" in i["diff"] for i in axis_inputs)
+    # verify consumed the synthesized findings AND the diff.
     assert verify_inputs["top_finding"][0]["severity"] == "high"
+    assert "+raise" in verify_inputs["diff"]
     assert await _workflow_locks(db_session, workspace.id) == 0
 
 

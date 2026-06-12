@@ -49,8 +49,12 @@ function validateStep(step, path) {
       if (provider !== "reasoning") {
         fail(`step '${id}': reasoning leaves use provider 'reasoning'`);
       }
+    } else if (kind === "fetch") {
+      if (provider !== "reasoning" && provider !== "fetch") {
+        fail(`step '${id}': fetch leaves use provider 'fetch'`);
+      }
     } else {
-      fail(`step '${id}': agent.kind must be coding|reasoning`);
+      fail(`step '${id}': agent.kind must be coding|reasoning|fetch`);
     }
   }
   if (STRUCTURED_KINDS.includes(step.kind)) {
