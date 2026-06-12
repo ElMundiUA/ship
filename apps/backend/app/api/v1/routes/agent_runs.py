@@ -3992,7 +3992,10 @@ async def finish_agent_run(
     # release its workflow:* lock (mirrors how ticket dispatch
     # releases on finish). Ticket-less leaves stop here: they carry
     # no FSM side-effects.
-    from backend.app.services.workflow.leaves import complete_coding_step
+    from backend.app.services.workflow.leaves import (
+        complete_coding_step,
+        find_dispatched_coding_leaf_run_id,
+    )
 
     matched_workflow_step = await complete_coding_step(
         session,
@@ -4004,6 +4007,33 @@ async def finish_agent_run(
             "comment": (payload.comment or "")[:2000],
         },
     )
+    if not matched_workflow_step:
+        from backend.app.services.dispatcher import is_workspace_bundle
+
+        ticket_ref = (payload.ticket_ref or "").strip()
+        routine_id = ticket_ref if is_workspace_bundle(ticket_ref) else None
+        if routine_id or (payload.fsm_stage or "").startswith("workspace_"):
+            expected_run_id = await find_dispatched_coding_leaf_run_id(
+                session,
+                workspace_id=workspace_id,
+                exclude_run_id=payload.run_id,
+            )
+            if expected_run_id:
+                session.add(
+                    AuditLog(
+                        workspace_id=workspace_id,
+                        action="workflow.coding_leaf.finish_mismatch",
+                        target_kind="workspace_bundle",
+                        target_id=routine_id or ticket_ref or payload.run_id,
+                        payload={
+                            "actual_run_id": payload.run_id,
+                            "expected_run_id": expected_run_id,
+                            "routine_id": routine_id or ticket_ref,
+                            "fsm_stage": payload.fsm_stage,
+                        },
+                    )
+                )
+                await session.flush()
     if matched_workflow_step and not (payload.ticket_ref or "").strip():
         session.add(
             AuditLog(
