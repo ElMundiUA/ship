@@ -46,10 +46,12 @@ permissions:
   pull-requests: write
 
 concurrency:
-  # Serialise per-ticket — the backend dispatcher's per-ticket lock
-  # is the primary guard, but a parallel manual dispatch on the same
-  # ticket would otherwise sneak past it.
-  group: ship-agent-run-${{ inputs.ticket_ref }}
+  # Serialise per-routine — workflow coding leaves and workspace-bundle
+  # scheduler dispatches share the same ``routine_id`` (e.g.
+  # ``weekly-audit``) but historically used different ``ticket_ref``
+  # placeholders, so per-ticket groups did not block the race that
+  # orphaned workflow steps (ELS-277).
+  group: ship-agent-run-${{ inputs.routine_id }}
   cancel-in-progress: false
 
 jobs:

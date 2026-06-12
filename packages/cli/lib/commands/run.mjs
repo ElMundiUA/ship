@@ -337,6 +337,15 @@ async function _runCommandImpl(ctx, rest) {
   // inside Cursor without holding any extra config.
   const runId = (process.env.SHIP_RUN_ID || "").trim()
     || `run_${crypto.randomBytes(8).toString("hex")}`;
+  const workspaceBundles = new Set(["daily-digest", "weekly-audit", "self-heal"]);
+  const routineId = args.routine || resolved.executable?.id || "";
+  if (workspaceBundles.has(routineId) && !(process.env.SHIP_RUN_ID || "").trim()) {
+    console.error(
+      "ship: warning — workspace bundle run without SHIP_RUN_ID; "
+      + "finish correlation may break if a workflow coding leaf owns "
+      + "the same routine_id (ELS-277)"
+    );
+  }
   const renderedPrompt = renderPrompt({
     patternBody: roleBody,
     baseBody: systemBody,

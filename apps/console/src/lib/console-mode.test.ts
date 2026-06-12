@@ -45,27 +45,29 @@ describe("envDefaultMode", () => {
 
 describe("isPathAllowed", () => {
   it("full allows everything", () => {
-    for (const p of ["/", "/inbox", "/analytics", "/process/x", "/settings/general"]) {
+    for (const p of ["/", "/approve/x", "/analytics", "/process/x", "/settings/general"]) {
       expect(isPathAllowed("full", p)).toBe(true);
     }
   });
-  it("residual allows status + Inbox + Settings only", () => {
+  it("residual allows hub + approve + Chat + Settings only", () => {
     expect(isPathAllowed("residual", "/")).toBe(true);
-    expect(isPathAllowed("residual", "/inbox")).toBe(true);
-    expect(isPathAllowed("residual", "/inbox/123")).toBe(true);
+    expect(isPathAllowed("residual", "/approve/123")).toBe(true);
+    expect(isPathAllowed("residual", "/chat")).toBe(true);
     expect(isPathAllowed("residual", "/settings/general")).toBe(true);
+    expect(isPathAllowed("residual", "/inbox")).toBe(false);
     expect(isPathAllowed("residual", "/analytics")).toBe(false);
     expect(isPathAllowed("residual", "/process")).toBe(false);
     expect(isPathAllowed("residual", "/memory")).toBe(false);
   });
-  it("off keeps the Inbox approval surface reachable (must-fix)", () => {
-    expect(isPathAllowed("off", "/inbox")).toBe(true);
-    expect(isPathAllowed("off", "/inbox/abc/decide")).toBe(true);
+  it("off keeps the /approve confirm surface reachable (must-fix)", () => {
+    expect(isPathAllowed("off", "/approve/abc")).toBe(true);
     expect(isPathAllowed("off", "/")).toBe(true);
+    expect(isPathAllowed("off", "/inbox")).toBe(false);
+    expect(isPathAllowed("off", "/chat")).toBe(false);
     expect(isPathAllowed("off", "/settings/general")).toBe(false);
     expect(isPathAllowed("off", "/analytics")).toBe(false);
   });
-  it("prefix matching does not leak (/inboxx is not /inbox)", () => {
-    expect(isPathAllowed("off", "/inboxx")).toBe(false);
+  it("prefix matching does not leak (/approvex is not /approve)", () => {
+    expect(isPathAllowed("off", "/approvex")).toBe(false);
   });
 });

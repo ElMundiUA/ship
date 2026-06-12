@@ -1,58 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  buildInboxUrl,
-  inboxItemUrl,
-  parseInboxSearchParams,
-} from "./inbox-url";
-
-describe("parseInboxSearchParams", () => {
-  it("parses clarification deep link filters", () => {
-    expect(parseInboxSearchParams({ type: "clarification" })).toEqual({
-      filters: { ownership: "all", types: ["clarification"] },
-      selectedId: null,
-      errorCode: null,
-    });
-  });
-
-  it("ignores unknown type values", () => {
-    expect(parseInboxSearchParams({ type: "not-a-type" }).filters.types).toEqual(
-      [],
-    );
-  });
-
-  it("preserves selected row and error banner codes", () => {
-    expect(
-      parseInboxSearchParams({
-        selected: "abc-123",
-        error: "forbidden",
-        ownership: "mine",
-      }),
-    ).toEqual({
-      filters: { ownership: "mine", types: [] },
-      selectedId: "abc-123",
-      errorCode: "forbidden",
-    });
-  });
-});
+import { inboxItemUrl } from "./inbox-url";
 
 describe("inboxItemUrl", () => {
-  it("builds mailbox selection deeplink", () => {
-    expect(inboxItemUrl("abc-123")).toBe("/inbox?selected=abc-123");
+  it("targets the /approve confirm page", () => {
+    expect(inboxItemUrl("abc-123")).toBe("/approve/abc-123");
   });
-});
-
-describe("buildInboxUrl", () => {
-  it("round-trips type + selected for mailbox navigation", () => {
-    const url = buildInboxUrl(
-      { ownership: "all", types: ["clarification"] },
-      { selected: "item-1", workspaceScope: "ws-9" },
-    );
-    expect(url).toBe("/inbox?type=clarification&ws=ws-9&selected=item-1");
-    expect(parseInboxSearchParams(Object.fromEntries(new URL(url, "http://x").searchParams.entries()))).toEqual({
-      filters: { ownership: "all", types: ["clarification"] },
-      selectedId: "item-1",
-      errorCode: null,
-    });
+  it("keeps ?ws= for multi-workspace operators", () => {
+    expect(inboxItemUrl("abc-123", "ws-9")).toBe("/approve/abc-123?ws=ws-9");
+  });
+  it("URL-encodes hostile ids", () => {
+    expect(inboxItemUrl("a/b?c")).toBe("/approve/a%2Fb%3Fc");
   });
 });

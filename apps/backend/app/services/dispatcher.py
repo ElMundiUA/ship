@@ -231,6 +231,37 @@ class _Reason:
     NO_REPO = "no_repo"  # workspace has no activated repo to dispatch to
     NO_ROUTINE = "no_routine"  # ticket carries no stage label or unknown stage
     DISPATCH_FAILED = "dispatch_failed"  # GH API rejected the call
+    WORKFLOW_LEAF_COLLISION = (
+        "workflow_leaf_collision"
+    )  # workspace bundle skipped — workflow coding leaf owns routine
+
+
+def workflow_leaf_lock_key(routine_id: str) -> str:
+    """Per-routine lock held while a workflow coding leaf CI run is in flight.
+
+    ``maybe_dispatch_workspace_bundle`` yields when this key is live so a
+    scheduler-initiated run cannot remint ``run_id`` and orphan the gate's
+    correlated step (ELS-277).
+    """
+    return f"{routine_id}:workflow-leaf"
+
+
+def is_workspace_bundle(bundle_id: str) -> bool:
+    return bundle_id in _WORKSPACE_BUNDLE_IDS
+
+
+async def lock_is_held(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    key: str,
+) -> bool:
+    """True when a non-expired lock row exists for ``(workspace_id, key)``."""
+    return (
+        await count_active_locks(
+            session, workspace_id=workspace_id, key_prefix=key
+        )
+    ) > 0
 
 
 # ---------------------------------------------------------------------------
@@ -1486,13 +1517,13 @@ async def maybe_dispatch_workspace_bundle(
             fired=False, reason=_Reason.LOCK_HELD, lock_key=lock_key
         )
 
-    # 3. Separate cap — workspace bundles cap=1 by default. Counts
-    # only ``<bundle_id>:`` keys via prefix filter so SDLC dispatches
-    # don't push us over.
+    # 3. Separate cap — workspace bundles cap=1 by default. Count
+    # only the ``<bundle_id>:scheduled`` slot so an in-flight workflow
+    # coding leaf (``<bundle_id>:workflow-leaf``) does not consume it.
     active = await count_active_locks(
         session,
         workspace_id=workspace_id,
-        key_prefix=f"{bundle_id}:",
+        key_prefix=f"{bundle_id}:scheduled",
     )
     if active > WORKSPACE_BUNDLE_CAP:
         await release_lock(
@@ -1501,6 +1532,34 @@ async def maybe_dispatch_workspace_bundle(
         return DispatchResult(
             fired=False,
             reason=_Reason.CAP_EXCEEDED,
+            lock_key=lock_key,
+        )
+
+    # 3b. Workflow coding leaves that reuse this bundle's ``routine_id``
+    # hold ``<routine_id>:workflow-leaf`` while their CI run is in flight.
+    # Yield so the scheduler cannot remint ``run_id`` and break finish
+    # correlation (ELS-277).
+    leaf_lock = workflow_leaf_lock_key(bundle_id)
+    if await lock_is_held(session, workspace_id=workspace_id, key=leaf_lock):
+        await release_lock(
+            session, workspace_id=workspace_id, key=lock_key
+        )
+        session.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                action="workflow.coding_leaf.collision_skipped",
+                target_kind="workspace_bundle",
+                target_id=bundle_id,
+                payload={
+                    "trigger_kind": trigger_kind,
+                    "routine_id": bundle_id,
+                    "workflow_leaf_lock": leaf_lock,
+                },
+            )
+        )
+        return DispatchResult(
+            fired=False,
+            reason=_Reason.WORKFLOW_LEAF_COLLISION,
             lock_key=lock_key,
         )
 
@@ -1521,26 +1580,29 @@ async def maybe_dispatch_workspace_bundle(
         )
     repo, install, _route = target
 
+    dispatch_run_id = f"run_{secrets.token_hex(8)}"
+    dispatch_inputs: dict[str, str] = {
+        "routine_id": bundle_id,
+        # Workspace-bundles have no ticket, but ship-agent-run.yml
+        # declares ``ticket_ref`` as ``required: true`` and
+        # customer repos still carry that copy of the workflow.
+        # GitHub rejects an empty string for a required input
+        # (422 "Required input 'ticket_ref' not provided"), so
+        # pass the bundle id as a placeholder — the runner's
+        # workspace-scope branch (run.mjs ``isWorkspaceScope``)
+        # ignores ``ticket_ref`` and writes its own empty value
+        # into the synthetic task.
+        "ticket_ref": bundle_id,
+    }
+    if bundle_supports_ship_run_id(repo.installed_bundle_version):
+        dispatch_inputs["ship_run_id"] = dispatch_run_id
+
     try:
         await dispatch_workflow(
             repo,
             install,
             WORKFLOW_FILE,
-            inputs={
-                "routine_id": bundle_id,
-                # Workspace-bundles have no ticket, but ship-agent-run.yml
-                # declares ``ticket_ref`` as ``required: true`` and
-                # customer repos still carry that copy of the workflow.
-                # GitHub rejects an empty string for a required input
-                # (422 "Required input 'ticket_ref' not provided"), so
-                # pass the bundle id as a placeholder — the runner's
-                # workspace-scope branch (run.mjs ``isWorkspaceScope``)
-                # ignores ``ticket_ref`` and writes its own empty value
-                # into the synthetic task, and the GHA concurrency
-                # group ends up as ``ship-agent-run-<bundle>`` which
-                # also gives us per-bundle serialisation for free.
-                "ticket_ref": bundle_id,
-            },
+            inputs=dispatch_inputs,
             settings=settings,
             client=client,
         )
@@ -1580,14 +1642,16 @@ async def maybe_dispatch_workspace_bundle(
                 "repo": repo.full_name,
                 "workflow_file": WORKFLOW_FILE,
                 "routine_id": bundle_id,
+                "ship_run_id": dispatch_inputs.get("ship_run_id"),
             },
         )
     )
     log.info(
-        "workspace dispatch fired: ws=%s bundle=%s trigger=%s",
+        "workspace dispatch fired: ws=%s bundle=%s trigger=%s run_id=%s",
         workspace_id,
         bundle_id,
         trigger_kind,
+        dispatch_inputs.get("ship_run_id"),
     )
     return DispatchResult(fired=True, reason=_Reason.FIRED, lock_key=lock_key)
 
@@ -1597,10 +1661,13 @@ __all__ = [
     "WORKSPACE_BUNDLE_CAP",
     "acquire_lock",
     "count_active_locks",
+    "is_workspace_bundle",
+    "lock_is_held",
     "maybe_dispatch",
     "maybe_dispatch_workspace_bundle",
     "normalize_routine_id",
     "redirect_infra_bounce",
     "release_lock",
     "sweep_expired_locks",
+    "workflow_leaf_lock_key",
 ]

@@ -79,7 +79,6 @@ test.describe("live staging full journey aggregate (wired)", () => {
       const surfaces: [string, RegExp][] = [
         ["/", /Workspace home/i],
         ["/process", /Workspace Map/i],
-        ["/inbox", /^Inbox$/i],
         ["/knowledge", /Knowledge buckets/i],
         ["/integrations", /^Integrations$/i],
         ["/members", /^Members$/i],

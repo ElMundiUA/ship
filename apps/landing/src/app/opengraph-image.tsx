@@ -15,7 +15,7 @@ import { ImageResponse } from "next/og";
  */
 
 export const runtime = "edge";
-export const alt = "Ship — workspace for AI-assisted product delivery";
+export const alt = "Ship — if you can describe it, you can ship it";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
@@ -54,7 +54,7 @@ export default async function Image() {
               textTransform: "uppercase",
             }}
           >
-            Process · Specialists · Evidence
+            Describe · Build · Go live
           </div>
           <div
             style={{
@@ -66,7 +66,7 @@ export default async function Image() {
               maxWidth: 980,
             }}
           >
-            A workspace for AI-assisted product delivery.
+            If you can describe it, you can ship it.
           </div>
           <div
             style={{
@@ -77,7 +77,7 @@ export default async function Image() {
               maxWidth: 880,
             }}
           >
-            Humans own intent. Machines act inside fences. Every action leaves a trail you can read without forensics.
+            Ship turns your idea into a live app — built for non-technical founders who want results, not repo archaeology.
           </div>
         </div>
 
@@ -102,7 +102,7 @@ export default async function Image() {
                   background: "#cfa96b",
                 }}
               />
-              Workspace
+              Describe
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <div
@@ -114,7 +114,7 @@ export default async function Image() {
                   background: "#FFC857",
                 }}
               />
-              Inbox
+              Build
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <div
@@ -126,7 +126,7 @@ export default async function Image() {
                   background: "#D1A7FF",
                 }}
               />
-              Audit
+              Go live
             </div>
           </div>
           <div style={{ display: "flex", fontSize: 18, color: "rgba(255,255,255,0.45)" }}>

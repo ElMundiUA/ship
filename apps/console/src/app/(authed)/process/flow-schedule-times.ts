@@ -15,13 +15,12 @@ export function knownTimes(
   extras: string[] = [],
 ): string[] {
   const times = new Set(
-    [...schedule.slots.map((slot) => slot.local_time), ...extras].filter(
-      (value): value is string => Boolean(value),
-    ),
+    [
+      ...DEFAULT_TIMES,
+      ...schedule.slots.map((slot) => slot.local_time),
+      ...extras,
+    ].filter((value): value is string => Boolean(value)),
   );
-  if (times.size === 0) {
-    for (const time of DEFAULT_TIMES) times.add(time);
-  }
   return Array.from(times).sort();
 }
 

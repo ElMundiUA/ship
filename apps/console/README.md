@@ -1,22 +1,71 @@
 # Ship console
 
-The console is the product workspace UI for Ship. It is a separate Next.js app from the marketing landing and talks to the FastAPI backend over `/v1`.
+The web console for Ship — deliberately small. Since the MCP-first
+rework (thesis 9, ELS-279), Ship is **operated from the agent the
+operator already lives in** (Claude Code / Claude Desktop attached over
+MCP, Telegram for mobile), and the work itself lives in the tracker
+(Linear) and GitHub. The console is not a destination; it is the trust
+bootstrap plus the few surfaces that genuinely cannot leave the
+browser. It is a separate Next.js app from the marketing landing and
+talks to the FastAPI backend over `/v1`.
 
-It is built for product owners, leads, and platform teams who need one place to see connected repos, tracker-backed work, Inbox decisions, knowledge, integrations, members, policy, audit, and repo health.
+## What the console is for
 
-## Current wiring
+| Surface | Route | Why it's web |
+| --- | --- | --- |
+| Operator hub | `/` | "Engine alive? Anything waiting on me? How do I connect my agent?" in one screen |
+| Connect-your-agent | card on `/` and the onboarding finale | PAT mint (one-time secret reveal) + copy-ready `claude mcp add` command |
+| Approve confirm | `/approve/{id}` | Deep-link target for Telegram approval buttons and MCP `web_url` refusals; typed-slug confirm for destructive items — by stakes policy the ONLY place those can be approved |
+| Navigator chat | `/chat` | Fallback thin client when the operator has no agent at hand |
+| Settings | `/settings/*` | Config-scope renderer, integrations/OAuth wiring, Agents & access (PATs), danger zone |
+| Onboarding | `/onboarding` | GitHub App install, repo activation, wizard seed, tracker binding — ends at "Attach Ship to your agent" |
 
-- **Auth** — local/auth provider session wiring through `/api/auth/*` and `/v1/auth/*`.
-- **Workspace home** — live dashboard from `/v1/workspaces/{id}/dashboard` when the API is configured; mock fixtures only when no API is configured.
-- **Onboarding** — GitHub App install, repo activation, preset/wizard seed, tracker binding, agent secrets, knowledge seed, and repo intel harvest through `src/app/api/onboard/*` proxy routes.
-- **Repos** — activated repo list, per-repo pages, repo settings, and repo secrets.
-- **Inbox** — clarifications, improvements, failures, approvals, and routing-backed disposition surfaces.
-- **Knowledge** — bucket index/detail, imports, distiller/sync surfaces, and assistant context.
-- **Integrations** — workspace-level native integrations and tracker binding.
-- **Catalog** — patterns, tools, collections, and workspace-private catalog layers.
-- **Policy, members, audit, chat** — workspace settings and review surfaces.
+There is **no Inbox page**. Inbox triage happens through the
+operator's agent (`inbox_list` / `inbox_get` / `inbox_update` over
+MCP) and Telegram. The `inbox_items` table and REST API are unchanged
+— only the mailbox viewer was removed (ELS-289/294). The hub shows a
+"Waiting on you" strip (actionable count + top 3) linking each item to
+its `/approve/{id}` page.
 
-When `SHIP_API_URL` is unset, the console renders mock fixtures and badges the UI as mock. With `SHIP_API_URL` set, server components and route handlers call the live `/v1` backend.
+Process (`/process`), Knowledge (`/knowledge`) and Policies
+(`/settings/policy`) remain routable but left the navigation rail —
+they're linked from Settings → General → Advanced surfaces. The
+console never grows back dashboards/analytics: domain views live in
+the tracker and GitHub; run introspection belongs to MCP tools and
+engine-health.
+
+## Attaching an agent
+
+Mint a PAT (hub card or Settings → Agents & access), then:
+
+```bash
+claude mcp add ship https://api.ship.elmundi.com/mcp -t http \
+  -H "Authorization: Bearer <pat>"
+```
+
+Claude Desktop: Settings → Connectors → Add custom connector with the
+same URL + header. The MCP endpoint shown in the UI comes from
+`NEXT_PUBLIC_SHIP_MCP_URL` (defaults to the prod endpoint).
+
+## `console.surface` — how much console to show
+
+Per-workspace config scope (Settings → Config) beats the
+`SHIP_CONSOLE_MODE` env default beats `full`. Resolution lives in
+`src/lib/console-mode.ts`; disallowed paths 302 to the hub (see
+`src/app/(authed)/layout.tsx`).
+
+| Mode | Reachable paths | Rail |
+| --- | --- | --- |
+| `full` (default) | everything | Chat · Settings |
+| `residual` | `/`, `/approve/*`, `/chat`, `/settings*` | Chat · Settings |
+| `off` | `/`, `/approve/*` | none |
+
+**Recommended posture: `residual`.** It keeps the hub, the approve
+surface, the fallback chat and settings, and turns everything else
+dark — matching how an MCP-attached operator actually works. `full`
+stays as the opt-in escape hatch for teams that want the advanced
+surfaces in the browser. `/approve/*` is reachable in EVERY mode —
+pending approvals must never be orphaned (thesis 4).
 
 ## Run
 
@@ -27,66 +76,37 @@ npm install --prefix console
 make dev-console
 ```
 
-The console defaults to port 3001 so it does not collide with the landing app on port 3000. Open <http://localhost:3001>.
+The console defaults to port 3001 so it does not collide with the
+landing app on port 3000. Open <http://localhost:3001>.
 
-For backend + console together:
+For backend + console together: `make dev-local`. For Docker, the
+`console` service in `docker-compose.yml` wires
+`SHIP_API_URL=http://ship-server:8100` and exposes host port 3001.
+Do not run another console Next.js process while port 3001 is already
+served.
 
-```bash
-make dev-local
-```
-
-For Docker, the `console` service in `docker-compose.yml` wires `SHIP_API_URL=http://ship-server:8100` and exposes host port 3001:
-
-```bash
-docker compose up -d console
-```
-
-Do not run another console Next.js process while port 3001 is already served.
+When `SHIP_API_URL` is unset, the console renders mock fixtures and
+badges the UI as mock. With `SHIP_API_URL` set, server components and
+route handlers call the live `/v1` backend.
 
 ## Auth wiring
 
 - Login/signup post to `/api/auth/{login,signup}`.
-- The route handler calls `/v1/auth/*`, sets the httpOnly `ship_session` cookie, and redirects back into the app.
-- Server components and route handlers read the cookie via `getSessionToken` and forward it as `Bearer ...`.
-- Logout is POST-only so prefetching links cannot expire the session accidentally.
+- The route handler calls `/v1/auth/*`, sets the httpOnly
+  `ship_session` cookie, and redirects back into the app.
+- Server components and route handlers read the cookie via
+  `getSessionToken` and forward it as `Bearer ...`.
+- Logout is POST-only so prefetching links cannot expire the session
+  accidentally.
 
-## Onboarding shape
+## Tests
 
-The current onboarding flow is workspace and repo driven:
-
-1. Start or resume the workspace.
-2. Install or confirm the GitHub App.
-3. Activate one or more repos.
-4. Seed the selected preset/bundle through the wizard seed routes.
-5. Bind tracker configuration for the repo/workspace.
-6. Configure agent secrets through the repo secret flow.
-7. Seed knowledge and harvest repo intelligence where enabled.
-8. Land on the workspace home with dashboard, repo health, and Inbox visibility.
-
-The source of truth for this flow is the route code under `src/app/api/onboard/` and the backend `/v1` routes, not old `/v1/onboarding/*` notes.
-
-## Routes
-
-| Path | Purpose |
-| --- | --- |
-| `/` | Workspace home: health, work in progress, shipped work, automation signals, repo update banners. |
-| `/login` | Sign-in screen. |
-| `/onboarding` | Workspace/repo setup flow. |
-| `/inbox` | Decision surface for clarifications, improvements, failures, approvals, and exceptions. |
-| `/knowledge` | Knowledge index and bucket management. |
-| `/chat` | Workspace assistant. |
-| `/integrations` | Connected providers and native integrations. |
-| `/members` | Workspace members and roles. |
-| `/settings` | Workspace settings and repo/catalog configuration. |
-| `/settings/policy` | Workspace prose-rule policies. |
-| `/audit` | Audit trail. |
-| `/r/[owner]/[repo]` | Per-repo home. |
-| `/repos/[id]/secrets` | Repo-managed agent/API secrets. |
-
-## Tests and demos
-
-The full browser coverage lives in [`../e2e/README.md`](../e2e/README.md). The product tour walks wizard, dashboard, pipelines, clarifications, improvements, feedback, navigator, knowledge, catalog, repo secrets, metrics, settings, members, integrations, audit, and back to dashboard.
+Unit: `npx vitest run` (console-mode allowlists, approve deep-link
+helper, tool renderers). Wired browser coverage lives in
+[`../../e2e`](../../e2e) — `console-flows.wired.spec.ts` pins the
+hub/rail/approve IA.
 
 ## Theming
 
-Tailwind v3 uses the same brand palette as `landing/`: `ink`, `mist`, `coral`, `aqua`, `lilac`, `sun`.
+Tailwind uses the same brand palette as `landing/`: `ink`, `mist`,
+`coral`, `aqua`, `lilac`, `sun`.

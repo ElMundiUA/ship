@@ -569,7 +569,7 @@ function RenderInboxList(result: ToolResult): ReactNode {
           No inbox items match — your queue is clear.
         </div>
         <div className="mt-2">
-          <Chip href="/inbox" label="Open Inbox" glyph="↗" />
+          <Chip href="/" label="Open hub" glyph="↗" />
         </div>
       </ToolCard>
     );
@@ -584,7 +584,7 @@ function RenderInboxList(result: ToolResult): ReactNode {
             ? ` of ~${total}`
             : ""}
         </span>
-        <Chip href="/inbox" label="Open Inbox" glyph="↗" />
+        <Chip href="/" label="Open hub" glyph="↗" />
       </div>
       <ul className="divide-y divide-white/5">
         {items.map((it) => (
@@ -681,7 +681,7 @@ function RenderInboxGet(result: ToolResult): ReactNode {
           </div>
         </div>
         {id ? (
-          <Chip href={inboxItemUrl(id)} label="Open in Inbox" glyph="↗" />
+          <Chip href={inboxItemUrl(id)} label="Review & approve" glyph="↗" />
         ) : null}
       </div>
 
@@ -773,7 +773,7 @@ function RenderInboxDispose(result: ToolResult): ReactNode {
           </div>
         </div>
         {itemId ? (
-          <Chip href={inboxItemUrl(itemId)} label="Open in Inbox" glyph="↗" />
+          <Chip href={inboxItemUrl(itemId)} label="Review & approve" glyph="↗" />
         ) : null}
       </div>
 
@@ -1013,7 +1013,7 @@ function RenderRunDetail(result: ToolResult): ReactNode {
                 {esc.inbox_item_id ? (
                   <Chip
                     href={inboxItemUrl(esc.inbox_item_id)}
-                    label="Open in Inbox"
+                    label="Review & approve"
                     glyph="→"
                     tone="muted"
                   />

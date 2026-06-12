@@ -467,3 +467,66 @@ def test_render_inputs_caps_huge_values() -> None:
     out = _render_inputs({"diff": "y" * (_PER_VALUE_CAP + 10_000)})
     assert "[truncated]" in out
     assert len(out) < _PER_VALUE_CAP + 1000
+
+
+@pytest.mark.asyncio
+async def test_reconcile_times_out_lost_coding_leaf(
+    db_session, seed_workspace, monkeypatch
+) -> None:
+    """Dogfood finding #3: a coding leaf whose CI run never correlates
+    back (foreign run_id / dead run) must not hang the workflow run
+    forever — the reconcile tick fails it after LEAF_TIMEOUT and the
+    next advance finalizes the run."""
+    from contextlib import asynccontextmanager
+    from datetime import datetime, timedelta, timezone
+    from unittest.mock import AsyncMock
+
+    from backend.app.db.models.workflow import (
+        AgentWorkflowRun,
+        AgentWorkflowStepRun,
+    )
+    from backend.app.services.workflow import runtime as runtime_mod
+
+    _, _, workspace = seed_workspace
+    run = AgentWorkflowRun(
+        workspace_id=workspace.id,
+        spec_name="codebase-audit",
+        trigger_kind="cron",
+        status="running",
+    )
+    db_session.add(run)
+    await db_session.flush()
+    step = AgentWorkflowStepRun(
+        workflow_run_id=run.id,
+        step_id="enumerate",
+        attempt=1,
+        kind="pipeline",
+        agent_provider="claude",
+        status="dispatched",
+        run_id="run_lost",
+    )
+    db_session.add(step)
+    await db_session.flush()
+    step.created_at = datetime.now(timezone.utc) - (
+        runtime_mod.LEAF_TIMEOUT + timedelta(minutes=5)
+    )
+    run.created_at = datetime.now(timezone.utc) - timedelta(hours=4)
+    await db_session.flush()
+
+    @asynccontextmanager
+    async def _bound():
+        yield db_session
+
+    class _SM:
+        def __call__(self):
+            return _bound()
+
+    monkeypatch.setattr(
+        "backend.app.db.session.get_sessionmaker", lambda: _SM()
+    )
+    monkeypatch.setattr(runtime_mod, "advance_run_by_id", AsyncMock())
+
+    await runtime_mod.reconcile_stuck_runs()
+    await db_session.refresh(step)
+    assert step.status == "failed"
+    assert step.reason == "leaf_timeout"

@@ -444,25 +444,57 @@ async def advance_run_by_id(
         logger.exception("workflow %s background advance failed", run_id)
 
 
+# A coding leaf whose CI run dies — or whose /agent-runs/finish lands
+# with a run_id we can't correlate (dogfood finding #3, 2026-06-12:
+# the first nightly codebase-audit finished at 03:32 with a foreign
+# run_id and its enumerate step sat `dispatched` forever) — must not
+# hang the run. After this window the leaf's workflow lock has long
+# expired; declare the attempt failed and let the DAG finalize.
+LEAF_TIMEOUT = timedelta(hours=3)
+
+
 async def reconcile_stuck_runs(*, max_runs: int = 10) -> int:
     """Reconcile tick (W8.3): re-advance every non-terminal run that
     has sat untouched for a couple of minutes — queued rows whose
     background task lost the commit race or died with the replica,
     and running rows whose coding leaves finished via the webhook.
     ``advance_workflow`` is idempotent (duplicate attempts come back
-    DUPLICATE_ATTEMPT), so re-advancing is always safe. Returns the
+    DUPLICATE_ATTEMPT), so re-advancing is always safe. Also times out
+    ``dispatched`` steps older than :data:`LEAF_TIMEOUT` (lost CI run /
+    uncorrelated finish) so a run can't hang forever. Returns the
     number of runs advanced."""
     from backend.app.db.session import get_sessionmaker
 
     sessionmaker = get_sessionmaker()
     async with sessionmaker() as session:
+        now = datetime.now(timezone.utc)
+        timed_out = (
+            await session.execute(
+                select(AgentWorkflowStepRun).where(
+                    AgentWorkflowStepRun.status.in_(("dispatched", "running")),
+                    AgentWorkflowStepRun.created_at < now - LEAF_TIMEOUT,
+                )
+            )
+        ).scalars().all()
+        for step in timed_out:
+            logger.warning(
+                "workflow reconcile: leaf timeout — run %s step %s "
+                "(dispatched %s, run_id %s)",
+                step.workflow_run_id, step.step_id,
+                step.created_at, step.run_id,
+            )
+            step.status = "failed"
+            step.reason = "leaf_timeout"
+            step.finished_at = now
+        if timed_out:
+            await session.commit()
+
         stale = (
             await session.execute(
                 select(AgentWorkflowRun.id)
                 .where(
                     AgentWorkflowRun.status.in_(("queued", "running")),
-                    AgentWorkflowRun.created_at
-                    < datetime.now(timezone.utc) - timedelta(minutes=2),
+                    AgentWorkflowRun.created_at < now - timedelta(minutes=2),
                 )
                 .order_by(AgentWorkflowRun.created_at.asc())
                 .limit(max_runs)

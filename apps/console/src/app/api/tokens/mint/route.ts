@@ -21,16 +21,26 @@ const FRESH_SECRET_COOKIE = "ship_token_just_minted";
 
 export async function POST(request: Request) {
   const origin = resolveOrigin(request);
+  // JSON mode (ELS-288): the Connect-your-agent card fetches with
+  // ``Accept: application/json`` and renders the one-time secret
+  // inline instead of bouncing through the cookie + redirect dance.
+  const wantsJson = (request.headers.get("accept") ?? "").includes(
+    "application/json",
+  );
+  const fail = (code: string, status = 400) =>
+    wantsJson
+      ? NextResponse.json({ error: code }, { status })
+      : back(origin, code);
   const form = await request.formData();
   const name = (form.get("name") ?? "").toString().trim();
   const wsId = (form.get("ws") ?? "").toString().trim();
   const ttlRaw = (form.get("ttl") ?? "").toString().trim();
   const ttlDays = ttlRaw === "" ? undefined : Number.parseInt(ttlRaw, 10);
-  if (!name) return back(origin, "bad_input");
+  if (!name) return fail("bad_input");
   if (ttlDays !== undefined && (Number.isNaN(ttlDays) || ttlDays < 1)) {
-    return back(origin, "bad_ttl");
+    return fail("bad_ttl");
   }
-  if (!isApiConfigured()) return back(origin, "api_unavailable");
+  if (!isApiConfigured()) return fail("api_unavailable", 503);
 
   let secret: string;
   try {
@@ -41,14 +51,24 @@ export async function POST(request: Request) {
     });
     secret = minted.secret;
   } catch (err) {
-    if (err instanceof ApiUnavailableError) return back(origin, "api_unavailable");
+    if (err instanceof ApiUnavailableError) return fail("api_unavailable", 503);
     if (err instanceof ApiHttpError) {
-      if (err.status === 401)
-        return NextResponse.redirect(new URL("/login?error=session_expired", origin), 303);
-      if (err.status === 403) return back(origin, "forbidden");
-      return back(origin, `http_${err.status}`);
+      if (err.status === 401) {
+        return wantsJson
+          ? NextResponse.json({ error: "session_expired" }, { status: 401 })
+          : NextResponse.redirect(
+              new URL("/login?error=session_expired", origin),
+              303,
+            );
+      }
+      if (err.status === 403) return fail("forbidden", 403);
+      return fail(`http_${err.status}`, 502);
     }
-    return back(origin, "unknown");
+    return fail("unknown", 500);
+  }
+
+  if (wantsJson) {
+    return NextResponse.json({ secret });
   }
 
   const url = new URL("/settings", origin);

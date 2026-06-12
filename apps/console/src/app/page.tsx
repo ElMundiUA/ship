@@ -4,6 +4,8 @@ import type { ReactNode } from "react";
 
 import { AppShell, AppShellChrome } from "@/components/app-shell";
 import { ApiUnavailable } from "@/components/api-unavailable";
+import { ConnectAgentCard } from "@/components/connect-agent-card";
+import { inboxItemUrl } from "@/components/inbox/inbox-url";
 import { WorkspaceEntryPicker } from "@/components/workspace-entry-picker";
 import {
   type ApiActivatedRepo,
@@ -13,10 +15,16 @@ import {
   getMe,
   isApiConfigured,
   listActivatedRepos,
+  listInboxItems,
   listWorkspaces,
 } from "@/lib/api/client";
 import type { ApiWorkspace } from "@/lib/api/types";
 import { getSessionToken } from "@/lib/api/session";
+import {
+  INBOX_ACTIONABLE_CATEGORIES,
+  INBOX_LIST_DEFAULT_STATUSES,
+  type InboxListResponse,
+} from "@/lib/inbox-types";
 import { getResolvedWorkspaceId } from "@/lib/workspace-resolve.server";
 import {
   pickWorkspace,
@@ -28,15 +36,15 @@ export const dynamic = "force-dynamic";
 type SearchParams = { [key: string]: string | string[] | undefined };
 
 /**
- * Workspace home (``/``) — the RESIDUAL status surface (ELS-239).
+ * Workspace home (``/``) — the OPERATOR HUB (ELS-287, MCP-first rework).
  *
- * The headless end-state of the frontend: Ship is not a destination.
- * Domain views live in Linear (tickets/projects) and GitHub (PRs/CI);
- * this page only answers "is the engine alive, where is it stuck" (the
- * thesis-2 residue, via /engine-health), shows the active autonomy +
- * console-surface profile, and deep-links out. The rich WorkspaceHome
- * dashboard (ops mirror, priorities, live-system) was deleted with its
- * backend render endpoints — see the headless-pivot ledger.
+ * One screen answering three questions: is the engine alive (thesis-2
+ * residue via /engine-health), is anything waiting on me ("Waiting on
+ * you" strip → per-item ``/approve/{id}`` deep-links), and how do I
+ * connect my agent (the Connect-your-agent card — the new front door:
+ * mint a PAT, copy the ``claude mcp add`` command). Domain views live
+ * in Linear (tickets/projects) and GitHub (PRs/CI); the console never
+ * grows back dashboards.
  *
  * Auth + onboarding flow preserved from the old dashboard:
  *   - no workspace yet → ``/onboarding?step=github``
@@ -96,25 +104,42 @@ export default async function WorkspaceStatusPage({
   }
   const workspace = pickWorkspace(list, wsParam);
 
-  // Residual data: engine health (the thesis-2 residue), the two
-  // pivot config scopes, repos for GitHub deep links, Inbox count.
+  // Hub data: engine health (the thesis-2 residue), the two pivot
+  // config scopes, repos for GitHub deep links, and the "Waiting on
+  // you" strip (actionable count + top 3 → /approve/{id} links).
   // Everything best-effort — a failed card never blanks the page.
-  const [health, autonomy, surface, repos, inboxCounts] = await Promise.all([
-    apiFetch<EngineHealth>(
-      `/v1/workspaces/${workspace.id}/engine-health`,
-      { token },
-    ).catch(() => null),
-    fetchScopeValue(workspace.id, "autonomy.profile", token),
-    fetchScopeValue(workspace.id, "console.surface", token),
-    listActivatedRepos(workspace.id, token).catch(
-      () => [] as ApiActivatedRepo[],
-    ),
-    getInboxCounts(workspace.id, token).catch(() => null),
-  ]);
+  const [health, autonomy, surface, repos, inboxCounts, waiting] =
+    await Promise.all([
+      apiFetch<EngineHealth>(
+        `/v1/workspaces/${workspace.id}/engine-health`,
+        { token },
+      ).catch(() => null),
+      fetchScopeValue(workspace.id, "autonomy.profile", token),
+      fetchScopeValue(workspace.id, "console.surface", token),
+      listActivatedRepos(workspace.id, token).catch(
+        () => [] as ApiActivatedRepo[],
+      ),
+      getInboxCounts(workspace.id, token).catch(() => null),
+      listInboxItems(
+        workspace.id,
+        {
+          categories: INBOX_ACTIONABLE_CATEGORIES,
+          statuses: INBOX_LIST_DEFAULT_STATUSES,
+          sort: "priority_desc_created_asc",
+          limit: 3,
+        },
+        token,
+      ).catch(() => null as InboxListResponse | null),
+    ]);
 
   if (repos.length === 0 && !skipWizard) {
     redirect("/onboarding?step=github");
   }
+
+  const wsScope = list.length > 1 ? workspace.id : undefined;
+  const mcpEndpoint =
+    process.env.NEXT_PUBLIC_SHIP_MCP_URL?.trim() ||
+    "https://api.ship.elmundi.com/mcp";
 
   return (
     <AppShellChrome
@@ -124,7 +149,6 @@ export default async function WorkspaceStatusPage({
         slug: workspace.slug,
       }}
       allWorkspaces={toAppShellWorkspaces(list)}
-      inboxActionableCount={inboxCounts?.actionable_new ?? null}
     >
       <div className="mx-auto max-w-3xl space-y-6 px-6 py-8">
         <header>
@@ -132,9 +156,12 @@ export default async function WorkspaceStatusPage({
             {workspace.name}
           </h1>
           <p className="mt-1 text-sm text-white/55">
-            Headless status — the work itself lives in Linear and GitHub.
+            Operator hub — the work itself lives in your agent, Linear and
+            GitHub.
           </p>
         </header>
+
+        <ConnectAgentCard workspaceId={workspace.id} mcpEndpoint={mcpEndpoint} />
 
         <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
           <h2 className="text-[11px] font-bold uppercase tracking-widest text-white/55">
@@ -177,6 +204,41 @@ export default async function WorkspaceStatusPage({
           </p>
         </section>
 
+        <section
+          className="rounded-2xl border border-white/10 bg-white/[0.03] p-5"
+          data-testid="waiting-on-you"
+        >
+          <h2 className="text-[11px] font-bold uppercase tracking-widest text-white/55">
+            Waiting on you
+            {inboxCounts?.actionable_new ? ` · ${inboxCounts.actionable_new}` : ""}
+          </h2>
+          {waiting === null ? (
+            <p className="mt-2 text-sm text-white/55">
+              Couldn&apos;t load the queue right now.
+            </p>
+          ) : waiting.items.length === 0 ? (
+            <p className="mt-2 text-sm text-white/55">
+              Nothing waiting — agents working. Approvals and questions land
+              in your agent over MCP; items that need this browser show up
+              here.
+            </p>
+          ) : (
+            <ul className="mt-2 space-y-2 text-sm">
+              {waiting.items.map((item) => (
+                <li key={item.id} className="min-w-0">
+                  <Link
+                    href={inboxItemUrl(item.id, wsScope)}
+                    className="text-aqua hover:underline"
+                  >
+                    {item.title || "(untitled)"} →
+                  </Link>{" "}
+                  <span className="text-white/45">{item.type}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+
         <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
           <h2 className="text-[11px] font-bold uppercase tracking-widest text-white/55">
             Where the work lives
@@ -213,14 +275,13 @@ export default async function WorkspaceStatusPage({
 
         <section className="flex gap-3 text-sm">
           <Link
-            href="/inbox"
+            href="/chat"
             className="rounded-full border border-aqua/30 bg-aqua/10 px-4 py-2 font-bold text-aqua hover:bg-aqua/15"
           >
-            Inbox
-            {inboxCounts?.actionable_new ? ` · ${inboxCounts.actionable_new}` : ""}
+            Chat
           </Link>
           <Link
-            href="/settings/config"
+            href="/settings"
             className="rounded-full border border-white/15 px-4 py-2 font-bold text-white/70 hover:text-white"
           >
             Settings

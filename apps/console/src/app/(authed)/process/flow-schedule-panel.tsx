@@ -20,15 +20,15 @@ import { processConfigFromApiProcess } from "./process-config";
 import { ProcessConfigProposalFields } from "./process-config-proposal-fields";
 import { ProcessReviewSummary, processChangeSummary } from "./process-review-summary";
 import {
-  BUILTIN_ROUTINE_CATALOG,
-  HIDDEN_ROUTINE_IDS,
-  isCanonicalRoutineId,
-} from "./routine-catalog";
-import {
   TIME_WINDOW_EXHAUSTED_TOOLTIP,
   knownTimes,
   nextAvailableTime,
 } from "./flow-schedule-times";
+import {
+  BUILTIN_ROUTINE_CATALOG,
+  HIDDEN_ROUTINE_IDS,
+  isCanonicalRoutineId,
+} from "./routine-catalog";
 
 const WEEKDAYS = [
   { id: 1, label: "Mon" },

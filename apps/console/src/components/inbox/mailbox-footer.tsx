@@ -86,11 +86,11 @@ const DECISIONS: Partial<Record<InboxType, Decision>> = {
 export function MailboxFooter({
   detail,
   workspaceId,
-  returnTo = "/inbox",
+  returnTo = "/",
 }: {
   detail: InboxItemDetail;
   workspaceId: string;
-  /** Bounce target after disposition (mailbox ``?selected=`` URL). */
+  /** Bounce target after disposition (the `/approve/{id}` page passes itself). */
   returnTo?: string;
 }) {
   if (detail.status === "resolved" || detail.status === "dismissed") {
@@ -126,6 +126,7 @@ export function MailboxFooter({
       <ReportActionItemsFooter
         workspaceId={workspaceId}
         itemId={detail.id}
+        returnTo={returnTo}
         payload={detail.payload}
       />
     );
@@ -325,10 +326,12 @@ function ReportActionItemsFooter({
   workspaceId,
   itemId,
   payload,
+  returnTo,
 }: {
   workspaceId: string;
   itemId: string;
   payload: Record<string, unknown>;
+  returnTo: string;
 }) {
   const items = reportActionItems(payload);
   const decided = reportActionItemDecisions(payload);
@@ -350,6 +353,7 @@ function ReportActionItemsFooter({
           workspaceId={workspaceId}
           itemId={itemId}
           item={item}
+          returnTo={returnTo}
         />
       ))}
     </div>
@@ -360,10 +364,12 @@ function ReportActionItemRow({
   workspaceId,
   itemId,
   item,
+  returnTo,
 }: {
   workspaceId: string;
   itemId: string;
   item: { id: string; hint: string; label: string; secondary_label: string };
+  returnTo: string;
 }) {
   return (
     <div className="rounded border border-white/10 bg-white/[0.03] p-3">
@@ -376,6 +382,7 @@ function ReportActionItemRow({
           choice="primary"
           label={item.label}
           tone="ghost"
+          returnTo={returnTo}
         />
         <ActionItemChoiceForm
           workspaceId={workspaceId}
@@ -384,6 +391,7 @@ function ReportActionItemRow({
           choice="secondary"
           label={item.secondary_label}
           tone="danger"
+          returnTo={returnTo}
         />
       </div>
     </div>
@@ -473,6 +481,7 @@ function ActionItemChoiceForm({
   choice,
   label,
   tone,
+  returnTo,
 }: {
   workspaceId: string;
   itemId: string;
@@ -480,6 +489,7 @@ function ActionItemChoiceForm({
   choice: "primary" | "secondary";
   label: string;
   tone: "ghost" | "danger";
+  returnTo: string;
 }) {
   const className =
     tone === "danger"
@@ -494,7 +504,7 @@ function ActionItemChoiceForm({
       <input type="hidden" name="ws" value={workspaceId} />
       <input type="hidden" name="action_item_id" value={actionItemId} />
       <input type="hidden" name="choice" value={choice} />
-      <input type="hidden" name="return_to" value="/inbox" />
+      <input type="hidden" name="return_to" value={returnTo} />
       <button type="submit" className={className}>
         {label}
       </button>

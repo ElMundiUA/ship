@@ -234,10 +234,8 @@ test.describe("product tour (deployed dev)", () => {
     // -----------------------------------------------------------------
     await visit(page, "/process", "Process");
 
-    // -----------------------------------------------------------------
-    // 3. Inbox
-    // -----------------------------------------------------------------
-    await visit(page, "/inbox", "Inbox");
+    // (3. Inbox retired — the mailbox page was removed in the MCP-first
+    // rework; inbox triage lives in the operator agent + /approve/{id}.)
 
     // -----------------------------------------------------------------
     // 5. Navigator (agent chat) — type a sample message into composer.

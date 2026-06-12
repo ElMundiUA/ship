@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 
+import { findInboxItemIdByTitle } from "../lib/inbox-helpers";
 import {
   hasShipApiCredentials,
   shipApiPost,
@@ -37,19 +38,25 @@ test.describe("journey: clarification answer (wired, serial)", () => {
     );
     expect(create.ok(), `create clarification ${create.status()}`).toBeTruthy();
 
-    await page.goto("/inbox?type=clarification");
-    await expect(page.getByRole("heading", { name: "Inbox" })).toBeVisible({
+    // MCP-first rework: the mailbox is gone — the clarification is
+    // answered on its /approve/{id} page (the deep-link target the
+    // agent/Telegram would hand the operator).
+    const itemId = await findInboxItemIdByTitle(request, ws, marker, {
+      match: "contains",
+    });
+    await page.goto(`/approve/${encodeURIComponent(itemId)}`);
+    await expect(page.getByTestId("approve-card")).toBeVisible({
       timeout: 30_000,
     });
-    const row = page.locator("li").filter({ hasText: marker });
-    await expect(row).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText(marker, { exact: false }).first()).toBeVisible();
 
-    await row.getByPlaceholder("Answer the agent's question…").fill(
-      "E2E: approved — ship validation.",
-    );
-    await row.getByRole("button", { name: "Send answer" }).click();
+    await page
+      .getByPlaceholder("Reply to the agent's question…")
+      .fill("E2E: approved — ship validation.");
+    await page.getByRole("button", { name: "Answer & resolve" }).click();
 
-    await expect(page).toHaveURL(/banner=answered/, { timeout: 20_000 });
-    await expect(page.getByText("Answer recorded.")).toBeVisible();
+    await expect(page.getByTestId("approve-resolved")).toBeVisible({
+      timeout: 20_000,
+    });
   });
 });

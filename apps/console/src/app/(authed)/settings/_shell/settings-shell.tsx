@@ -119,7 +119,7 @@ const TABS = [
   { id: "members", label: "Members" },
   { id: "integrations", label: "Integrations" },
   { id: "agent-roles", label: "Agent roles" },
-  { id: "api-keys", label: "API keys" },
+  { id: "api-keys", label: "Agents & access" },
   { id: "danger", label: "Danger zone" },
 ] as const;
 type TabId = (typeof TABS)[number]["id"];
@@ -392,6 +392,7 @@ export async function SettingsShell({
                 workspace={workspace}
                 repos={activatedRepos}
               />
+              <AdvancedSurfacesCard workspaceId={workspace.id} multiWs={multiWs} />
             </div>
           )}
 
@@ -527,13 +528,15 @@ function TokensPanel({
       )}
       <Card>
         <CardHeader
-          title="API keys"
-          subtitle="Long-lived keys for the Ship API, CLI, and CI. The secret is shown only once at creation."
+          title="Agents & access"
+          subtitle="PATs for everything that talks to Ship: your operator agent over MCP, the CLI, and CI. Name keys by purpose (operator agent · ci · e2e) — the secret is shown only once at creation."
         />
         {tokens.length === 0 ? (
           <p className="mb-4 text-sm text-white/55">
-            No PATs yet. Mint one below to drive <code className="font-mono">shipctl</code>{" "}
-            from CI or your laptop.
+            No PATs yet. Mint one below to attach your agent over MCP
+            (<code className="font-mono">claude mcp add ship …</code>) or to
+            drive <code className="font-mono">shipctl</code> from CI or your
+            laptop.
           </p>
         ) : (
           <table className="min-w-full text-sm">
@@ -922,6 +925,55 @@ function TokenRow({ token }: { token: ApiTokenInfo }) {
         </form>
       </td>
     </tr>
+  );
+}
+
+/**
+ * MCP-first rework (ELS-289): Process / Knowledge / Policies left the
+ * nav rail but stay fully routable — this card is their wayfinding.
+ */
+function AdvancedSurfacesCard({
+  workspaceId,
+  multiWs,
+}: {
+  workspaceId: string;
+  multiWs: boolean;
+}) {
+  const qs = multiWs ? `?ws=${encodeURIComponent(workspaceId)}` : "";
+  const links = [
+    {
+      href: `/process${qs}`,
+      label: "Process editor",
+      hint: "per-stage agents, routines, FSM states",
+    },
+    {
+      href: `/knowledge${qs}`,
+      label: "Knowledge",
+      hint: "buckets, corpus, importers",
+    },
+    {
+      href: `/settings/policy${qs}`,
+      label: "Policies",
+      hint: "guardrails agents must follow",
+    },
+  ];
+  return (
+    <Card data-testid="advanced-surfaces">
+      <CardHeader
+        title="Advanced surfaces"
+        subtitle="Pages that left the navigation rail in the MCP-first rework. Still fully functional — most operators drive these through their agent instead."
+      />
+      <ul className="space-y-2 text-sm">
+        {links.map((l) => (
+          <li key={l.href}>
+            <Link href={l.href} className="font-semibold text-aqua hover:underline">
+              {l.label} →
+            </Link>{" "}
+            <span className="text-white/45">{l.hint}</span>
+          </li>
+        ))}
+      </ul>
+    </Card>
   );
 }
 
