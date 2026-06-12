@@ -28,7 +28,7 @@ from __future__ import annotations
 import logging
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import select
@@ -397,30 +397,81 @@ async def advance_run_by_id(
     """Background entrypoint for queued runs (chat trigger) and the
     reconcile tick: open a fresh session, load the run + its packaged
     spec, advance. Best-effort — failures land on the run row, never
-    on the caller."""
+    on the caller.
+
+    Visibility retry (dogfood bug #1, 2026-06-12): the chat tool
+    creates this task BEFORE its request transaction commits, so the
+    first read can race the commit and see no row. A fresh session
+    per attempt (a held session would pin the first snapshot) for up
+    to ~30s; if the row never appears the run was rolled back and
+    there is nothing to do — but we LOG it, silence was how the race
+    hid."""
+    import asyncio as _asyncio
+
     from backend.app.db.session import get_sessionmaker
     from backend.app.services.workflow.registry import resolve_spec
 
     sessionmaker = get_sessionmaker()
     try:
-        async with sessionmaker() as session:
-            run = await session.get(AgentWorkflowRun, run_id)
-            if run is None:
-                return
-            spec = resolve_spec(run.spec_name)
-            if spec is None:
-                run.status = "failed"
-                run.finished_at = datetime.now(timezone.utc)
+        run_exists = False
+        for attempt in range(10):
+            async with sessionmaker() as session:
+                run = await session.get(AgentWorkflowRun, run_id)
+                if run is None:
+                    await _asyncio.sleep(3)
+                    continue
+                run_exists = True
+                spec = resolve_spec(run.spec_name)
+                if spec is None:
+                    run.status = "failed"
+                    run.finished_at = datetime.now(timezone.utc)
+                    await session.commit()
+                    return
+                if run.status == "queued":
+                    run.status = "running"
+                await advance_workflow(
+                    session, run=run, spec=spec, actor_user_id=actor_user_id
+                )
                 await session.commit()
                 return
-            if run.status == "queued":
-                run.status = "running"
-            await advance_workflow(
-                session, run=run, spec=spec, actor_user_id=actor_user_id
+        if not run_exists:
+            logger.warning(
+                "workflow %s: run row never became visible — creating "
+                "transaction rolled back?",
+                run_id,
             )
-            await session.commit()
     except Exception:  # noqa: BLE001 — background task must not crash the loop
         logger.exception("workflow %s background advance failed", run_id)
+
+
+async def reconcile_stuck_runs(*, max_runs: int = 10) -> int:
+    """Reconcile tick (W8.3): re-advance every non-terminal run that
+    has sat untouched for a couple of minutes — queued rows whose
+    background task lost the commit race or died with the replica,
+    and running rows whose coding leaves finished via the webhook.
+    ``advance_workflow`` is idempotent (duplicate attempts come back
+    DUPLICATE_ATTEMPT), so re-advancing is always safe. Returns the
+    number of runs advanced."""
+    from backend.app.db.session import get_sessionmaker
+
+    sessionmaker = get_sessionmaker()
+    async with sessionmaker() as session:
+        stale = (
+            await session.execute(
+                select(AgentWorkflowRun.id)
+                .where(
+                    AgentWorkflowRun.status.in_(("queued", "running")),
+                    AgentWorkflowRun.created_at
+                    < datetime.now(timezone.utc) - timedelta(minutes=2),
+                )
+                .order_by(AgentWorkflowRun.created_at.asc())
+                .limit(max_runs)
+            )
+        ).scalars().all()
+    for run_id in stale:
+        logger.info("workflow reconcile: advancing stale run %s", run_id)
+        await advance_run_by_id(run_id)
+    return len(stale)
 
 
 async def _run_leaf(

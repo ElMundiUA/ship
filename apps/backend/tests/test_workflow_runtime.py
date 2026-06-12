@@ -337,3 +337,57 @@ def test_runtime_has_single_chokepoint() -> None:
     assert "dispatch_workflow" not in source
     assert "_run_subagent_loop" not in source
     assert "gate_step_dispatch" in source
+
+
+@pytest.mark.asyncio
+async def test_reconcile_advances_stale_queued_run(
+    db_session, seed_workspace, monkeypatch
+) -> None:
+    """Dogfood bug #1 (2026-06-12): the chat tool's background task can
+    race the creating transaction's commit and exit silently, leaving
+    the run `queued` forever. The reconcile tick must pick such runs
+    up. We pin the selection logic (stale queued run found, fresh ones
+    left alone) with advance_run_by_id spied out."""
+    from contextlib import asynccontextmanager
+    from datetime import datetime, timedelta, timezone
+    from unittest.mock import AsyncMock
+
+    from backend.app.db.models.workflow import AgentWorkflowRun
+    from backend.app.services.workflow import runtime as runtime_mod
+
+    _, _, workspace = seed_workspace
+    stale = AgentWorkflowRun(
+        workspace_id=workspace.id,
+        spec_name="pr-review",
+        trigger_kind="chat",
+        status="queued",
+    )
+    fresh = AgentWorkflowRun(
+        workspace_id=workspace.id,
+        spec_name="pr-review",
+        trigger_kind="chat",
+        status="queued",
+    )
+    db_session.add_all([stale, fresh])
+    await db_session.flush()
+    # Backdate the stale run past the 2-minute threshold.
+    stale.created_at = datetime.now(timezone.utc) - timedelta(minutes=5)
+    await db_session.flush()
+
+    @asynccontextmanager
+    async def _bound():
+        yield db_session
+
+    class _SM:
+        def __call__(self):
+            return _bound()
+
+    monkeypatch.setattr(
+        "backend.app.db.session.get_sessionmaker", lambda: _SM()
+    )
+    spy = AsyncMock()
+    monkeypatch.setattr(runtime_mod, "advance_run_by_id", spy)
+
+    advanced = await runtime_mod.reconcile_stuck_runs()
+    assert advanced == 1
+    spy.assert_awaited_once_with(stale.id)
