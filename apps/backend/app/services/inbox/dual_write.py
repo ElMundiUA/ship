@@ -55,6 +55,24 @@ logger = logging.getLogger(__name__)
 # resolution mirror from a real intake event.
 _RESOLVE_EVENT_REASON = "legacy_writeback"
 
+# E2E / probe clarifications carry ``context.e2e == true`` (set by the
+# Playwright wired suites + manual API probes). They are test fixtures,
+# not operator work — a probe that creates one and never answers it
+# (e.g. a smoke run that exercises only the create path) otherwise
+# leaves an ``open`` clarification + ``new`` inbox card that "WAITING"s
+# forever. Stamp a short TTL on the mirror so the existing
+# ``INBOX_STALE_SWEEP`` cron auto-dismisses it (and stales the legacy
+# row — see :func:`backend.app.services.inbox.sweep.sweep_stale_inbox_items`).
+# Observed live 2026-06-01: ``validation-els141-1779996456 — validation
+# probe?`` sat open 3 days in the Ship-on-Ship workspace.
+_E2E_CLARIFICATION_TTL = timedelta(hours=1)
+
+
+def _is_e2e_clarification(clarification: Clarification) -> bool:
+    """Whether a clarification was created by an e2e / probe run."""
+    ctx = clarification.context
+    return isinstance(ctx, dict) and bool(ctx.get("e2e"))
+
 # Snooze window for ``improvement.deferred`` legacy decisions —
 # mirrors the implicit "look again next week" semantics encoded in
 # the 0032 backfill migration's deferred branch.
@@ -194,6 +212,14 @@ async def mirror_clarification_create(
             finding=finding,
             handle=actor_handle,
         )
+        # E2E / probe rows self-expire: stamp a short TTL + mark
+        # auto-resolvable so the stale-sweep cron dismisses the card
+        # (and stales the legacy row) instead of leaving it WAITING.
+        if item_id is not None and _is_e2e_clarification(clarification):
+            item = await session.get(InboxItem, item_id)
+            if item is not None and item.stale_after is None:
+                item.stale_after = _E2E_CLARIFICATION_TTL
+                item.auto_resolvable = True
         # Flush so the caller sees the insert in the same
         # transaction (matches the convention emit_legacy_record uses
         # internally; explicit here for the no-op pre-check path).

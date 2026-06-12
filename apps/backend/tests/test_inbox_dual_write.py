@@ -174,6 +174,112 @@ async def test_mirror_clarification_create_inserts_inbox_row(
 
 
 @pytest.mark.asyncio
+async def test_mirror_clarification_create_e2e_stamps_ttl(
+    v1_client, db_session, seed_workspace
+) -> None:
+    """``context.e2e`` clarifications self-expire via a TTL on the mirror.
+
+    Regression for the orphan ``validation-els141-... — validation
+    probe?`` row that sat ``open`` for 3 days (2026-06-01): probe
+    fixtures must auto-dismiss instead of WAITING forever.
+    """
+    from backend.app.db.models.inbox import InboxItem
+    from backend.app.services.inbox.dual_write import _E2E_CLARIFICATION_TTL
+
+    _, raw, workspace = seed_workspace
+    workspace_id = workspace.id
+    resp = await v1_client.post(
+        f"/v1/workspaces/{workspace_id}/clarifications",
+        headers={"Authorization": f"Bearer {raw}"},
+        json={"question": "probe?", "context": {"e2e": True}},
+    )
+    assert resp.status_code == 201, resp.text
+    legacy_id = uuid.UUID(resp.json()["id"])
+
+    db_session.expire_all()
+    mirror = (
+        await db_session.execute(
+            select(InboxItem).where(
+                InboxItem.source_table == "clarifications",
+                InboxItem.source_id == legacy_id,
+            )
+        )
+    ).scalars().one()
+    assert mirror.stale_after == _E2E_CLARIFICATION_TTL
+    assert mirror.auto_resolvable is True
+
+
+@pytest.mark.asyncio
+async def test_mirror_clarification_create_non_e2e_has_no_ttl(
+    v1_client, db_session, seed_workspace
+) -> None:
+    """Real (non-probe) clarifications keep the no-TTL default."""
+    from backend.app.db.models.inbox import InboxItem
+
+    _, raw, workspace = seed_workspace
+    workspace_id = workspace.id
+    resp = await v1_client.post(
+        f"/v1/workspaces/{workspace_id}/clarifications",
+        headers={"Authorization": f"Bearer {raw}"},
+        json={"question": "real question?"},
+    )
+    assert resp.status_code == 201, resp.text
+    legacy_id = uuid.UUID(resp.json()["id"])
+
+    db_session.expire_all()
+    mirror = (
+        await db_session.execute(
+            select(InboxItem).where(
+                InboxItem.source_table == "clarifications",
+                InboxItem.source_id == legacy_id,
+            )
+        )
+    ).scalars().one()
+    assert mirror.stale_after is None
+
+
+@pytest.mark.asyncio
+async def test_stale_sweep_stales_legacy_clarification(
+    v1_client, db_session, seed_workspace
+) -> None:
+    """Sweeping an e2e mirror past its TTL also stales the legacy row."""
+    from backend.app.db.models.agent_surface import Clarification
+    from backend.app.db.models.inbox import InboxItem
+    from backend.app.services.inbox.sweep import sweep_stale_inbox_items
+
+    _, raw, workspace = seed_workspace
+    workspace_id = workspace.id
+    resp = await v1_client.post(
+        f"/v1/workspaces/{workspace_id}/clarifications",
+        headers={"Authorization": f"Bearer {raw}"},
+        json={"question": "probe?", "context": {"e2e": True}},
+    )
+    assert resp.status_code == 201, resp.text
+    legacy_id = uuid.UUID(resp.json()["id"])
+
+    db_session.expire_all()
+    mirror = (
+        await db_session.execute(
+            select(InboxItem).where(InboxItem.source_id == legacy_id)
+        )
+    ).scalars().one()
+    mirror_id = mirror.id
+    # Backdate creation so ``created_at + stale_after`` is in the past.
+    mirror.created_at = datetime.now(timezone.utc) - timedelta(hours=2)
+    await db_session.flush()
+
+    swept = await sweep_stale_inbox_items(db_session)
+    assert swept >= 1
+
+    db_session.expire_all()
+    refreshed_mirror = await db_session.get(InboxItem, mirror_id)
+    assert refreshed_mirror.status == "dismissed"
+    assert refreshed_mirror.resolution == "stale"
+    legacy = await db_session.get(Clarification, legacy_id)
+    assert legacy.status == "stale"
+
+
+@pytest.mark.asyncio
 async def test_mirror_clarification_create_does_not_block_on_intake_failure(
     monkeypatch, v1_client, db_session, seed_workspace
 ) -> None:
