@@ -156,6 +156,22 @@ async def _write_autonomy_profile(_s: AsyncSession, ws: Workspace, value: Any) -
     ws.autonomy = str(value)
 
 
+async def _read_comment_inbound(_s: AsyncSession, ws: Workspace) -> Any:
+    raw = (ws.settings or {}).get("chat") or {}
+    return bool(raw.get("comment_inbound", False))
+
+
+async def _write_comment_inbound(_s: AsyncSession, ws: Workspace, value: Any) -> None:
+    if not isinstance(value, bool):
+        raise ValueError("chat.comment_inbound must be a boolean")
+    settings = dict(ws.settings or {})
+    chat = dict(settings.get("chat") or {})
+    chat["comment_inbound"] = value
+    settings["chat"] = chat
+    # Reassign (not mutate) so SQLAlchemy's JSONB change detection fires.
+    ws.settings = settings
+
+
 async def _read_local_executor_enabled(_s: AsyncSession, ws: Workspace) -> Any:
     raw = (ws.settings or {}).get("local_executor") or {}
     return bool(raw.get("enabled", False))
@@ -322,6 +338,26 @@ _SCOPE_LIST: tuple[ConfigScope, ...] = (
         read=_read_local_executor_enabled,
         write=_write_local_executor_enabled,
         audit_event="workspace.local_executor_enabled.set",
+    ),
+    ConfigScope(
+        slug="chat.comment_inbound",
+        description=(
+            "Whether fresh operator comments on active tracker tickets "
+            "flow into the ticket's Navigator thread as conversational "
+            "context (thesis 4, ELS-251). Context only — comments NEVER "
+            "transition the FSM; the STATUS field stays the only "
+            "transition signal. Default-OFF, consistent with the "
+            "inbox-only launch egress."
+        ),
+        schema={
+            "type": "boolean",
+            "description": (
+                "Opt-in flag for Linear-comment → Navigator inbound."
+            ),
+        },
+        read=_read_comment_inbound,
+        write=_write_comment_inbound,
+        audit_event="workspace.chat_comment_inbound.set",
     ),
 )
 
