@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+import { findInboxItemIdByTitle } from "../lib/inbox-helpers";
+
 import { GH_API, ghHeaders, parseRepo } from "../lib/github-rest";
 import {
   hasShipApiCredentials,
@@ -121,10 +123,15 @@ test.describe("tracker: GitHub issue → clarifications projection", () => {
       .toBe(true);
 
     if (hasPlaywrightStorageState()) {
-      await page.goto("/inbox?type=clarification");
-      await expect(
-        page.getByRole("heading", { name: "Inbox" }),
-      ).toBeVisible({ timeout: 30_000 });
+      // MCP-first rework: no mailbox — verify the row renders on its
+      // /approve/{id} confirm page.
+      const itemId = await findInboxItemIdByTitle(request, ws, marker, {
+        match: "contains",
+      });
+      await page.goto(`/approve/${encodeURIComponent(itemId)}`);
+      await expect(page.getByTestId("approve-card")).toBeVisible({
+        timeout: 30_000,
+      });
       await expect(
         page.getByText(marker, { exact: false }).first(),
       ).toBeVisible({ timeout: 30_000 });

@@ -18,64 +18,72 @@ test.describe("console surfaces (wired, serial)", () => {
     );
   });
 
-  test("01 — residual status surface loads (ELS-239)", async ({ page }) => {
-    // `/` is the headless-pivot residual surface: engine health +
-    // autonomy/console-surface values + deep links out. The rich
-    // WorkspaceHome (Repos/Fleet) was deleted with its backend render
-    // routes in Phase 4. Multi-workspace operators land on the entry
-    // picker first — pin via ?ws when the env provides a workspace id
-    // (local stacks seed several).
+  test("01 — operator hub loads (ELS-287)", async ({ page }) => {
+    // `/` is the MCP-first operator hub: engine health, the
+    // Connect-your-agent card, the "Waiting on you" strip, and deep
+    // links out. Multi-workspace operators land on the entry picker
+    // first — pin via ?ws when the env provides a workspace id.
     const ws = process.env.E2E_WORKSPACE_ID?.trim();
     await page.goto(ws ? `/?ws=${encodeURIComponent(ws)}` : "/");
     await expect(
-      page.getByText("Headless status", { exact: false }).first(),
+      page.getByText("Operator hub", { exact: false }).first(),
     ).toBeVisible({ timeout: 30_000 });
     await expect(
       page.getByRole("heading", { name: "Engine", exact: true }),
     ).toBeVisible();
     await expect(
+      page
+        .getByTestId("connect-agent-card")
+        .or(page.getByTestId("connect-agent-hint")),
+    ).toBeVisible();
+    await expect(page.getByTestId("waiting-on-you")).toBeVisible();
+    await expect(
       page.getByText(/Where the work lives/i).first(),
     ).toBeVisible();
   });
 
-  test("03 — inbox", async ({ page }) => {
-    await page.goto("/inbox");
+  test("01b — hub fits 320px with no horizontal scroll", async ({ page }) => {
+    const ws = process.env.E2E_WORKSPACE_ID?.trim();
+    await page.setViewportSize({ width: 320, height: 720 });
+    await page.goto(ws ? `/?ws=${encodeURIComponent(ws)}` : "/");
+    await expect(
+      page.getByText("Operator hub", { exact: false }).first(),
+    ).toBeVisible({ timeout: 30_000 });
+    const overflow = await page.evaluate(
+      () =>
+        document.documentElement.scrollWidth -
+        document.documentElement.clientWidth,
+    );
+    expect(overflow, "horizontal scroll at 320px").toBeLessThanOrEqual(0);
+  });
+
+  test("03 — /inbox is gone (mailbox removed, ELS-289)", async ({ page }) => {
+    // The mailbox page was deleted in the MCP-first rework — inbox
+    // triage lives in the operator agent (MCP) and Telegram. The
+    // route must 404 (full mode) or 302 to the hub (gated modes);
+    // what must NOT happen is an Inbox mailbox rendering.
+    const resp = await page.goto("/inbox");
     await expect(
       page.getByRole("heading", { name: "Inbox", exact: true }),
+    ).toHaveCount(0);
+    if (resp) expect([200, 404]).toContain(resp.status());
+  });
+
+  test("03b — /approve/{id} confirm page renders the missing-item state", async ({
+    page,
+  }) => {
+    // The per-item confirm surface (deep-link target for Telegram
+    // buttons + MCP web_url refusals) must render gracefully for an
+    // unknown id — no crash, explicit "gone" copy, hub link back.
+    await page.goto("/approve/00000000-0000-0000-0000-000000000000");
+    await expect(
+      page.getByRole("heading", { name: "Waiting on you", exact: true }),
     ).toBeVisible({ timeout: 30_000 });
-    await expect(page.getByTestId("inbox-lane-filters")).toBeVisible();
+    await expect(page.getByTestId("approve-missing")).toBeVisible();
+    await expect(
+      page.getByRole("link", { name: /Back to the hub/i }),
+    ).toBeVisible();
   });
-
-  test("03b — inbox lane chip filters without navigation", async ({ page }) => {
-    await page.goto("/inbox");
-    await expect(page.getByTestId("inbox-lane-filters")).toBeVisible({
-      timeout: 30_000,
-    });
-    const rows = page.getByTestId("inbox-mailbox-rows").locator("li");
-    const total = await rows.count();
-    if (total === 0) {
-      test.info().annotations.push({
-        type: "skip",
-        description: "No actionable inbox rows in wired workspace.",
-      });
-      return;
-    }
-    const urlBefore = page.url();
-    await page.getByTestId("inbox-lane-now").click();
-    await expect(page).toHaveURL(urlBefore);
-    const visible = await rows.count();
-    for (let i = 0; i < visible; i++) {
-      await expect(rows.nth(i)).toHaveAttribute("data-lane", "now");
-    }
-    if (total > visible) {
-      expect(visible).toBeLessThan(total);
-    }
-  });
-
-  // 03c (reports surface) retired: /reports was deleted on main in
-  // 7848f89d (ELS-165/166, Inbox Decision UI Phase 3) — reports now
-  // land as inbox rows. Never caught because the wired suite is not
-  // in CI and 01's failure serial-aborted the rest of this block.
 
   test("06 — navigator (agent chat)", async ({ page }) => {
     await page.goto("/chat");
@@ -175,7 +183,7 @@ test.describe("console surfaces (wired, serial)", () => {
     if (resp) expect([200, 404]).toContain(resp.status());
   });
 
-  test("14 — rail: workspace nav exposes active workspace pages", async ({
+  test("14 — rail is exactly Chat / Settings (ELS-289)", async ({
     page,
   }) => {
     // Same multi-workspace pinning as test 01 — bare "/" lands on the
@@ -183,34 +191,38 @@ test.describe("console surfaces (wired, serial)", () => {
     const ws = process.env.E2E_WORKSPACE_ID?.trim();
     await page.goto(ws ? `/?ws=${encodeURIComponent(ws)}` : "/");
     const nav = page.locator("aside nav");
-    const checks: [string, RegExp][] = [
-      ["Process", /\/process(\?|$)/],
-      ["Knowledge", /\/knowledge(\?|$)/],
-      ["Policies", /\/settings\/policy(\?|$)/],
-    ];
+    // Exactly two entries; Inbox/Process/Knowledge/Policies left the
+    // rail in the MCP-first rework (still routable — Settings →
+    // Advanced surfaces covers wayfinding).
+    await expect(nav.getByRole("link")).toHaveCount(2, { timeout: 30_000 });
     await expect(
-      nav.getByRole("link", { name: /^Inbox(?: · \d+)?$/ }),
-    ).toBeVisible();
-    await nav.getByRole("link", { name: /^Inbox(?: · \d+)?$/ }).click();
-    await expect(page).toHaveURL(/\/inbox(\?|$)/);
-    for (const [label, pathRe] of checks) {
-      await nav.getByRole("link", { name: label, exact: true }).click();
-      await expect(page).toHaveURL(pathRe);
-    }
-    await nav.getByRole("link", { name: "Dashboard", exact: true }).click();
-    await expect(page).toHaveURL(/\/(?:$|\?)/);
+      nav.getByRole("link", { name: /Inbox|Process|Knowledge|Policies|Dashboard/ }),
+    ).toHaveCount(0);
+    await nav.getByRole("link", { name: "Chat", exact: true }).click();
+    await expect(page).toHaveURL(/\/chat(\?|$)/);
+    await page.locator("aside nav").getByRole("link", { name: "Settings", exact: true }).click();
+    await expect(page).toHaveURL(/\/settings(\?|$)/);
   });
 
   test("14b — header Navigator launcher opens /chat", async ({ page }) => {
-    // The residual "/" surface renders AppShellChrome without the
-    // header bar (ELS-239), so the launcher lives on the header'd
-    // pages — assert it from the Inbox, the always-on approval
-    // surface.
-    await page.goto("/inbox");
+    // The hub "/" renders AppShellChrome without the header bar, so
+    // the launcher lives on the header'd pages — assert it from
+    // Settings.
+    await page.goto("/settings");
     const launcher = page.getByTestId("navigator-launcher");
     await expect(launcher).toBeVisible({ timeout: 15_000 });
     await launcher.click();
     await expect(page).toHaveURL(/\/chat(?:\?|$)/);
+  });
+
+  test("14c — Settings → Advanced surfaces links the de-railed pages", async ({
+    page,
+  }) => {
+    await page.goto("/settings");
+    const advanced = page.getByTestId("advanced-surfaces");
+    await expect(advanced).toBeVisible({ timeout: 30_000 });
+    await advanced.getByRole("link", { name: /Process editor/ }).click();
+    await expect(page).toHaveURL(/\/process(\?|$)/);
   });
 
   // 15 (repo mode /r/<owner>/<repo>) retired with Phase 4: the repo

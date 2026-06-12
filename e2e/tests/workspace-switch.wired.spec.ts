@@ -48,7 +48,7 @@ test.describe("workspace switcher (wired)", () => {
     const wsA = await createThrowawayWorkspace(request, "E2E switch A");
     const wsB = await createThrowawayWorkspace(request, "E2E switch B");
 
-    await page.goto(`/inbox?ws=${encodeURIComponent(wsA.id)}`);
+    await page.goto(`/settings?ws=${encodeURIComponent(wsA.id)}`);
     await expect(page.getByTitle("Switch workspace")).toContainText(wsA.name, {
       timeout: 30_000,
     });
@@ -71,7 +71,7 @@ test.describe("workspace switcher (wired)", () => {
     const wsA = await createThrowawayWorkspace(request, "E2E round A");
     const wsB = await createThrowawayWorkspace(request, "E2E round B");
 
-    await page.goto(`/inbox?ws=${encodeURIComponent(wsA.id)}`);
+    await page.goto(`/settings?ws=${encodeURIComponent(wsA.id)}`);
     await expect(page.getByTitle("Switch workspace")).toContainText(wsA.name, {
       timeout: 30_000,
     });

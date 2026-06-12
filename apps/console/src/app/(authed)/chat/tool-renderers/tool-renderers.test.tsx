@@ -51,7 +51,7 @@ describe("renderToolResult", () => {
     expect(screen.getAllByText(/Open/).length).toBeGreaterThanOrEqual(1);
     const rowOpen = screen
       .getAllByRole("link")
-      .find((el) => el.getAttribute("href") === "/inbox?selected=abc");
+      .find((el) => el.getAttribute("href") === "/approve/abc");
     expect(rowOpen).toBeDefined();
   });
 
@@ -62,7 +62,7 @@ describe("renderToolResult", () => {
     expect(
       screen.getByText(/queue is clear/i),
     ).toBeInTheDocument();
-    expect(screen.getByText(/Open Inbox/i)).toBeInTheDocument();
+    expect(screen.getByText(/Open hub/i)).toBeInTheDocument();
   });
 
   it("U3 — error-shaped payload short-circuits any renderer to ErrorCard", () => {

@@ -19,6 +19,7 @@ import {
   isApiConfigured,
   type InboxDispositionAction,
 } from "@/lib/api/client";
+import { inboxItemUrl } from "@/components/inbox/inbox-url";
 import { resolveOrigin } from "@/lib/api/origin";
 
 const VALID_ACTIONS: readonly InboxDispositionAction[] = [
@@ -118,12 +119,12 @@ export async function POST(
     return back(origin, id, codeFor(err), returnTo);
   }
 
-  const successTarget = returnTo ?? `/inbox?selected=${id}`;
+  const successTarget = returnTo ?? inboxItemUrl(id);
   return NextResponse.redirect(new URL(successTarget, origin), 303);
 }
 
 function back(origin: string, id: string, code: string, returnTo: string | null) {
-  const url = new URL(returnTo ?? `/inbox?selected=${id}`, origin);
+  const url = new URL(returnTo ?? inboxItemUrl(id), origin);
   url.searchParams.set("error", code);
   return NextResponse.redirect(url, 303);
 }

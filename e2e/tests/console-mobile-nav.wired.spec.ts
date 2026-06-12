@@ -12,18 +12,20 @@ test.describe("console mobile nav (wired)", () => {
     );
   });
 
-  test("menu button opens drawer with Inbox link", async ({ page }) => {
-    await page.goto("/");
+  // The hub "/" renders chrome without the header bar, so the menu
+  // button lives on header'd pages — drive the drawer from Settings.
+  test("menu button opens drawer with Chat link", async ({ page }) => {
+    await page.goto("/settings");
     const menu = page.getByRole("button", { name: "Open navigation menu" });
     await expect(menu).toBeVisible({ timeout: 30_000 });
     await menu.click();
-    await expect(page.getByRole("link", { name: /Inbox/ }).first()).toBeVisible();
+    await expect(page.getByRole("link", { name: /Chat/ }).first()).toBeVisible();
   });
 
   test("Escape closes drawer and returns focus to menu button", async ({
     page,
   }) => {
-    await page.goto("/inbox");
+    await page.goto("/settings");
     const menu = page.getByRole("button", { name: "Open navigation menu" });
     await expect(menu).toBeVisible({ timeout: 30_000 });
     await menu.click();
@@ -49,8 +51,8 @@ test.describe("console desktop nav regression (wired)", () => {
     await expect(
       page.getByRole("button", { name: "Open navigation menu" }),
     ).toBeHidden();
-    await expect(page.getByRole("link", { name: "Dashboard" })).toBeVisible({
-      timeout: 30_000,
-    });
+    await expect(
+      page.locator("aside nav").getByRole("link", { name: "Chat", exact: true }),
+    ).toBeVisible({ timeout: 30_000 });
   });
 });

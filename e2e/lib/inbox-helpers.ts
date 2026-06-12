@@ -31,7 +31,14 @@ export type WorkspaceMember = {
 export async function mintInboxItem(
   request: APIRequestContext,
   workspaceId: string,
-  body: { type: string; title: string; summary?: string },
+  body: {
+    type: string;
+    title: string;
+    summary?: string;
+    /** Merged into the row's payload bag — e.g. `{stakes: "destructive"}`
+     * to exercise the typed-slug confirm on /approve/{id}. */
+    payload?: Record<string, unknown>;
+  },
 ): Promise<void> {
   const res = await shipApiPost(
     request,
@@ -46,18 +53,21 @@ export async function findInboxItemIdByTitle(
   request: APIRequestContext,
   workspaceId: string,
   title: string,
-  options?: { status?: string; attempts?: number },
+  options?: { status?: string; attempts?: number; match?: "exact" | "contains" },
 ): Promise<string> {
   const status = options?.status ?? "new";
   const attempts = options?.attempts ?? 8;
+  const match = options?.match ?? "exact";
   const path = `/v1/workspaces/${encodeURIComponent(workspaceId)}/inbox?ownership=all&status=${encodeURIComponent(status)}&limit=100`;
 
   for (let i = 0; i < attempts; i++) {
     const res = await shipApiGet(request, path);
     expect(res.ok(), `GET inbox list → ${res.status()}`).toBeTruthy();
     const data = (await res.json()) as { items: InboxListItem[] };
-    const match = data.items.find((row) => row.title === title);
-    if (match) return match.id;
+    const found = data.items.find((row) =>
+      match === "exact" ? row.title === title : row.title.includes(title),
+    );
+    if (found) return found.id;
     await new Promise((r) => setTimeout(r, 400));
   }
   throw new Error(`inbox item not found for title: ${title}`);

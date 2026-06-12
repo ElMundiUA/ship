@@ -108,10 +108,19 @@ export function InboxDispositionPanel({
   workspaceId,
   itemId,
   itemType,
+  returnTo,
+  destructive,
 }: {
   workspaceId: string;
   itemId: string;
   itemType: InboxType;
+  /** Same-origin path the disposition route bounces back to (the
+   * `/approve/{id}` page passes itself). Defaults server-side. */
+  returnTo?: string;
+  /** Stakes-policy hard gate (ELS-294): destructive-marked approvals
+   * require the operator to type the confirm slug — MCP and Telegram
+   * refuse these by design, the web confirm is the only path. */
+  destructive?: boolean;
 }) {
   const vocab = DISPOSITION_BY_TYPE[itemType] ?? DISPOSITION_BY_TYPE.report;
 
@@ -121,6 +130,7 @@ export function InboxDispositionPanel({
         <form action={disposeAction(itemId)} method="POST" className="space-y-2">
           <input type="hidden" name="ws" value={workspaceId} />
           <input type="hidden" name="action" value="answer" />
+          {returnTo && <input type="hidden" name="return_to" value={returnTo} />}
           <textarea
             name="answer"
             rows={3}
@@ -140,10 +150,58 @@ export function InboxDispositionPanel({
                 workspaceId={workspaceId}
                 itemId={itemId}
                 spec={spec}
+                returnTo={returnTo}
               />
             ))}
           </div>
         )}
+      </div>
+    );
+  }
+
+  if (destructive && vocab.primary.action === "approve") {
+    return (
+      <div className="space-y-3">
+        <form
+          action={disposeAction(itemId)}
+          method="POST"
+          data-testid="approve-destructive-form"
+          className="flex flex-wrap items-center gap-2 rounded-lg border border-coral/30 bg-coral/[0.05] p-2"
+        >
+          <input type="hidden" name="ws" value={workspaceId} />
+          <input type="hidden" name="action" value="approve" />
+          {returnTo && <input type="hidden" name="return_to" value={returnTo} />}
+          <input
+            type="text"
+            name="confirm"
+            required
+            autoComplete="off"
+            pattern="approve"
+            placeholder='type "approve"'
+            className="w-32 rounded-md border border-coral/40 bg-black/30 px-2 py-1 font-mono text-[11px] text-white placeholder:text-white/35 focus:border-coral/80 focus:outline-none"
+          />
+          <button
+            type="submit"
+            className="rounded-full border border-coral/60 bg-coral/15 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-coral hover:bg-coral/25"
+          >
+            Confirm approve
+          </button>
+          <p className="basis-full text-[10px] leading-snug text-white/45">
+            Marked destructive — this is the only surface that can approve
+            it. Agents and Telegram are refused by policy.
+          </p>
+        </form>
+        <div className="flex flex-wrap gap-2">
+          {vocab.secondary.map((spec) => (
+            <DispositionButton
+              key={spec.action}
+              workspaceId={workspaceId}
+              itemId={itemId}
+              spec={spec}
+              returnTo={returnTo}
+            />
+          ))}
+        </div>
       </div>
     );
   }
@@ -153,6 +211,7 @@ export function InboxDispositionPanel({
       <form action={disposeAction(itemId)} method="POST">
         <input type="hidden" name="ws" value={workspaceId} />
         <input type="hidden" name="action" value={vocab.primary.action} />
+        {returnTo && <input type="hidden" name="return_to" value={returnTo} />}
         <button type="submit" className={PRIMARY_CLASS}>
           {vocab.primary.label}
         </button>
@@ -163,6 +222,7 @@ export function InboxDispositionPanel({
           workspaceId={workspaceId}
           itemId={itemId}
           spec={spec}
+          returnTo={returnTo}
         />
       ))}
     </div>
@@ -173,15 +233,18 @@ function DispositionButton({
   workspaceId,
   itemId,
   spec,
+  returnTo,
 }: {
   workspaceId: string;
   itemId: string;
   spec: ButtonSpec;
+  returnTo?: string;
 }) {
   return (
     <form action={disposeAction(itemId)} method="POST">
       <input type="hidden" name="ws" value={workspaceId} />
       <input type="hidden" name="action" value={spec.action} />
+      {returnTo && <input type="hidden" name="return_to" value={returnTo} />}
       <button
         type="submit"
         className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-semibold transition ${secondaryTone(spec.style)}`}

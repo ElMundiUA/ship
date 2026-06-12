@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 
+import { findInboxItemIdByTitle } from "../lib/inbox-helpers";
 import {
   hasShipApiCredentials,
   shipApiPost,
@@ -40,16 +41,19 @@ test.describe("journey: improvement accept (wired, serial)", () => {
     );
     expect(create.ok(), `create improvement ${create.status()}`).toBeTruthy();
 
-    await page.goto("/inbox?type=improvement");
-    await expect(
-      page.getByRole("heading", { name: "Inbox" }),
-    ).toBeVisible({ timeout: 30_000 });
-    const row = page.locator("li").filter({ hasText: marker });
-    await expect(row).toBeVisible({ timeout: 15_000 });
+    // MCP-first rework: the mailbox is gone — accept on the item's
+    // /approve/{id} page instead.
+    const itemId = await findInboxItemIdByTitle(request, ws, marker, {
+      match: "contains",
+    });
+    await page.goto(`/approve/${encodeURIComponent(itemId)}`);
+    await expect(page.getByTestId("approve-card")).toBeVisible({
+      timeout: 30_000,
+    });
+    await page.getByRole("button", { name: "Accept" }).click();
 
-    await row.getByRole("button", { name: "Accept" }).click();
-
-    await expect(page).toHaveURL(/decided_accepted/, { timeout: 20_000 });
-    await expect(page.getByText("Marked as accepted.")).toBeVisible();
+    await expect(page.getByTestId("approve-resolved")).toBeVisible({
+      timeout: 20_000,
+    });
   });
 });
