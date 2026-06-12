@@ -61,3 +61,7 @@ documentation/internal/*
 # Ops runbooks (e.g. file-overlap detection ELS-154) are shared with implementers.
 !documentation/internal/operations/
 !documentation/internal/operations/**
+# Architecture ledgers + the headless-pivot plan (ELS-217/ELS-220) are
+# reviewer-verifiable artifacts the strangler phases gate on — tracked.
+!documentation/internal/architecture/
+!documentation/internal/architecture/**

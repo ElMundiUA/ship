@@ -129,6 +129,12 @@ try {
     process.exit(0);
   }
 
+  if (cmd === "local") {
+    const { localCommand } = await import("../lib/commands/local.mjs");
+    await localCommand(ctx, rest);
+    process.exit(0);
+  }
+
   if (cmd === "preflight") {
     const { preflightCommand } = await import("../lib/commands/preflight.mjs");
     await preflightCommand(ctx, rest);

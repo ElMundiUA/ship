@@ -96,6 +96,10 @@ class ActivatedRepoOut(BaseModel):
     # so the client doesn't need a separate meta endpoint.
     installed_bundle_version: str | None = None
     current_bundle_version: str = _BUNDLE_VERSION
+    # Persisted deploy-planner preference (wizard sets it, deploy modal
+    # prefills + edits it). ``NULL`` → backend default at deploy time.
+    deploy_planner_provider: str | None = None
+    deploy_planner_model: str | None = None
 
 
 class RepoActivateIn(BaseModel):
@@ -187,6 +191,8 @@ def _row_to_out(row: WorkspaceRepo) -> ActivatedRepoOut:
         preset=row.preset,
         installed_bundle_version=row.installed_bundle_version,
         current_bundle_version=_BUNDLE_VERSION,
+        deploy_planner_provider=row.deploy_planner_provider,
+        deploy_planner_model=row.deploy_planner_model,
     )
 
 
@@ -1991,6 +1997,38 @@ async def disconnect_repo(
             ).scalars().all()
         )
 
+    # Orphan-billing guard: tear down live cloud deployments BEFORE the cascade
+    # drops deployment rows. This is billing-critical, so disconnect is blocked
+    # if provider teardown cannot be confirmed.
+    try:
+        from backend.app.services.deploy.teardown import teardown_repo_app
+
+        res = await teardown_repo_app(
+            session, workspace_id, repo_id, delete_rows=False
+        )
+        if res.failed_app_ids:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=(
+                    "Could not delete this repo's cloud app. "
+                    "Repo disconnect was stopped so billing handles are not lost."
+                ),
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.exception(
+            "repo %s disconnect: deploy teardown raised; blocking disconnect",
+            repo_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=(
+                "Could not confirm cloud teardown for this repo. "
+                "Repo disconnect was stopped so billing handles are not lost."
+            ),
+        ) from exc
+
     # Routine.repo_id is ON DELETE CASCADE, so deleting the WorkspaceRepo
     # row also drops every Routine bound to it, which cascades to
     # RoutineRun. No explicit per-routine delete loop needed.
@@ -3263,5 +3301,3 @@ async def propose_repo_config(
         pr_number=result.pr_number,
         branch=result.branch,
     )
-
-

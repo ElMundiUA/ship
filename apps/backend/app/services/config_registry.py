@@ -111,6 +111,85 @@ async def _write_default_agent_profile(
     ws.default_agent_profile = value
 
 
+_CONSOLE_SURFACES = ("full", "residual", "off")
+
+
+async def _read_console_surface(_s: AsyncSession, ws: Workspace) -> Any:
+    raw = (ws.settings or {}).get("console") or {}
+    value = raw.get("surface")
+    return value if value in _CONSOLE_SURFACES else "full"
+
+
+async def _write_console_surface(_s: AsyncSession, ws: Workspace, value: Any) -> None:
+    if value not in _CONSOLE_SURFACES:
+        raise ValueError(
+            f"console.surface must be one of {sorted(_CONSOLE_SURFACES)}"
+        )
+    settings = dict(ws.settings or {})
+    console = dict(settings.get("console") or {})
+    console["surface"] = str(value)
+    settings["console"] = console
+    # Reassign (not mutate) so SQLAlchemy's JSONB change detection fires.
+    ws.settings = settings
+
+
+async def _read_autonomy_profile(_s: AsyncSession, ws: Workspace) -> Any:
+    from backend.app.services.agent_provider_resolver import (
+        DEFAULT_AUTONOMY,
+        SUPPORTED_AUTONOMY_PROFILES,
+    )
+
+    value = ws.autonomy
+    return value if value in SUPPORTED_AUTONOMY_PROFILES else DEFAULT_AUTONOMY
+
+
+async def _write_autonomy_profile(_s: AsyncSession, ws: Workspace, value: Any) -> None:
+    from backend.app.services.agent_provider_resolver import (
+        SUPPORTED_AUTONOMY_PROFILES,
+    )
+
+    if value not in SUPPORTED_AUTONOMY_PROFILES:
+        raise ValueError(
+            "autonomy.profile must be one of "
+            f"{sorted(SUPPORTED_AUTONOMY_PROFILES)}"
+        )
+    ws.autonomy = str(value)
+
+
+async def _read_comment_inbound(_s: AsyncSession, ws: Workspace) -> Any:
+    raw = (ws.settings or {}).get("chat") or {}
+    return bool(raw.get("comment_inbound", False))
+
+
+async def _write_comment_inbound(_s: AsyncSession, ws: Workspace, value: Any) -> None:
+    if not isinstance(value, bool):
+        raise ValueError("chat.comment_inbound must be a boolean")
+    settings = dict(ws.settings or {})
+    chat = dict(settings.get("chat") or {})
+    chat["comment_inbound"] = value
+    settings["chat"] = chat
+    # Reassign (not mutate) so SQLAlchemy's JSONB change detection fires.
+    ws.settings = settings
+
+
+async def _read_local_executor_enabled(_s: AsyncSession, ws: Workspace) -> Any:
+    raw = (ws.settings or {}).get("local_executor") or {}
+    return bool(raw.get("enabled", False))
+
+
+async def _write_local_executor_enabled(
+    _s: AsyncSession, ws: Workspace, value: Any
+) -> None:
+    if not isinstance(value, bool):
+        raise ValueError("local_executor.enabled must be a boolean")
+    settings = dict(ws.settings or {})
+    local_executor = dict(settings.get("local_executor") or {})
+    local_executor["enabled"] = value
+    settings["local_executor"] = local_executor
+    # Reassign (not mutate) so SQLAlchemy's JSONB change detection fires.
+    ws.settings = settings
+
+
 _CATALOG_KEYS = ("global", "workspace", "project")
 
 
@@ -198,6 +277,87 @@ _SCOPE_LIST: tuple[ConfigScope, ...] = (
         read=_read_catalog_sources,
         write=_write_catalog_sources,
         audit_event="workspace.catalog_sources.set",
+    ),
+    ConfigScope(
+        slug="console.surface",
+        description=(
+            "How much of the web console this workspace renders: "
+            "``full`` (everything), ``residual`` (status + Inbox + "
+            "irreducible controls only), ``off`` (health page only — "
+            "the Inbox approval surface stays reachable). The headless "
+            "kill-switch for the Phase-4 console strangler."
+        ),
+        schema={
+            "type": "string",
+            "enum": list(_CONSOLE_SURFACES),
+            "description": (
+                "Console surface mode. Default is ``full``; flipping "
+                "is reversible at any time."
+            ),
+        },
+        read=_read_console_surface,
+        write=_write_console_surface,
+        audit_event="workspace.console_surface.set",
+    ),
+    ConfigScope(
+        slug="autonomy.profile",
+        description=(
+            "Thesis-7 autonomy dial: how much the agent may do on its "
+            "own (skip approvals, self-merge, self-pick work). One of "
+            "``high`` / ``balanced`` / ``conservative``. Never touches "
+            "the lease/cap/cascade control plane."
+        ),
+        schema={
+            "type": "string",
+            "enum": ["high", "balanced", "conservative"],
+            "description": (
+                "Agent action-rights profile. ``balanced`` is the "
+                "default; ``high`` is opt-in and requires a populated "
+                "knowledge surface to work well."
+            ),
+        },
+        read=_read_autonomy_profile,
+        write=_write_autonomy_profile,
+        audit_event="workspace.autonomy.set",
+    ),
+    ConfigScope(
+        slug="local_executor.enabled",
+        description=(
+            "Whether ``shipctl local`` (trigger-(a) scratch sessions: "
+            "no ticket, no lease, stop-before-push) may run for this "
+            "workspace. FOUNDER DECISION: default-OFF everywhere — "
+            "``autonomy.profile: high`` does NOT auto-enable it."
+        ),
+        schema={
+            "type": "boolean",
+            "description": (
+                "Opt-in flag for the local synchronous executor. "
+                "Independent of the autonomy dial by design."
+            ),
+        },
+        read=_read_local_executor_enabled,
+        write=_write_local_executor_enabled,
+        audit_event="workspace.local_executor_enabled.set",
+    ),
+    ConfigScope(
+        slug="chat.comment_inbound",
+        description=(
+            "Whether fresh operator comments on active tracker tickets "
+            "flow into the ticket's Navigator thread as conversational "
+            "context (thesis 4, ELS-251). Context only — comments NEVER "
+            "transition the FSM; the STATUS field stays the only "
+            "transition signal. Default-OFF, consistent with the "
+            "inbox-only launch egress."
+        ),
+        schema={
+            "type": "boolean",
+            "description": (
+                "Opt-in flag for Linear-comment → Navigator inbound."
+            ),
+        },
+        read=_read_comment_inbound,
+        write=_write_comment_inbound,
+        audit_event="workspace.chat_comment_inbound.set",
     ),
 )
 

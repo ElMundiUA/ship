@@ -257,6 +257,31 @@ class GitHubCodeHost(CodeHostGateway):
             page += 1
         return out
 
+    async def get_branch_commit(
+        self, ref: RepoRef, branch: str
+    ) -> dict[str, Any] | None:
+        """Latest commit on ``branch`` — {sha, message (1st line), author_name,
+        committed_at}. Best-effort: returns None on any error so a deploy is
+        never blocked by commit metadata."""
+        try:
+            response = await self._request(
+                "GET", f"/repos/{ref.owner}/{ref.repo}/commits/{branch}"
+            )
+        except Exception:  # noqa: BLE001
+            return None
+        if response.status_code >= 400:
+            return None
+        item = response.json() or {}
+        commit = item.get("commit") or {}
+        author = commit.get("author") if isinstance(commit.get("author"), dict) else {}
+        msg = (commit.get("message") or "").strip()
+        return {
+            "sha": item.get("sha"),
+            "message": msg.splitlines()[0] if msg else None,
+            "author_name": author.get("name"),
+            "committed_at": author.get("date"),
+        }
+
     async def list_pull_request_issue_comments(
         self, ref: PullRequestRef, *, limit: int = 50
     ) -> list[dict[str, Any]]:

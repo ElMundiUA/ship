@@ -58,7 +58,7 @@ async def test_get_agent_provider_returns_default_and_supported(
     body = resp.json()
     assert body["workspace_id"] == str(workspace.id)
     assert body["kind"] == "cursor"
-    assert body["supported"] == ["claude", "codex", "cursor"]
+    assert body["supported"] == ["claude", "codex", "cursor", "ship"]  # ship: ELS-241 self-spawn (dogfood-gated)
 
 
 @pytest.mark.asyncio

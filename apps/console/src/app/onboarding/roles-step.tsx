@@ -34,10 +34,10 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { Badge } from "@/components/ui";
-import type { TrackerKind } from "@/lib/api/client";
+import type { ApiAgentSecretStatus, TrackerKind } from "@/lib/api/client";
 
 const AGENT_PROFILES: { value: string; label: string; hint: string }[] = [
   {
@@ -69,6 +69,7 @@ const TRACKER_LABEL: Record<TrackerKind, string> = {
 
 export interface RolesStepInitial {
   workspaceId: string;
+  repos: { id: string; full_name: string; private: boolean }[];
   /** Integration kinds with a usable token. ``github`` derives from
    *  the App install rather than an Integration row; the wizard
    *  pages already normalize that. */
@@ -104,12 +105,45 @@ export function RolesStep({ initial }: { initial: RolesStepInitial }) {
   const [trackerError, setTrackerError] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState(false);
   const [continuing, setContinuing] = useState(false);
+  const [plannerRepoId, setPlannerRepoId] = useState(initial.repos[0]?.id ?? "");
+  const [plannerSecrets, setPlannerSecrets] = useState<ApiAgentSecretStatus[]>([]);
+  const [plannerDrafts, setPlannerDrafts] = useState<Record<string, string>>({});
+  const [plannerLoading, setPlannerLoading] = useState(false);
+  const [plannerSaving, setPlannerSaving] = useState(false);
+  const [plannerError, setPlannerError] = useState<string | null>(null);
   const router = useRouter();
 
   const trackerOptions = initial.trackerCandidates;
   const trackerReady = tracker !== "";
   const agentReady = agent !== "";
   const allReady = trackerReady && agentReady;
+
+  useEffect(() => {
+    if (!plannerRepoId) return;
+    let alive = true;
+    setPlannerLoading(true);
+    setPlannerError(null);
+    fetch(
+      `/api/onboard/agent-secrets?workspace_id=${encodeURIComponent(
+        initial.workspaceId,
+      )}&repo_id=${encodeURIComponent(
+        plannerRepoId,
+      )}&slugs=llm-openai,llm-anthropic,llm-gemini,llm-mistral`,
+    )
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((body: { check: { agents: ApiAgentSecretStatus[] } }) => {
+        if (alive) setPlannerSecrets(body.check.agents);
+      })
+      .catch((err) => {
+        if (alive) setPlannerError(err instanceof Error ? err.message : "load failed");
+      })
+      .finally(() => {
+        if (alive) setPlannerLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [initial.workspaceId, plannerRepoId]);
 
   return (
     <section data-testid="onboarding-step-roles">
@@ -347,6 +381,158 @@ export function RolesStep({ initial }: { initial: RolesStepInitial }) {
             <strong className="text-white">GitHub Actions</strong> —
             tied to the App you installed in step 1. No action needed.
           </p>
+        </RoleRow>
+
+        <RoleRow
+          label="LLM API keys"
+          description="Optional provider keys for Ship workflows in this repo. Today they power deployment planning; later they can power generated app AI features."
+          ready={plannerSecrets.some((s) => s.present)}
+          hideBadge
+        >
+          {initial.repos.length === 0 ? (
+            <p className="text-[11px] text-white/55">
+              Pick a repo first; planner keys are stored as per-repo GitHub
+              Actions secrets.
+            </p>
+          ) : (
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center gap-3">
+                <select
+                  value={plannerRepoId}
+                  onChange={(e) => {
+                    setPlannerRepoId(e.target.value);
+                    setPlannerDrafts({});
+                  }}
+                  className="rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-2 text-xs text-white"
+                >
+                  {initial.repos.map((repo) => (
+                    <option key={repo.id} value={repo.id}>
+                      {repo.full_name}
+                      {repo.private ? " (private)" : ""}
+                    </option>
+                  ))}
+                </select>
+                {plannerLoading && (
+                  <span className="text-[11px] text-white/55">Checking…</span>
+                )}
+              </div>
+
+              {plannerSecrets.map((secret) => (
+                <div
+                  key={secret.slug}
+                  className="rounded-xl border border-white/[0.08] bg-white/[0.02] p-3"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-semibold text-white">
+                          {secret.label}
+                        </span>
+                        <span
+                          className={
+                            secret.present
+                              ? "rounded bg-aqua/15 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-aqua"
+                              : "rounded bg-amber-500/15 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-amber-200"
+                          }
+                        >
+                          {secret.present ? "present" : "optional"}
+                        </span>
+                      </div>
+                      {secret.secret_name && (
+                        <code className="mt-1 inline-block rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-white/60">
+                          secrets.{secret.secret_name}
+                        </code>
+                      )}
+                    </div>
+                    {secret.vendor_url && (
+                      <a
+                        href={secret.vendor_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[11px] text-aqua/80 underline-offset-2 hover:text-aqua hover:underline"
+                      >
+                        Get key →
+                      </a>
+                    )}
+                  </div>
+                  {!secret.present && (
+                    <input
+                      type="password"
+                      placeholder={`${secret.secret_name} — paste plaintext key`}
+                      value={plannerDrafts[secret.slug] ?? ""}
+                      onChange={(e) =>
+                        setPlannerDrafts((d) => ({
+                          ...d,
+                          [secret.slug]: e.target.value,
+                        }))
+                      }
+                      className="mt-2 w-full rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-1.5 font-mono text-xs text-white placeholder-white/35"
+                    />
+                  )}
+                </div>
+              ))}
+
+              <div className="flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  disabled={
+                    plannerSaving ||
+                    !Object.values(plannerDrafts).some((v) => v.trim().length > 0)
+                  }
+                  onClick={async () => {
+                    setPlannerSaving(true);
+                    setPlannerError(null);
+                    const secrets = Object.entries(plannerDrafts)
+                      .filter(([, plaintext]) => plaintext.trim().length > 0)
+                      .map(([slug, plaintext]) => ({
+                        slug,
+                        plaintext: plaintext.trim(),
+                      }));
+                    try {
+                      const resp = await fetch("/api/onboard/agent-secrets", {
+                        method: "POST",
+                        headers: { "content-type": "application/json" },
+                        body: JSON.stringify({
+                          workspace_id: initial.workspaceId,
+                          repo_id: plannerRepoId,
+                          secrets,
+                        }),
+                      });
+                      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                      setPlannerDrafts({});
+                      const checkResp = await fetch(
+                        `/api/onboard/agent-secrets?workspace_id=${encodeURIComponent(
+                          initial.workspaceId,
+                        )}&repo_id=${encodeURIComponent(
+                          plannerRepoId,
+                        )}&slugs=llm-openai,llm-anthropic,llm-gemini,llm-mistral`,
+                      );
+                      if (checkResp.ok) {
+                        const body = (await checkResp.json()) as {
+                          check: { agents: ApiAgentSecretStatus[] };
+                        };
+                        setPlannerSecrets(body.check.agents);
+                      }
+                    } catch (err) {
+                      setPlannerError(
+                        err instanceof Error ? err.message : "save failed",
+                      );
+                    } finally {
+                      setPlannerSaving(false);
+                    }
+                  }}
+                  className="rounded-full border border-aqua/40 bg-aqua/[0.08] px-3 py-1 text-[11px] font-semibold text-aqua transition hover:bg-aqua/[0.16] disabled:opacity-40"
+                >
+                  {plannerSaving ? "Saving…" : "Save planner keys"}
+                </button>
+                {plannerError && (
+                  <span className="text-[11px] text-coral">
+                    Planner keys error: {plannerError}
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
         </RoleRow>
         </ul>
       </div>

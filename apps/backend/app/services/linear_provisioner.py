@@ -34,6 +34,7 @@ from typing import Any
 
 from backend.app.core.config import Settings
 from backend.app.integrations.linear.tracker_adapter import LinearTracker
+from backend.app.services.tracker_fsm import FSM_TO_NATIVE_STATE
 from backend.app.services.canonical_projection import (
     CanonicalState,
     default_canonical_to_native,
@@ -169,47 +170,11 @@ def previous_stages(stage: str) -> list[str]:
 # placement: stages mapped to ``In Progress`` get tickets in that
 # Linear state; stages mapped to ``Todo`` keep tickets in Todo with
 # the label carrying the SDLC stage.
-FSM_TO_LINEAR_STATE: dict[str, str] = {
-    # E16/ELS-123 bundle stages.
-    "planning": "Todo",
-    "dev_implementation": "In Progress",
-    "devops_implementation": "In Progress",
-    "validation": "In Progress",
-    # ``code_review`` and ``auto_merge`` both run while the ticket
-    # sits in Linear's ``Review`` column. Reviewer leaves feedback
-    # (or rubber-stamps), auto-merger then runs its 7-signal gate
-    # and squashes via the GitHub API. ``merged`` (the terminal
-    # value of auto-merger's ``stage_next``) flips the ticket to
-    # Linear ``Done``.
-    "code_review": "Review",
-    "auto_merge": "Review",
-    "merged": "Done",
-    # Self-heal runs out-of-band against any open ticket; no specific
-    # Linear state.
-    "self_heal": "Todo",
-    # Decomposition bundle lives on the planning anchor. The anchor
-    # sits in ``In Progress`` while the bundle runs and ``Done`` once
-    # ``planning_done`` lands. The project body carries the artefacts
-    # (WBS / Architecture / Test architecture / Tasks); the finish
-    # hook flips the dashboard row Drafts → Parked when
-    # ``planning_done`` arrives.
-    "decomposition": "In Progress",
-    "planning_done": "Done",
-    # Legacy pre-E16 stage names — kept so an in-flight ticket carrying
-    # ``stage:task_intake`` still maps to a Linear state. ELS-124
-    # cutover strips them from the map.
-    "task_intake": "Todo",
-    "ba_requirements": "Todo",
-    "tech_arch_plan": "Todo",
-    "qa_arch_plan": "Todo",
-    "qa_manual": "In Progress",
-    "qa_automation": "In Progress",
-    "pr_review": "Review",
-    "wbs": "In Progress",
-    "architecture": "In Progress",
-    "test_architecture": "In Progress",
-    "tasks": "In Progress",
-}
+#
+# ELS-228: the authoritative table lives in tracker_fsm.FSM_TO_NATIVE_STATE
+# (the single egress-only source of truth); this alias keeps the
+# provisioner's public name stable for existing callers.
+FSM_TO_LINEAR_STATE: dict[str, str] = FSM_TO_NATIVE_STATE["linear"]
 
 
 # Linear workflow state types we expect to drive the SDLC. Used to
