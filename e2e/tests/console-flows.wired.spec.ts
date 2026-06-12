@@ -218,7 +218,10 @@ test.describe("console surfaces (wired, serial)", () => {
   test("14c — Settings → Advanced surfaces links the de-railed pages", async ({
     page,
   }) => {
-    await page.goto("/settings");
+    // Pin ?ws like tests 01/14 — a bare /settings on a multi-workspace
+    // account races the workspace-cookie resolution.
+    const ws = process.env.E2E_WORKSPACE_ID?.trim();
+    await page.goto(ws ? `/settings?ws=${encodeURIComponent(ws)}` : "/settings");
     const advanced = page.getByTestId("advanced-surfaces");
     await expect(advanced).toBeVisible({ timeout: 30_000 });
     await advanced.getByRole("link", { name: /Process editor/ }).click();
