@@ -16,10 +16,16 @@ Public surface (everything else is private to this module):
   (tests, manual reconciliation jobs). Most callers should use
   ``maybe_dispatch``.
 
-Lock key namespace is opaque to the schema. Today the only key shape
-is ``ticket:<ref>`` (per-ticket serialisation); future namespaces
-(``daily:<routine>``, ``project:<anchor>``) drop in without a
-migration.
+Lock key namespace is opaque to the schema. Key shapes in use:
+
+- ``ticket:<ref>``        — per-ticket SDLC serialisation (this module);
+- ``project:<anchor>``    — per-project WIP lock (this module);
+- ``<bundle>:scheduled``  — workspace bundles (daily-digest /
+  weekly-audit / self-heal, ``maybe_dispatch_workspace_bundle``);
+- ``workflow:<run>:<step>`` — thesis-8 workflow leaves
+  (:mod:`backend.app.services.workflow.gate`) — counted on the
+  ``workflow:`` prefix (separate cap pool from ``ticket:``), swept by
+  the same TTL sweeper as everything else.
 """
 
 from __future__ import annotations
