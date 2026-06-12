@@ -2,7 +2,14 @@ import { describe, expect, it } from "vitest";
 
 import type { ApiProcessSchedule, ApiProcessScheduleSlot } from "@/lib/api/client";
 
-import { DEFAULT_TIMES, knownTimes } from "./flow-schedule-times";
+import {
+  DEFAULT_TIMES,
+  TIME_WINDOW_HOUR_END,
+  TIME_WINDOW_HOUR_START,
+  formatHourTime,
+  knownTimes,
+  nextAvailableTime,
+} from "./flow-schedule-times";
 
 function scheduleWithSlots(slots: ApiProcessScheduleSlot[]): ApiProcessSchedule {
   return { time_zone: "UTC", slots };
@@ -52,5 +59,27 @@ describe("knownTimes", () => {
 
   it("TC-6: returns defaults when the last specialist slot is removed", () => {
     expect(knownTimes(scheduleWithSlots([]))).toEqual(DEFAULT_TIMES);
+  });
+});
+
+describe("nextAvailableTime", () => {
+  it("returns the first unused whole-hour slot when defaults already fill the grid", () => {
+    expect(nextAvailableTime([...DEFAULT_TIMES])).toBe("08:00");
+  });
+
+  it("skips occupied hours inside the allowed range", () => {
+    expect(nextAvailableTime(["08:00", "09:00", "13:00", "17:00"])).toBe("10:00");
+  });
+
+  it("returns null when every hour in the range is already shown", () => {
+    const allHours = Array.from(
+      { length: TIME_WINDOW_HOUR_END - TIME_WINDOW_HOUR_START + 1 },
+      (_, index) => formatHourTime(TIME_WINDOW_HOUR_START + index),
+    );
+    expect(nextAvailableTime(allHours)).toBeNull();
+  });
+
+  it("still finds a slot when routine projection seeds an early hour", () => {
+    expect(nextAvailableTime([...DEFAULT_TIMES, "06:00"])).toBe("08:00");
   });
 });

@@ -19,7 +19,11 @@ import { classifyCron, formatNextRun } from "@/lib/cron-next";
 import { processConfigFromApiProcess } from "./process-config";
 import { ProcessConfigProposalFields } from "./process-config-proposal-fields";
 import { ProcessReviewSummary, processChangeSummary } from "./process-review-summary";
-import { DEFAULT_TIMES, knownTimes } from "./flow-schedule-times";
+import {
+  TIME_WINDOW_EXHAUSTED_TOOLTIP,
+  knownTimes,
+  nextAvailableTime,
+} from "./flow-schedule-times";
 import {
   BUILTIN_ROUTINE_CATALOG,
   HIDDEN_ROUTINE_IDS,
@@ -127,6 +131,7 @@ export function FlowSchedulePanel({
     () => knownTimes(schedule, [...extraTimes, ...routineTimeSeeds]),
     [schedule, extraTimes, routineTimeSeeds],
   );
+  const nextTimeRow = useMemo(() => nextAvailableTime(timeRows), [timeRows]);
   const assignments = useMemo(() => assignmentMap(schedule), [schedule]);
   const assignedSpecialistIds = useMemo(
     () => new Set(schedule.slots.flatMap((slot) => slot.specialist_ids)),
@@ -211,9 +216,8 @@ export function FlowSchedulePanel({
   }
 
   function addTimeRow() {
-    const nextTime = nextAvailableTime(timeRows);
-    if (!nextTime) return;
-    setExtraTimes((current) => [...current, nextTime].sort());
+    if (!nextTimeRow) return;
+    setExtraTimes((current) => [...current, nextTimeRow].sort());
   }
 
   return (
@@ -334,7 +338,9 @@ export function FlowSchedulePanel({
                 <button
                   type="button"
                   onClick={addTimeRow}
-                  className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[11px] font-bold text-white/60 transition hover:border-aqua/25 hover:text-aqua"
+                  disabled={!nextTimeRow}
+                  title={nextTimeRow ? undefined : TIME_WINDOW_EXHAUSTED_TOOLTIP}
+                  className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[11px] font-bold text-white/60 transition hover:border-aqua/25 hover:text-aqua disabled:cursor-not-allowed disabled:border-white/5 disabled:text-white/25 disabled:hover:border-white/5 disabled:hover:text-white/25"
                 >
                   + Time window
                 </button>
@@ -555,13 +561,6 @@ function duplicateWarnings(slot: ApiProcessScheduleSlot): string[] {
   return duplicates.length
     ? [`Slot "${slot.label ?? slot.id}" contains duplicate specialists.`]
     : [];
-}
-
-function nextAvailableTime(existing: string[]) {
-  for (const time of DEFAULT_TIMES) {
-    if (!existing.includes(time)) return time;
-  }
-  return null;
 }
 
 function RoutinesSummary({
