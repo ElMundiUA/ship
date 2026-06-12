@@ -47,7 +47,10 @@ test.describe("console desktop nav regression (wired)", () => {
   });
 
   test("sticky sidebar visible without mobile menu button", async ({ page }) => {
-    await page.goto("/");
+    // Pin ?ws — bare "/" lands on the entry picker for multi-workspace
+    // accounts, which renders no sidebar at all.
+    const ws = process.env.E2E_WORKSPACE_ID?.trim();
+    await page.goto(ws ? `/?ws=${encodeURIComponent(ws)}` : "/");
     await expect(
       page.getByRole("button", { name: "Open navigation menu" }),
     ).toBeHidden();
