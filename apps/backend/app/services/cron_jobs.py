@@ -608,6 +608,13 @@ def register_all() -> None:
         cron_expr=_ROUTINE_SPECS["techdebt"].cron_expr,
         job_id="scheduled_routine_techdebt",
     )
+    # W8.5 (ELS-261) — nightly codebase-audit workflow, 03:30 UTC
+    # weekdays (off the routine crons' slots; per-workspace opt-in).
+    register_cron(
+        fn=_workflow_nightly_tick,
+        cron_expr="30 3 * * 1-5",
+        job_id="workflow_nightly",
+    )
     # E16/ELS-124 retired the Ship-side trigger-workflow scheduler.
     # The tracker poller + dispatcher (``apps/backend/app/services/
     # tracker_poller.py`` + ``dispatcher.py``) now drive every agent
@@ -813,6 +820,74 @@ async def _scheduled_routine_techdebt_tick() -> None:
     )
 
     await run_routine_for_all_workspaces("techdebt")
+
+
+@cron_with_lock(lock=CronLockId.WORKFLOW_NIGHTLY, name="workflow_nightly")
+async def _workflow_nightly_tick() -> None:
+    """Trigger-(c) for the thesis-8 workflow primitive (ELS-261).
+
+    Enqueues the nightly ``codebase-audit`` workflow per OPT-IN
+    workspace (``settings.workflows.nightly`` — fail-closed: missing/
+    false/disabled means skip). Every spawn the runtime makes goes
+    through the WorkflowDispatchGate on the ``workflow:`` prefix —
+    its own accounting pool, so a fleet of nightly audits can never
+    starve SDLC ticket dispatch (mirrors WORKSPACE_BUNDLE_CAP's
+    separation).
+
+    Shadow mode mirrors ``maybe_dispatch``: with
+    ``SHIP_TRACKER_POLL_FIRE=false`` we record a
+    ``workflow.would_have_run`` audit row and spawn nothing.
+    """
+    from backend.app.core.config import get_settings as _gs
+    from backend.app.db.models.tenancy import AuditLog as _AuditLog
+    from backend.app.db.models.tenancy import Workspace as _Workspace
+    from backend.app.services.workflow.registry import resolve_spec
+    from backend.app.services.workflow.runtime import run_workflow
+
+    settings = _gs()
+    spec = resolve_spec("codebase-audit")
+    if spec is None:
+        log.warning("workflow_nightly: codebase-audit spec missing; skip")
+        return
+
+    sm = get_sessionmaker()
+    workspace_ids = await _all_workspace_ids()
+    for ws_id in workspace_ids:
+        try:
+            async with sm() as session:
+                ws = await session.get(_Workspace, ws_id)
+                if ws is None:
+                    continue
+                enabled = bool(
+                    ((ws.settings or {}).get("workflows") or {}).get(
+                        "nightly", False
+                    )
+                )
+                if not enabled:
+                    continue  # fail-closed: opt-in only
+                if not settings.tracker_poll_fire:
+                    session.add(
+                        _AuditLog(
+                            workspace_id=ws_id,
+                            action="workflow.would_have_run",
+                            target_kind="workflow_run",
+                            target_id="codebase-audit",
+                            payload={"trigger_kind": "cron", "shadow": True},
+                        )
+                    )
+                    await session.commit()
+                    continue
+                await run_workflow(
+                    session,
+                    workspace_id=ws_id,
+                    spec=spec,
+                    inputs={"focus": "nightly"},
+                    trigger_kind="cron",
+                    triggered_by=f"cron:{int(CronLockId.WORKFLOW_NIGHTLY)}",
+                )
+                await session.commit()
+        except Exception:  # noqa: BLE001 — one workspace never blocks the tick
+            log.exception("workflow_nightly: workspace %s failed", ws_id)
 
 
 @cron_with_lock(lock=CronLockId.STALL_NOTIFY, name="stall_notify")

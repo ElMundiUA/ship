@@ -16,10 +16,16 @@ Public surface (everything else is private to this module):
   (tests, manual reconciliation jobs). Most callers should use
   ``maybe_dispatch``.
 
-Lock key namespace is opaque to the schema. Today the only key shape
-is ``ticket:<ref>`` (per-ticket serialisation); future namespaces
-(``daily:<routine>``, ``project:<anchor>``) drop in without a
-migration.
+Lock key namespace is opaque to the schema. Key shapes in use:
+
+- ``ticket:<ref>``        — per-ticket SDLC serialisation (this module);
+- ``project:<anchor>``    — per-project WIP lock (this module);
+- ``<bundle>:scheduled``  — workspace bundles (daily-digest /
+  weekly-audit / self-heal, ``maybe_dispatch_workspace_bundle``);
+- ``workflow:<run>:<step>`` — thesis-8 workflow leaves
+  (:mod:`backend.app.services.workflow.gate`) — counted on the
+  ``workflow:`` prefix (separate cap pool from ``ticket:``), swept by
+  the same TTL sweeper as everything else.
 """
 
 from __future__ import annotations
@@ -772,6 +778,81 @@ async def _file_no_target_repo_letter(
 # ---------------------------------------------------------------------------
 
 
+async def _maybe_fire_stage_workflow(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    fsm_stage: str,
+    ticket_ref: str,
+    settings: Settings,
+) -> None:
+    """W8.5 trigger (b) — fire a workflow configured for this FSM
+    stage (``workspace.settings.workflows.stage_triggers``, e.g.
+    ``{"code_review": "pr-review"}``). Fail-closed: no config, no
+    fire. Dedup: skip when a run for the same (spec, ticket) is
+    already queued/running. Shadow mode records
+    ``workflow.would_have_run`` without spawning, mirroring the
+    dispatch shadow path."""
+    ws = await session.get(Workspace, workspace_id)
+    if ws is None:
+        return
+    triggers = ((ws.settings or {}).get("workflows") or {}).get(
+        "stage_triggers"
+    ) or {}
+    spec_name = triggers.get(fsm_stage)
+    if not spec_name:
+        return
+
+    from backend.app.db.models.workflow import AgentWorkflowRun
+    from backend.app.services.workflow.registry import resolve_spec
+    from backend.app.services.workflow.runtime import run_workflow
+
+    spec = resolve_spec(str(spec_name))
+    if spec is None:
+        log.warning(
+            "stage workflow trigger: unknown spec '%s' ws=%s stage=%s",
+            spec_name, workspace_id, fsm_stage,
+        )
+        return
+    triggered_by = f"ticket:{ticket_ref}"
+    existing = (
+        await session.execute(
+            select(AgentWorkflowRun.id).where(
+                AgentWorkflowRun.workspace_id == workspace_id,
+                AgentWorkflowRun.spec_name == spec.name,
+                AgentWorkflowRun.triggered_by == triggered_by,
+                AgentWorkflowRun.status.in_(("queued", "running")),
+            ).limit(1)
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return
+    if not settings.tracker_poll_fire:
+        session.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                action="workflow.would_have_run",
+                target_kind="workflow_run",
+                target_id=spec.name,
+                payload={
+                    "trigger_kind": "gate",
+                    "fsm_stage": fsm_stage,
+                    "ticket_ref": ticket_ref,
+                    "shadow": True,
+                },
+            )
+        )
+        return
+    await run_workflow(
+        session,
+        workspace_id=workspace_id,
+        spec=spec,
+        inputs={"ticket_ref": ticket_ref, "pr_url": ""},
+        trigger_kind="gate",
+        triggered_by=triggered_by,
+    )
+
+
 async def maybe_dispatch(
     session: AsyncSession,
     *,
@@ -814,6 +895,27 @@ async def maybe_dispatch(
     # stage label we'd rather refuse fast than hold a lock for a
     # ticket nobody can work on.
     routine_id = _STAGE_TO_ROUTINE.get(fsm_stage or "") if fsm_stage else None
+
+    # W8.5 (ELS-261) trigger (b): a stage entry may ALSO fire a
+    # configured workflow (e.g. code_review → pr-review) — in
+    # addition to, never instead of, the normal single-routine
+    # dispatch. Best-effort: workflow problems never block ticket
+    # dispatch. The workflow's own spawns ride the gate (workflow:
+    # prefix cap + cascade), and shadow mode is honored inside.
+    if fsm_stage:
+        try:
+            await _maybe_fire_stage_workflow(
+                session,
+                workspace_id=workspace_id,
+                fsm_stage=fsm_stage,
+                ticket_ref=ticket_ref,
+                settings=settings,
+            )
+        except Exception:  # noqa: BLE001
+            log.exception(
+                "stage workflow trigger failed ws=%s stage=%s",
+                workspace_id, fsm_stage,
+            )
 
     # 1. Shadow mode — recorded, never fires. Includes the resolved
     # routine so shadow audit rows let us validate the routing logic
