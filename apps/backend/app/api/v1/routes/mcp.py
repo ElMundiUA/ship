@@ -324,7 +324,14 @@ async def _stakes_gate(
         return
     if arguments.get("action") != "dispose":
         return
-    raw_id = arguments.get("item_id") or arguments.get("id")
+    # ``inbox_item_id`` is the ToolSpec contract (what real MCP clients
+    # send — see _tool_inbox_dispose); the aliases are paranoia so a
+    # creative client can't sidestep the gate by renaming the key.
+    raw_id = (
+        arguments.get("inbox_item_id")
+        or arguments.get("item_id")
+        or arguments.get("id")
+    )
     if not raw_id:
         return  # the handler will reject the malformed call itself
     try:
