@@ -239,7 +239,7 @@ from backend.app.services.tracker_fsm import (
 #         into the single egress-only FSM_TO_NATIVE_STATE table. The rendered
 #         ``.ship/tracker-fsm.md`` output is unchanged — version bumped because
 #         the renderer source moved under the unified table.
-BUNDLE_VERSION: str = "0.41"
+BUNDLE_VERSION: str = "0.42"
 
 # First bundle whose ``ship-agent-run.yml`` declares the ``ship_run_id``
 # ``workflow_dispatch`` input. The E16 cron dispatcher must NOT send this

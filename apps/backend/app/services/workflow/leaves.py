@@ -15,6 +15,21 @@ hands the granted step to one of these executors. Two leaf species:
   (lean event-driven design: no in-process await; all state in
   ``agent_workflow_step_runs``).
 
+**Correlation contract (coding leaves, ELS-277):**
+
+1. The dispatch gate mints ``run_id`` when entering a coding leaf and
+   persists it on :class:`~backend.app.db.models.workflow.AgentWorkflowStepRun`
+   before ``workflow_dispatch`` fires.
+2. ``run_coding_leaf`` passes that value as the ``ship_run_id`` workflow
+   input (when the repo bundle supports it) and acquires a
+   ``<routine_id>:workflow-leaf`` lock so the workspace-bundle scheduler
+   cannot race the same ``routine_id`` with a freshly minted id.
+3. CI sets ``SHIP_RUN_ID`` from ``inputs.ship_run_id``; ``run.mjs`` uses
+   it verbatim for the finish sidecar and ``/agent-runs/finish`` POST.
+4. :func:`complete_coding_step` matches ``(run_id, status ∈
+   {dispatched, running})`` — exact equality, no fuzzy match — then
+   releases the ``workflow:*`` step lock and the ``workflow-leaf`` lock.
+
 Tests inject fake executors; production wiring uses these defaults.
 """
 
@@ -31,6 +46,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.config import Settings
+from backend.app.db.models.tenancy import AuditLog
 from backend.app.db.models.workflow import AgentWorkflowStepRun
 from backend.app.services.workflow.spec import StepSpec
 
@@ -188,8 +204,12 @@ async def run_coding_leaf(
     from backend.app.services.dispatcher import (
         WORKFLOW_FILE,
         _pick_dispatch_repo,
+        acquire_lock,
         dispatch_workflow,
+        release_lock,
+        workflow_leaf_lock_key,
     )
+    from backend.app.services.seed_bundle import bundle_supports_ship_run_id
 
     target = await _pick_dispatch_repo(session, workspace_id=workspace_id)
     if target is None:
@@ -203,20 +223,50 @@ async def run_coding_leaf(
         or (step.agent.role if step.agent else None)
         or "workflow-leaf"
     )
+    leaf_lock = workflow_leaf_lock_key(routine_id)
+    got_leaf_lock = await acquire_lock(
+        session, workspace_id=workspace_id, key=leaf_lock
+    )
+    if not got_leaf_lock:
+        raise RuntimeError(
+            f"coding leaf '{step.id}': routine {routine_id!r} already "
+            "in flight (workflow-leaf lock held)"
+        )
     dispatch_inputs: dict[str, str] = {
         "routine_id": routine_id,
         "ticket_ref": str(inputs.get("ticket_ref") or ""),
         "ship_run_id": run_id,
     }
-    async with httpx.AsyncClient(timeout=httpx.Timeout(15.0)) as client:
-        await dispatch_workflow(
-            repo,
-            install,
-            WORKFLOW_FILE,
-            inputs=dispatch_inputs,
-            settings=settings,
-            client=client,
+    if not bundle_supports_ship_run_id(repo.installed_bundle_version):
+        dispatch_inputs.pop("ship_run_id", None)
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(15.0)) as client:
+            await dispatch_workflow(
+                repo,
+                install,
+                WORKFLOW_FILE,
+                inputs=dispatch_inputs,
+                settings=settings,
+                client=client,
+            )
+    except Exception:
+        await release_lock(
+            session, workspace_id=workspace_id, key=leaf_lock
         )
+        raise
+    session.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            action="workflow.coding_leaf.dispatched",
+            target_kind="workflow_step",
+            target_id=run_id,
+            payload={
+                "routine_id": routine_id,
+                "step_id": step.id,
+                "workflow_leaf_lock": leaf_lock,
+            },
+        )
+    )
     return None
 
 
@@ -323,6 +373,26 @@ DEFAULT_EXECUTORS = LeafExecutors(
 )
 
 
+async def _routine_id_for_coding_leaf(
+    session: AsyncSession, *, run_id: str
+) -> str | None:
+    """Best-effort routine id from the dispatch audit row."""
+    row = (
+        await session.execute(
+            select(AuditLog)
+            .where(
+                AuditLog.action == "workflow.coding_leaf.dispatched",
+                AuditLog.target_id == run_id,
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if row is None or not row.payload:
+        return None
+    routine_id = row.payload.get("routine_id")
+    return str(routine_id) if routine_id else None
+
+
 async def complete_coding_step(
     session: AsyncSession,
     *,
@@ -334,6 +404,7 @@ async def complete_coding_step(
     """Webhook-side completion: correlate a finished CI agent run back
     to its workflow step by ``run_id``, persist the outcome, release
     the ``workflow:*`` lock. Returns True when a step matched."""
+    from backend.app.services.dispatcher import release_lock, workflow_leaf_lock_key
     from backend.app.services.workflow.gate import release_step_lock
 
     row = (
@@ -355,5 +426,42 @@ async def complete_coding_step(
         workflow_run_id=row.workflow_run_id,
         step_id=row.step_id,
     )
+    routine_id = await _routine_id_for_coding_leaf(session, run_id=run_id)
+    if routine_id:
+        await release_lock(
+            session,
+            workspace_id=workspace_id,
+            key=workflow_leaf_lock_key(routine_id),
+        )
     await session.flush()
     return True
+
+
+async def find_dispatched_coding_leaf_run_id(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    exclude_run_id: str,
+) -> str | None:
+    """Return a gate ``run_id`` for an in-flight coding leaf, if any."""
+    from backend.app.db.models.workflow import AgentWorkflowRun
+    from backend.app.services.workflow.spec import CODING_PROVIDERS
+
+    row = (
+        await session.execute(
+            select(AgentWorkflowStepRun.run_id)
+            .join(
+                AgentWorkflowRun,
+                AgentWorkflowStepRun.workflow_run_id == AgentWorkflowRun.id,
+            )
+            .where(
+                AgentWorkflowRun.workspace_id == workspace_id,
+                AgentWorkflowStepRun.status.in_(("dispatched", "running")),
+                AgentWorkflowStepRun.run_id.isnot(None),
+                AgentWorkflowStepRun.run_id != exclude_run_id,
+                AgentWorkflowStepRun.agent_provider.in_(CODING_PROVIDERS),
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return row
