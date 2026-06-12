@@ -13,14 +13,15 @@ const nextConfig: NextConfig = {
   // Pin tracing root so Next stops warning about the repo-root lockfile
   // shared with landing/ and the Python backend.
   outputFileTracingRoot: __dirname,
-  // The console talks to the Ship backend (FastAPI) via /api proxy in dev.
-  // Wire this up once auth/session lands. For now everything renders from
-  // in-memory mock data inside src/lib/mock/.
-  async rewrites() {
-    const backend = process.env.SHIP_API_URL;
-    if (!backend) return [];
-    return [{ source: "/api/:path*", destination: `${backend}/v1/:path*` }];
-  },
+  // NOTE: the pre-auth-era `/api/:path*` → `${SHIP_API_URL}/v1/:path*`
+  // rewrite was removed 2026-06-13. Every browser call goes through a
+  // real route handler now (`/api/<feature>` BFFs or the
+  // `/api/v1/[...path]` catch-all proxy, which attaches the session
+  // cookie). The rewrite was not just dead — in `next dev` afterFiles
+  // rewrites are evaluated before lazily-compiled dynamic app routes,
+  // so it shadowed every dynamic `/api` handler (inbox dispositions,
+  // the v1 catch-all) and sent their requests to the backend
+  // unauthenticated. Production builds were unaffected.
   // RFC-0010 URL migration (Plays/Inbox redesign — P1-05..P1-08, P2-17,
   // P2-18). Each entry maps a legacy URL to its new home. Order
   // matters: more-specific ``has`` matches MUST come before the
