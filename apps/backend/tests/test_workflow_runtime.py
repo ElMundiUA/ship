@@ -391,3 +391,79 @@ async def test_reconcile_advances_stale_queued_run(
     advanced = await runtime_mod.reconcile_stuck_runs()
     assert advanced == 1
     spy.assert_awaited_once_with(stale.id)
+
+
+@pytest.mark.asyncio
+async def test_fetch_leaf_routes_to_fetch_executor(
+    db_session, seed_workspace
+) -> None:
+    """A kind=fetch leaf runs the deterministic fetch executor (no
+    LLM), and its output threads into downstream steps."""
+    from backend.app.services.workflow.spec import load_spec as _load
+
+    _, _, workspace = seed_workspace
+    spec = _load(
+        """
+name: ctx
+steps:
+  - id: diff
+    kind: pipeline
+    agent: {kind: fetch}
+    inputs: {url: "{{ inputs.pr_url }}"}
+  - id: review
+    kind: pipeline
+    needs: [diff]
+    agent: {kind: reasoning}
+    inputs: {diff: "{{ steps.diff.output.content }}"}
+"""
+    )
+    fetched: dict = {}
+    reviewed: dict = {}
+
+    async def fetch(_s, _st, _ws, step, inputs, run_id, **_kw):
+        fetched.update(inputs)
+        return {"content": "diff --git a/x b/x", "url": inputs["url"], "truncated": False}
+
+    async def reasoning(_s, _st, _ws, step, inputs, run_id, **_kw):
+        reviewed.update(inputs)
+        return {"ok": True}
+
+    async def coding(*_a, **_kw):
+        raise AssertionError("no coding leaves here")
+
+    run = await run_workflow(
+        db_session,
+        workspace_id=workspace.id,
+        spec=spec,
+        inputs={"pr_url": "https://github.com/o/r/pull/9"},
+        trigger_kind="chat",
+        executors=LeafExecutors(
+            run_reasoning=reasoning, run_coding=coding, run_fetch=fetch
+        ),
+    )
+    assert run.status == "completed"
+    assert fetched["url"] == "https://github.com/o/r/pull/9"
+    assert reviewed["diff"] == "diff --git a/x b/x"
+
+
+def test_render_inputs_sections_long_text() -> None:
+    from backend.app.services.workflow.leaves import _render_inputs
+
+    diff = "x" * 5000
+    out = _render_inputs({"axis": "security", "diff": diff})
+    assert '"axis": "security"' in out
+    assert "## diff" in out
+    assert "x" * 100 in out
+    # Long value is fenced, not JSON-escaped into the inputs line.
+    assert '"diff"' not in out
+
+
+def test_render_inputs_caps_huge_values() -> None:
+    from backend.app.services.workflow.leaves import (
+        _PER_VALUE_CAP,
+        _render_inputs,
+    )
+
+    out = _render_inputs({"diff": "y" * (_PER_VALUE_CAP + 10_000)})
+    assert "[truncated]" in out
+    assert len(out) < _PER_VALUE_CAP + 1000

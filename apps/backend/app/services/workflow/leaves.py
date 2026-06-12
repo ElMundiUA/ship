@@ -47,6 +47,40 @@ LeafExecutor = Callable[..., Awaitable[dict[str, Any] | None]]
 class LeafExecutors:
     run_reasoning: LeafExecutor
     run_coding: LeafExecutor
+    # Deterministic context leaf (no LLM). Optional so test fakes that
+    # predate the fetch kind keep constructing.
+    run_fetch: LeafExecutor | None = None
+
+
+# Long text inputs (a PR diff, a file body) render as their own
+# fenced sections instead of being JSON-escaped into one line — and
+# the old flat 16k cap silently destroyed exactly the context the
+# fetch leaf exists to provide. Per-value cap keeps one huge diff
+# from evicting the other inputs.
+_LONG_VALUE_CHARS = 1000
+_PER_VALUE_CAP = 60_000
+_TOTAL_INPUT_CAP = 100_000
+
+
+def _render_inputs(inputs: dict[str, Any]) -> str:
+    short: dict[str, Any] = {}
+    sections: list[str] = []
+    for key, value in inputs.items():
+        if isinstance(value, str) and len(value) > _LONG_VALUE_CHARS:
+            body = value[:_PER_VALUE_CAP]
+            suffix = (
+                "\n… [truncated]" if len(value) > _PER_VALUE_CAP else ""
+            )
+            sections.append(f"## {key}\n\n```\n{body}{suffix}\n```")
+        else:
+            short[key] = value
+    parts = []
+    if short:
+        parts.append(
+            "Inputs:\n" + json.dumps(short, ensure_ascii=False, default=str)
+        )
+    parts.extend(sections)
+    return "\n\n".join(parts)[:_TOTAL_INPUT_CAP]
 
 
 _ROLE_FLAVOR = {
@@ -103,9 +137,7 @@ async def run_reasoning_leaf(
     )
     prompt = step.agent.prompt if step.agent and step.agent.prompt else ""
     user_message = (
-        (prompt + "\n\n" if prompt else "")
-        + "Inputs:\n"
-        + json.dumps(inputs, ensure_ascii=False, default=str)[:16000]
+        (prompt + "\n\n" if prompt else "") + _render_inputs(inputs)
     )
     # Reasoning leaves run tool-less by default: their value is
     # synthesis over the inputs already collected by prior steps.
@@ -188,9 +220,106 @@ async def run_coding_leaf(
     return None
 
 
+_GH_PR_RE = None  # compiled lazily below
+
+_FETCH_MAX_BYTES = 400_000
+
+
+async def run_fetch_leaf(
+    session: AsyncSession,
+    settings: Settings,
+    workspace_id: uuid.UUID,
+    step: StepSpec,
+    inputs: dict[str, Any],
+    run_id: str,
+    *,
+    user_id: uuid.UUID | None = None,
+) -> dict[str, Any] | None:
+    """Deterministic context leaf: GET ``inputs.url``, return the body.
+
+    GitHub PR URLs (``github.com/<owner>/<repo>/pull/<n>``) are
+    resolved to the API endpoint with ``Accept: …diff`` and, when the
+    workspace has a GitHub App installation, authenticated with its
+    installation token — so private-repo diffs work and public ones
+    don't burn the anonymous rate limit. Output:
+    ``{content, url, status, truncated}``.
+    """
+    import re as _re
+
+    import httpx
+
+    global _GH_PR_RE
+    if _GH_PR_RE is None:
+        _GH_PR_RE = _re.compile(
+            r"https?://github\.com/([^/]+)/([^/]+)/pull/(\d+)"
+        )
+
+    url = str(inputs.get("url") or "").strip()
+    if not url.startswith(("http://", "https://")):
+        raise RuntimeError(f"fetch leaf '{step.id}': invalid url {url!r}")
+
+    headers: dict[str, str] = {"User-Agent": "ship-workflow-fetch"}
+    pr_match = _GH_PR_RE.match(url)
+    if pr_match:
+        owner, repo, number = pr_match.groups()
+        url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{number}"
+        headers["Accept"] = "application/vnd.github.diff"
+        headers["X-GitHub-Api-Version"] = "2022-11-28"
+        token = await _workspace_github_token(session, workspace_id, settings)
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(30.0), follow_redirects=True
+    ) as client:
+        res = await client.get(url, headers=headers)
+    if res.status_code >= 400:
+        raise RuntimeError(
+            f"fetch leaf '{step.id}': GET {url} → {res.status_code}"
+        )
+    body = res.text or ""
+    truncated = len(body) > _FETCH_MAX_BYTES
+    return {
+        "content": body[:_FETCH_MAX_BYTES],
+        "url": url,
+        "status": res.status_code,
+        "truncated": truncated,
+    }
+
+
+async def _workspace_github_token(
+    session: AsyncSession, workspace_id: uuid.UUID, settings: Settings
+) -> str | None:
+    """Best-effort installation token for the workspace's GitHub App
+    install — ``None`` (anonymous fetch) on any miss."""
+    try:
+        from backend.app.db.models.integrations import GitHubInstallation
+        from backend.app.integrations.github.app_auth import (
+            fetch_installation_token,
+        )
+
+        install_id = (
+            await session.execute(
+                select(GitHubInstallation.installation_id)
+                .where(GitHubInstallation.workspace_id == workspace_id)
+                .order_by(GitHubInstallation.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if install_id is None:
+            return None
+        return await fetch_installation_token(install_id, settings=settings)
+    except Exception:  # noqa: BLE001 — anonymous fetch is the fallback
+        logger.warning(
+            "fetch leaf: installation token unavailable ws=%s", workspace_id
+        )
+        return None
+
+
 DEFAULT_EXECUTORS = LeafExecutors(
     run_reasoning=run_reasoning_leaf,
     run_coding=run_coding_leaf,
+    run_fetch=run_fetch_leaf,
 )
 
 

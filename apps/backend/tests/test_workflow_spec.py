@@ -195,3 +195,31 @@ def test_validate_output_subset() -> None:
         validate_output(
             {"findings": [{"severity": "critical"}]}, schema, step_id="synth"
         )
+
+
+def test_fetch_leaf_accepted_and_normalized() -> None:
+    spec = load_spec(
+        """
+name: ctx
+steps:
+  - id: diff
+    kind: pipeline
+    agent: {kind: fetch}
+    inputs: {url: "{{ inputs.pr_url }}"}
+"""
+    )
+    assert spec.steps[0].agent.kind == "fetch"
+    assert spec.steps[0].agent.provider == "fetch"
+
+
+def test_fetch_leaf_rejects_foreign_provider() -> None:
+    with pytest.raises(WorkflowSpecError, match="fetch leaves"):
+        load_spec(
+            """
+name: ctx
+steps:
+  - id: diff
+    kind: pipeline
+    agent: {kind: fetch, provider: claude}
+"""
+        )
