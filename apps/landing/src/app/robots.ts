@@ -1,16 +1,15 @@
 import type { MetadataRoute } from "next";
-import { resolveMetadataBase } from "@/lib/site-url";
 
 /**
  * App Router robots.txt.
  *
- * Allow-all, with a single sitemap pointer. Same `BASE_URL` source as
- * `sitemap.ts` so a custom NEXT_PUBLIC_SITE_URL flows through to both.
+ * Internal workspace: stay crawlable (so Googlebot can read the sitewide
+ * `noindex` meta and drop already-indexed pages) but advertise no sitemap.
+ * The previous sitemap pointer resolved to http://localhost:3000 in prod
+ * (NEXT_PUBLIC_SITE_URL unset), which was broken anyway.
  */
 export default function robots(): MetadataRoute.Robots {
-  const base = resolveMetadataBase().toString().replace(/\/$/, "");
   return {
     rules: [{ userAgent: "*", allow: "/" }],
-    sitemap: `${base}/sitemap.xml`,
   };
 }

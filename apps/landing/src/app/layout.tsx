@@ -72,14 +72,15 @@ export const metadata: Metadata = {
   alternates: {
     canonical: "/",
   },
+  // Internal workspace — keep it out of search engines. noindex (not just a
+  // robots.txt Disallow) so already-indexed pages get dropped: the page stays
+  // crawlable, Googlebot reads the noindex meta, and removes it from the index.
   robots: {
-    index: true,
-    follow: true,
+    index: false,
+    follow: false,
     googleBot: {
-      index: true,
-      follow: true,
-      "max-image-preview": "large",
-      "max-snippet": -1,
+      index: false,
+      follow: false,
     },
   },
 };
