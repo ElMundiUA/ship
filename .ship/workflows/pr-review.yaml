@@ -1,0 +1,72 @@
+# Multi-axis PR review + adversarial verify (W8.8, dogfood).
+# Fired from the code_review FSM gate (trigger b) or from chat.
+name: pr-review
+version: "1"
+inputs:
+  pr_url: string
+max_fanout: 4
+max_depth: 2
+steps:
+  - id: fan
+    kind: parallel
+    steps:
+      - id: axis.correctness
+        kind: pipeline
+        agent: {kind: reasoning, role: reviewer}
+        inputs:
+          axis: correctness
+          pr_url: "{{ inputs.pr_url }}"
+      - id: axis.security
+        kind: pipeline
+        agent: {kind: reasoning, role: security-reviewer}
+        inputs:
+          axis: security
+          pr_url: "{{ inputs.pr_url }}"
+      - id: axis.simplification
+        kind: pipeline
+        agent: {kind: reasoning, role: reviewer}
+        inputs:
+          axis: simplification
+          pr_url: "{{ inputs.pr_url }}"
+      - id: axis.test-coverage
+        kind: pipeline
+        agent: {kind: reasoning, role: qa-architect}
+        inputs:
+          axis: test-coverage
+          pr_url: "{{ inputs.pr_url }}"
+  - id: join
+    kind: barrier
+    needs: [fan]
+  - id: synth
+    kind: synthesize
+    needs: [join]
+    inputs:
+      correctness: "{{ steps.axis.correctness.output }}"
+      security: "{{ steps.axis.security.output }}"
+      simplification: "{{ steps.axis.simplification.output }}"
+      test_coverage: "{{ steps.axis.test-coverage.output }}"
+    output_schema:
+      type: object
+      required: [findings]
+      properties:
+        findings:
+          type: array
+          items:
+            type: object
+            required: [severity, title]
+            properties:
+              severity: {type: string, enum: [low, medium, high]}
+              title: {type: string}
+              detail: {type: string}
+  - id: recheck
+    kind: verify
+    needs: [synth]
+    inputs:
+      top_finding: "{{ steps.synth.output.findings }}"
+      pr_url: "{{ inputs.pr_url }}"
+    output_schema:
+      type: object
+      required: [verdict]
+      properties:
+        verdict: {type: string, enum: [confirmed, refuted, uncertain]}
+        reason: {type: string}

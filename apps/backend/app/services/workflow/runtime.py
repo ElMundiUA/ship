@@ -391,6 +391,38 @@ async def advance_workflow(
     return run
 
 
+async def advance_run_by_id(
+    run_id: uuid.UUID, *, actor_user_id: uuid.UUID | None = None
+) -> None:
+    """Background entrypoint for queued runs (chat trigger) and the
+    reconcile tick: open a fresh session, load the run + its packaged
+    spec, advance. Best-effort — failures land on the run row, never
+    on the caller."""
+    from backend.app.db.session import get_sessionmaker
+    from backend.app.services.workflow.registry import resolve_spec
+
+    sessionmaker = get_sessionmaker()
+    try:
+        async with sessionmaker() as session:
+            run = await session.get(AgentWorkflowRun, run_id)
+            if run is None:
+                return
+            spec = resolve_spec(run.spec_name)
+            if spec is None:
+                run.status = "failed"
+                run.finished_at = datetime.now(timezone.utc)
+                await session.commit()
+                return
+            if run.status == "queued":
+                run.status = "running"
+            await advance_workflow(
+                session, run=run, spec=spec, actor_user_id=actor_user_id
+            )
+            await session.commit()
+    except Exception:  # noqa: BLE001 — background task must not crash the loop
+        logger.exception("workflow %s background advance failed", run_id)
+
+
 async def _run_leaf(
     session: AsyncSession,
     *,

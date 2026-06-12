@@ -171,6 +171,9 @@ class CronLockId(IntEnum):
     SCHEDULED_ROUTINE_DAILY = 1026
     SCHEDULED_ROUTINE_RETRO = 1027
     SCHEDULED_ROUTINE_TECHDEBT = 1028
+    # W8.5 (ELS-261) — nightly workflow trigger (c). Next free
+    # integer; never reuse a retired id.
+    WORKFLOW_NIGHTLY = 1029
 
 
 # ---------------------------------------------------------------------------
