@@ -259,6 +259,13 @@ async def _surface_uncaught_exceptions(request, exc):  # type: ignore[no-untyped
 
 app.include_router(v1_api_router)
 
+# Ship MCP Edge (thesis 9): the engine as an MCP server at /mcp —
+# bearer PAT auth, stateless streamable HTTP. Mounted at the app root
+# (not under /v1) so client configs read https://api.../mcp.
+from backend.app.api.v1.routes.mcp import router as mcp_router  # noqa: E402
+
+app.include_router(mcp_router)
+
 
 @app.get("/healthz", tags=["meta"], include_in_schema=False)
 async def healthz() -> dict[str, str]:
