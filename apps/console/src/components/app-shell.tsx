@@ -68,20 +68,21 @@ const SHIP_FEEDBACK_LABEL =
  * Retired mock/reporting pages and pre-redesign top-level paths are no
  * longer kept around as standalone routes.
  */
-function buildWorkspaceNav(inboxActionableCount?: number | null): NavGroup[] {
-  const inboxLabel =
-    inboxActionableCount === null || inboxActionableCount === undefined
-      ? "Inbox"
-      : `Inbox · ${inboxActionableCount}`;
+/**
+ * MCP-first rail (ELS-289): exactly two entries — Chat (the fallback
+ * Navigator client) and Settings. Inbox operation moved to the
+ * operator's agent over MCP / Telegram; the per-item ``/approve/{id}``
+ * confirm page is deep-link only and never appears in the rail.
+ * Process / Knowledge / Policies stay routable via Settings → General
+ * (Advanced surfaces).
+ */
+function buildWorkspaceNav(): NavGroup[] {
   return [
     {
       section: "Workspace",
       items: [
-        { href: "/", label: "Dashboard", icon: <DotIcon /> },
-        { href: "/inbox", label: inboxLabel, icon: <DotIcon /> },
-        { href: "/process", label: "Process", icon: <DotIcon /> },
-        { href: "/knowledge", label: "Knowledge", icon: <DotIcon /> },
-        { href: "/settings/policy", label: "Policies", icon: <DotIcon /> },
+        { href: "/chat", label: "Chat", icon: <DotIcon /> },
+        { href: "/settings", label: "Settings", icon: <DotIcon /> },
       ],
     },
   ];
@@ -113,22 +114,20 @@ function parseRepoSlug(pathname: string | null): string | null {
   return `${parts[0]}/${parts[1]}`;
 }
 
-// ELS-235: nav hrefs visible per console mode. The Inbox stays in
-// EVERY mode (approval surface must never be orphaned, thesis 4).
-const RESIDUAL_NAV_HREFS = new Set(["/", "/inbox", "/settings"]);
-const OFF_NAV_HREFS = new Set(["/", "/inbox"]);
+// ELS-235: nav hrefs visible per console mode. The /approve confirm
+// surface stays reachable in EVERY mode but is deep-link only — it
+// never renders in the rail.
+const RESIDUAL_NAV_HREFS = new Set(["/chat", "/settings"]);
+const OFF_NAV_HREFS = new Set<string>([]);
 
 function navFor(
   pathname: string | null,
   opts?: {
-    inboxActionableCount?: number | null;
     consoleMode?: "full" | "residual" | "off";
   },
 ): NavGroup[] {
   const slug = parseRepoSlug(pathname);
-  const raw = slug
-    ? buildRepoNav(slug)
-    : buildWorkspaceNav(opts?.inboxActionableCount);
+  const raw = slug ? buildRepoNav(slug) : buildWorkspaceNav();
   const mode = opts?.consoleMode ?? "full";
   const allowed =
     mode === "residual" ? RESIDUAL_NAV_HREFS : mode === "off" ? OFF_NAV_HREFS : null;
@@ -518,15 +517,12 @@ export function AppShellChrome({
   workspace,
   allWorkspaces,
   me,
-  inboxActionableCount,
   consoleMode,
 }: {
   children: ReactNode;
   workspace?: AppShellWorkspace;
   allWorkspaces?: AppShellWorkspace[];
   me?: AppShellUser | null;
-  /** Actionable ``new`` count for sidebar ``Inbox · N`` label. */
-  inboxActionableCount?: number | null;
   /** ELS-235: per-workspace console surface (default full). */
   consoleMode?: "full" | "residual" | "off";
 }) {
@@ -634,7 +630,7 @@ export function AppShellChrome({
     email: "user@example.com",
     initials: "U",
   };
-  const NAV = navFor(pathname, { inboxActionableCount, consoleMode });
+  const NAV = navFor(pathname, { consoleMode });
   const allNavHrefs = NAV.flatMap((g) => g.items.map((i) => i.href));
   const repoSlug = parseRepoSlug(pathname);
   // Repo-mode header chip: show the repo the URL resolves to. In

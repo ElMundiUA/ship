@@ -6,7 +6,6 @@ import { ApiUnavailable } from "@/components/api-unavailable";
 import {
   ApiHttpError,
   ApiUnavailableError,
-  getInboxCounts,
   isApiConfigured,
 } from "@/lib/api/client";
 import {
@@ -88,12 +87,11 @@ export default async function AuthedLayout({
   const resolvedId = await getResolvedWorkspaceId(layoutSearch, workspaces);
   const workspace = pickWorkspace(workspaces, resolvedId);
   const me = await getCachedMe();
-  const inboxCounts = await getInboxCounts(workspace.id, token).catch(() => null);
 
   // ELS-235 (strangler step 0): per-workspace console mode. Non-full
-  // modes 302 disallowed paths to the residual status landing; the
-  // Inbox approval surface stays reachable in EVERY mode so pending
-  // operator approvals are never orphaned.
+  // modes 302 disallowed paths to the operator hub; the /approve/{id}
+  // confirm surface stays reachable in EVERY mode so pending operator
+  // approvals are never orphaned.
   const consoleMode = await resolveConsoleMode(workspace.id, token);
   if (consoleMode !== "full") {
     const pathname = await getRequestPathname();
@@ -111,7 +109,6 @@ export default async function AuthedLayout({
       }}
       allWorkspaces={toAppShellWorkspaces(workspaces)}
       me={meToShellUser(me)}
-      inboxActionableCount={inboxCounts?.actionable_new ?? null}
       consoleMode={consoleMode}
     >
       {children}

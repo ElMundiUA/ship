@@ -173,15 +173,15 @@ export default async function ChatPage({
                 <span className="font-semibold text-aqua">📩 Linked inbox item</span>
                 <span className="ml-2 text-white/65">
                   Navigator was seeded with the ticket + the agent&apos;s
-                  question. Once you&apos;ve agreed on an answer, head back
-                  to the inbox row and use “Answer” to record it.
+                  question. Once you&apos;ve agreed on an answer, open the
+                  item and use “Answer” to record it.
                 </span>
               </div>
               <Link
                 href={inboxItemUrl(String(params.from_inbox))}
                 className="shrink-0 rounded-lg border border-aqua/40 px-3 py-1.5 font-semibold text-aqua hover:bg-aqua/10"
               >
-                Open inbox row →
+                Open item →
               </Link>
             </div>
           )}

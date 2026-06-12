@@ -335,9 +335,12 @@ async def _stakes_gate(
         return
     stakes = str((item.payload or {}).get("stakes") or "").lower()
     if stakes in WEB_ONLY_STAKES:
+        # /approve/{id} is the console's per-item confirm page (typed-
+        # slug for destructive) — reachable in every console.surface
+        # mode, so this link can never orphan the approval (ELS-294).
         web_url = (
-            f"{settings.console_url.rstrip('/')}/inbox"
-            f"?ws={workspace_id}&selected={item.id}"
+            f"{settings.console_url.rstrip('/')}/approve/{item.id}"
+            f"?ws={workspace_id}"
         )
         raise _McpToolError(
             "this item is marked destructive and cannot be approved "

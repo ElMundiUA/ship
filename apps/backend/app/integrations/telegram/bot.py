@@ -330,21 +330,23 @@ def _is_approval_directive(directive: Directive) -> bool:
 def _approval_deep_link(
     payload: dict, *, console_url: str, workspace_id: uuid.UUID
 ) -> str:
-    """Deep-link into the authoritative Inbox approval surface.
+    """Deep-link into the per-item ``/approve/{id}`` confirm page.
 
-    The Inbox stays reachable in EVERY console mode (the Phase-4
-    ``console.surface`` gate pins it), so this link can never orphan
-    a pending approval. The real approval is recorded there under the
-    acting user's identity — never under the shared group PAT.
+    The /approve surface stays reachable in EVERY console mode (the
+    ``console.surface`` gate pins it; the mailbox /inbox page itself
+    was removed in the MCP-first rework, ELS-294), so this link can
+    never orphan a pending approval. The real approval is recorded
+    there under the acting user's identity — never under the shared
+    group PAT.
     """
     base = console_url.rstrip("/")
     item_id = payload.get("inbox_item_id")
     if item_id:
-        return f"{base}/inbox?ws={workspace_id}&selected={item_id}"
+        return f"{base}/approve/{item_id}?ws={workspace_id}"
     href = payload.get("href")
     if isinstance(href, str) and href.startswith(base):
         return href
-    return f"{base}/inbox?ws={workspace_id}"
+    return f"{base}/?ws={workspace_id}"
 
 
 def _collect_directive_actions(

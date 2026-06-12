@@ -200,10 +200,19 @@ test.describe("onboarding wizard (authenticated)", () => {
     // FE uses the former for tests, the latter for users.
     await expect(intelBadge.locator('[data-state="harvesting"]')).toBeVisible();
 
-    const whatsNext = page.getByTestId("onboarding-done-whats-next");
-    await expect(whatsNext).toBeVisible();
-    const tiles = whatsNext.getByTestId("onboarding-done-whats-next-tile");
-    await expect(tiles).toHaveCount(4);
+    // MCP-first rework (ELS-290): the what's-next tile grid was
+    // replaced by the attach-agent finale — same shared card as the
+    // hub, plus the "I'll use the web console" skip link.
+    const attach = page.getByTestId("onboarding-done-attach-agent");
+    await expect(attach).toBeVisible();
+    // Card may render collapsed if this storage state dismissed it on
+    // the hub earlier — both shapes prove the component mounted.
+    await expect(
+      attach
+        .getByTestId("connect-agent-card")
+        .or(attach.getByTestId("connect-agent-hint")),
+    ).toBeVisible();
+    await expect(page.getByTestId("onboarding-done-skip")).toBeVisible();
 
     // Loose console-noise check: per-test we don't expect any console
     // errors from the seeded happy path. Hydration warnings would

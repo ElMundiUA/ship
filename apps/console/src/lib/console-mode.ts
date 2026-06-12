@@ -2,10 +2,12 @@
  * Console-mode resolution (ELS-235 — strangler step 0).
  *
  * The whole authed surface can go dark per-workspace without deleting
- * code: `full` (today, default), `residual` (status + Inbox + Settings
- * only), `off` (status + Inbox only — the Inbox approval surface stays
- * reachable in EVERY mode so pending operator approvals are never
- * orphaned; thesis 4).
+ * code: `full` (today, default), `residual` (hub + Chat + approve +
+ * Settings), `off` (hub + approve only). The per-item `/approve/{id}`
+ * confirm page stays reachable in EVERY mode so pending operator
+ * approvals are never orphaned (thesis 4) — the mailbox Inbox page
+ * itself was removed in the MCP-first rework (ELS-289): inbox
+ * operation lives in the operator's agent over MCP and in Telegram.
  *
  * Precedence: per-workspace `console.surface` config scope beats the
  * `SHIP_CONSOLE_MODE` env default beats `full`. Resolution failures
@@ -33,12 +35,13 @@ export function envDefaultMode(): ConsoleMode {
   return parseConsoleMode(process.env.SHIP_CONSOLE_MODE) ?? "full";
 }
 
-/** Path prefixes that stay reachable per mode. `/` is the residual
- * status landing in every mode; the Inbox approval surface is
+/** Path prefixes that stay reachable per mode. `/` is the operator
+ * hub in every mode; the `/approve/{id}` confirm surface (the deep-
+ * link target for Telegram buttons and MCP web_url refusals) is
  * reachable in EVERY mode (must-fix: never orphan pending operator
  * approvals). */
-const RESIDUAL_PREFIXES = ["/", "/inbox", "/settings"] as const;
-const OFF_PREFIXES = ["/", "/inbox"] as const;
+const RESIDUAL_PREFIXES = ["/", "/approve", "/chat", "/settings"] as const;
+const OFF_PREFIXES = ["/", "/approve"] as const;
 
 function matchesPrefix(pathname: string, prefix: string): boolean {
   if (prefix === "/") return pathname === "/";

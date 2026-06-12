@@ -2,8 +2,6 @@ import { expect, test } from "@playwright/test";
 
 import {
   findInboxItemIdByTitle,
-  getInboxItemDetail,
-  listWorkspaceMembers,
   mintInboxItem,
 } from "../lib/inbox-helpers";
 import {
@@ -13,28 +11,32 @@ import {
 import { hasPlaywrightStorageState } from "../lib/storage";
 
 /**
- * Deployed e2e: /inbox/[id] disposition forms (resolve, dismiss, approve,
- * reject, snooze, reassign, comment) + terminal-state guard.
+ * Deployed e2e: the `/approve/{id}` confirm page (ELS-294 — the
+ * console's only remaining inbox surface after the MCP-first rework).
+ *
+ * Covers: ordinary approve / reject / resolve / dismiss, the
+ * destructive typed-slug confirm (web-only by stakes policy), and the
+ * read-only terminal state. Day-to-day inbox triage happens over MCP
+ * and Telegram; this page is the deep-link target those emit.
  *
  * Requires: E2E_STORAGE_STATE, E2E_SHIP_API_BASE, E2E_SHIP_API_TOKEN (admin).
  *
  * @deployed
  */
-test.describe("inbox: disposition detail (wired, serial)", () => {
+test.describe("approve page: dispositions (wired, serial)", () => {
   test.describe.configure({ mode: "serial", timeout: 120_000 });
 
-  const wired =
-    hasPlaywrightStorageState() && hasShipApiCredentials();
+  const wired = hasPlaywrightStorageState() && hasShipApiCredentials();
 
   let workspaceId = "";
   let resolvedItemId = "";
 
-  async function openInboxDetail(
+  async function openApprove(
     page: import("@playwright/test").Page,
     itemId: string,
   ) {
-    await page.goto(`/inbox?selected=${encodeURIComponent(itemId)}`);
-    await expect(page).toHaveURL(new RegExp(`selected=${itemId}`), {
+    await page.goto(`/approve/${encodeURIComponent(itemId)}`);
+    await expect(page.getByTestId("approve-card")).toBeVisible({
       timeout: 30_000,
     });
   }
@@ -43,63 +45,52 @@ test.describe("inbox: disposition detail (wired, serial)", () => {
     test.skip(!wired, "E2E_STORAGE_STATE + E2E_SHIP_API_BASE + E2E_SHIP_API_TOKEN");
 
     workspaceId = await shipResolveWorkspaceId(request);
-    const title = `e2e-inbox-resolve-${Date.now()}`;
+    const title = `e2e-approve-resolve-${Date.now()}`;
     await mintInboxItem(request, workspaceId, {
       type: "blocker",
       title,
-      summary: "ELS-114 resolve path",
+      summary: "approve-page resolve path",
     });
     const itemId = await findInboxItemIdByTitle(request, workspaceId, title);
     resolvedItemId = itemId;
 
-    await openInboxDetail(page, itemId);
-    await expect(page.getByRole("heading", { name: title })).toBeVisible();
+    await openApprove(page, itemId);
     await page.getByRole("button", { name: "Mark handled" }).click();
 
-    await expect(page.getByRole("heading", { name: "Closed" })).toBeVisible({
+    await expect(page.getByTestId("approve-resolved")).toBeVisible({
       timeout: 20_000,
     });
     await expect(
-      page.getByText("Resolved", { exact: true }).first(),
-    ).toBeVisible();
-    await expect(page.getByRole("button", { name: "Mark handled" })).toHaveCount(
-      0,
-    );
+      page.getByRole("button", { name: "Mark handled" }),
+    ).toHaveCount(0);
 
     await page.reload();
-    await expect(page.getByRole("heading", { name: "Closed" })).toBeVisible();
-    await expect(
-      page.getByText("Resolved", { exact: true }).first(),
-    ).toBeVisible();
+    await expect(page.getByTestId("approve-resolved")).toBeVisible();
   });
 
   test("@deployed dismiss persists after reload", async ({ page, request }) => {
     test.skip(!wired, "E2E_STORAGE_STATE + E2E_SHIP_API_BASE + E2E_SHIP_API_TOKEN");
 
     const ws = workspaceId || (await shipResolveWorkspaceId(request));
-    const title = `e2e-inbox-dismiss-${Date.now()}`;
+    const title = `e2e-approve-dismiss-${Date.now()}`;
     await mintInboxItem(request, ws, {
       type: "blocker",
       title,
-      summary: "ELS-114 dismiss path",
+      summary: "approve-page dismiss path",
     });
     const itemId = await findInboxItemIdByTitle(request, ws, title);
 
-    await openInboxDetail(page, itemId);
+    await openApprove(page, itemId);
     page.once("dialog", (d) => d.accept());
     await page.getByRole("button", { name: "Dismiss" }).click();
 
-    await expect(page.getByRole("heading", { name: "Closed" })).toBeVisible({
+    await expect(page.getByTestId("approve-resolved")).toBeVisible({
       timeout: 20_000,
     });
-    await expect(
-      page.getByText("Dismissed", { exact: true }).first(),
-    ).toBeVisible();
+    await expect(page.getByText("dismissed").first()).toBeVisible();
 
     await page.reload();
-    await expect(
-      page.getByText("Dismissed", { exact: true }).first(),
-    ).toBeVisible();
+    await expect(page.getByTestId("approve-resolved")).toBeVisible();
   });
 
   test("@deployed approve reaches approved terminal", async ({
@@ -109,24 +100,21 @@ test.describe("inbox: disposition detail (wired, serial)", () => {
     test.skip(!wired, "E2E_STORAGE_STATE + E2E_SHIP_API_BASE + E2E_SHIP_API_TOKEN");
 
     const ws = workspaceId || (await shipResolveWorkspaceId(request));
-    const title = `e2e-inbox-approve-${Date.now()}`;
+    const title = `e2e-approve-approve-${Date.now()}`;
     await mintInboxItem(request, ws, {
       type: "approval",
       title,
-      summary: "ELS-114 approve path",
+      summary: "approve-page approve path",
     });
     const itemId = await findInboxItemIdByTitle(request, ws, title);
 
-    await openInboxDetail(page, itemId);
-    await page.getByRole("button", { name: "Approve" }).click();
+    await openApprove(page, itemId);
+    await page.getByRole("button", { name: "Approve", exact: true }).click();
 
-    await expect(page.getByRole("heading", { name: "Closed" })).toBeVisible({
+    await expect(page.getByTestId("approve-resolved")).toBeVisible({
       timeout: 20_000,
     });
-    await expect(page.locator("code").filter({ hasText: "approved" })).toBeVisible();
-
-    await page.reload();
-    await expect(page.locator("code").filter({ hasText: "approved" })).toBeVisible();
+    await expect(page.getByText("approved").first()).toBeVisible();
   });
 
   test("@deployed reject reaches rejected terminal", async ({
@@ -136,129 +124,54 @@ test.describe("inbox: disposition detail (wired, serial)", () => {
     test.skip(!wired, "E2E_STORAGE_STATE + E2E_SHIP_API_BASE + E2E_SHIP_API_TOKEN");
 
     const ws = workspaceId || (await shipResolveWorkspaceId(request));
-    const title = `e2e-inbox-reject-${Date.now()}`;
+    const title = `e2e-approve-reject-${Date.now()}`;
     await mintInboxItem(request, ws, {
       type: "approval",
       title,
-      summary: "ELS-114 reject path",
+      summary: "approve-page reject path",
     });
     const itemId = await findInboxItemIdByTitle(request, ws, title);
 
-    await openInboxDetail(page, itemId);
+    await openApprove(page, itemId);
     await page.getByRole("button", { name: "Reject" }).click();
 
-    await expect(page.getByRole("heading", { name: "Closed" })).toBeVisible({
+    await expect(page.getByTestId("approve-resolved")).toBeVisible({
       timeout: 20_000,
     });
-    await expect(page.locator("code").filter({ hasText: "rejected" })).toBeVisible();
-
-    await page.reload();
-    await expect(page.locator("code").filter({ hasText: "rejected" })).toBeVisible();
+    await expect(page.getByText("rejected").first()).toBeVisible();
   });
 
-  test("@deployed snooze shows wake-up and persists", async ({
+  test("@deployed destructive approval demands the typed slug", async ({
     page,
     request,
   }) => {
     test.skip(!wired, "E2E_STORAGE_STATE + E2E_SHIP_API_BASE + E2E_SHIP_API_TOKEN");
 
     const ws = workspaceId || (await shipResolveWorkspaceId(request));
-    const title = `e2e-inbox-snooze-${Date.now()}`;
+    const title = `e2e-approve-destructive-${Date.now()}`;
     await mintInboxItem(request, ws, {
-      type: "blocker",
+      type: "approval",
       title,
-      summary: "ELS-114 snooze path",
+      summary: "approve-page destructive path",
+      payload: { stakes: "destructive" },
     });
     const itemId = await findInboxItemIdByTitle(request, ws, title);
 
-    await openInboxDetail(page, itemId);
-    await page.getByRole("button", { name: "Snooze" }).click();
-
+    await openApprove(page, itemId);
+    // No bare Approve button — the typed-slug form replaces it.
+    const form = page.getByTestId("approve-destructive-form");
+    await expect(form).toBeVisible();
     await expect(
-      page.getByRole("heading", { name: "Pick up where you left off" }),
-    ).toBeVisible({ timeout: 20_000 });
-    await expect(
-      page.getByRole("button", { name: "Wake up now" }),
-    ).toBeVisible();
+      page.getByRole("button", { name: "Approve", exact: true }),
+    ).toHaveCount(0);
 
-    await page.reload();
-    await expect(
-      page.getByRole("button", { name: "Wake up now" }),
-    ).toBeVisible();
-  });
+    await form.getByPlaceholder('type "approve"').fill("approve");
+    await form.getByRole("button", { name: "Confirm approve" }).click();
 
-  test("@deployed reassign updates owner card", async ({ page, request }) => {
-    test.skip(!wired, "E2E_STORAGE_STATE + E2E_SHIP_API_BASE + E2E_SHIP_API_TOKEN");
-
-    const ws = workspaceId || (await shipResolveWorkspaceId(request));
-    const members = await listWorkspaceMembers(request, ws);
-    if (members.length < 2) {
-      test.skip(true, "workspace needs at least two members for reassign");
-    }
-
-    const title = `e2e-inbox-reassign-${Date.now()}`;
-    await mintInboxItem(request, ws, {
-      type: "blocker",
-      title,
-      summary: "ELS-114 reassign path",
-    });
-    const itemId = await findInboxItemIdByTitle(request, ws, title);
-
-    const detail = await getInboxItemDetail(request, ws, itemId);
-    const currentEmail = detail.owner?.email?.toLowerCase() ?? "";
-
-    const target = members.find(
-      (m) => m.email.toLowerCase() !== currentEmail,
-    );
-    if (!target) {
-      test.skip(true, "no alternate member distinct from current owner");
-    }
-
-    await openInboxDetail(page, itemId);
-    const ownerCard = page.locator("aside").filter({ hasText: "Owner" });
-
-    await ownerCard.locator('select[name="user_id"]').selectOption(target!.user_id);
-    await ownerCard.getByRole("button", { name: "Reassign" }).click();
-
-    await expect(ownerCard.getByText(target!.email)).toBeVisible({
+    await expect(page.getByTestId("approve-resolved")).toBeVisible({
       timeout: 20_000,
     });
-
-    await page.reload();
-    await expect(ownerCard.getByText(target!.email)).toBeVisible();
-  });
-
-  test("@deployed comment appears in activity", async ({ page, request }) => {
-    test.skip(!wired, "E2E_STORAGE_STATE + E2E_SHIP_API_BASE + E2E_SHIP_API_TOKEN");
-
-    const ws = workspaceId || (await shipResolveWorkspaceId(request));
-    const title = `e2e-inbox-comment-${Date.now()}`;
-    const marker = `e2e-comment-marker-${Date.now()}`;
-    await mintInboxItem(request, ws, {
-      type: "blocker",
-      title,
-      summary: "ELS-114 comment path",
-    });
-    const itemId = await findInboxItemIdByTitle(request, ws, title);
-
-    const before = await getInboxItemDetail(request, ws, itemId);
-    const eventsBefore = (before.events ?? []).filter(
-      (e) => !(e.action === "created"),
-    ).length;
-
-    await openInboxDetail(page, itemId);
-    await page
-      .getByPlaceholder("Leave context for the next person picking this up…")
-      .fill(marker);
-    await page.getByRole("button", { name: "Post comment" }).click();
-
-    await expect(page.getByText(marker)).toBeVisible({ timeout: 20_000 });
-
-    const after = await getInboxItemDetail(request, ws, itemId);
-    const eventsAfter = (after.events ?? []).filter(
-      (e) => !(e.action === "created"),
-    ).length;
-    expect(eventsAfter).toBeGreaterThanOrEqual(eventsBefore + 1);
+    await expect(page.getByText("approved").first()).toBeVisible();
   });
 
   test("@deployed terminal item hides disposition buttons", async ({
@@ -267,12 +180,14 @@ test.describe("inbox: disposition detail (wired, serial)", () => {
     test.skip(!wired, "E2E_STORAGE_STATE + E2E_SHIP_API_BASE + E2E_SHIP_API_TOKEN");
     test.skip(!resolvedItemId, "depends on resolve scenario");
 
-    await openInboxDetail(page, resolvedItemId);
-    await expect(page.getByRole("heading", { name: "Closed" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Mark handled" })).toHaveCount(
-      0,
-    );
+    await openApprove(page, resolvedItemId);
+    await expect(page.getByTestId("approve-resolved")).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Mark handled" }),
+    ).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Dismiss" })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Approve" })).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: "Approve", exact: true }),
+    ).toHaveCount(0);
   });
 });

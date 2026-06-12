@@ -18,6 +18,7 @@ import {
   isApiConfigured,
   reassignInboxItem,
 } from "@/lib/api/client";
+import { inboxItemUrl } from "@/components/inbox/inbox-url";
 import { resolveOrigin } from "@/lib/api/origin";
 
 export async function POST(
@@ -57,11 +58,11 @@ export async function POST(
     return back(origin, id, codeFor(err));
   }
 
-  return NextResponse.redirect(new URL(`/inbox?selected=${id}`, origin), 303);
+  return NextResponse.redirect(new URL(inboxItemUrl(id), origin), 303);
 }
 
 function back(origin: string, id: string, code: string) {
-  const url = new URL(`/inbox?selected=${id}`, origin);
+  const url = new URL(inboxItemUrl(id), origin);
   url.searchParams.set("error", code);
   return NextResponse.redirect(url, 303);
 }

@@ -35,8 +35,9 @@ import {
 } from "@/lib/api/client";
 import { getSessionToken } from "@/lib/api/session";
 
+import { ConnectAgentCard } from "@/components/connect-agent-card";
+
 import { DoneResult } from "./done-result";
-import { WhatsNextGrid } from "./whats-next-grid";
 
 export async function DoneStep({
   wsId,
@@ -88,7 +89,7 @@ export async function DoneStep({
       <p className="mt-3 max-w-2xl text-sm leading-relaxed text-white/70">
         {repoCount === 0
           ? "Pick a repo and open the seed PR to wire Ship in."
-          : "Your first ticket can run end-to-end from here. Open the Inbox to see what's already waiting, or drop a brief into the planner to spin up a project."}
+          : "One step left: attach Ship to the agent you already work in. Planning, tickets, approvals, and reviews all run from there."}
       </p>
 
       {loadError && (
@@ -109,11 +110,33 @@ export async function DoneStep({
         </div>
       )}
 
-      <WhatsNextGrid workspaceId={wsId} />
+      {/* ELS-290 (MCP-first rework): the wizard's final move is
+          attaching the operator's agent — same shared card as the
+          hub, so mint + copy-command stay one flow. */}
+      {wsId && (
+        <section data-testid="onboarding-done-attach-agent" className="mt-8">
+          <h2 className="font-display text-lg font-bold text-white">
+            Attach Ship to your agent
+          </h2>
+          <div className="mt-3">
+            <ConnectAgentCard
+              workspaceId={wsId}
+              mcpEndpoint={
+                process.env.NEXT_PUBLIC_SHIP_MCP_URL?.trim() ||
+                "https://api.ship.elmundi.com/mcp"
+              }
+            />
+          </div>
+        </section>
+      )}
 
       <footer className="mt-10 flex flex-wrap items-center justify-between gap-3 border-t border-white/[0.08] pt-5">
-        <Link href={dashboardHref} className="btn-primary">
-          Open dashboard →
+        <Link
+          href={dashboardHref}
+          className="text-xs font-semibold text-white/55 underline-offset-2 hover:text-white hover:underline"
+          data-testid="onboarding-done-skip"
+        >
+          I&apos;ll use the web console → hub
         </Link>
       </footer>
     </section>

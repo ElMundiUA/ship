@@ -228,7 +228,7 @@ async def test_destructive_items_are_web_only(
     )
     result = res.json()["result"]
     assert result["isError"] is True
-    assert "/inbox?ws=" in result["content"][0]["text"]
+    assert f"/approve/{item.id}" in result["content"][0]["text"]
 
 
 @pytest.mark.asyncio

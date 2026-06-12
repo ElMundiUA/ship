@@ -173,8 +173,8 @@ def test_approval_directive_renders_url_button() -> None:
     assert len(links) == 1
     assert links[0]["label"] == "Approve deploy"
     assert links[0]["url"] == (
-        f"https://app.ship.test/inbox?ws={_WS}"
-        "&selected=11111111-2222-3333-4444-555555555555"
+        "https://app.ship.test/approve/"
+        f"11111111-2222-3333-4444-555555555555?ws={_WS}"
     )
 
     markup = _build_choice_markup(options, links, sign=lambda i: "c|x")
@@ -196,7 +196,8 @@ def test_stakes_control_also_routes_to_url() -> None:
         directives, console_url="https://app.ship.test", workspace_id=_WS
     )
     assert options == []
-    assert links[0]["url"].startswith(f"https://app.ship.test/inbox?ws={_WS}")
+    # No inbox_item_id in the payload → fall back to the operator hub.
+    assert links[0]["url"] == f"https://app.ship.test/?ws={_WS}"
 
 
 def test_low_stakes_options_render_signed_callbacks() -> None:
