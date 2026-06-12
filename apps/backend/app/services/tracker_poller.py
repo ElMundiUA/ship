@@ -99,12 +99,18 @@ query ShipTrackerPoll($filter: IssueFilter, $after: String) {
       # (createdAt DESC by default on the connection). 20 is enough
       # to cover the most-recent agent question + the answer; older
       # threads don't affect the trigger decision.
+      # ``isMe`` + ``botActor`` carry the author identity the
+      # agent-vs-human classifier keys on (ELS-250) — Ship writes
+      # through the same OAuth identity this poller reads with, so
+      # ``isMe: true`` means "our own comment"; app-actor
+      # provisioned installs surface as ``botActor`` instead.
       comments(first: 20) {
         nodes {
           id
           body
           createdAt
-          user { displayName email }
+          user { displayName email isMe }
+          botActor { id }
         }
       }
     }
@@ -152,21 +158,53 @@ def _extract_fsm_stage(labels: list[str], state: str | None = None) -> str | Non
 
 
 # Agent comments end with ``[Ship SDLC:role-<name>]`` per system.md
-# `outcome` rules. A comment that doesn't carry this marker is from
-# a human and counts as a "real answer" for clarification flow.
+# `outcome` rules. Since ELS-250 the marker is only the LEGACY
+# fallback — the primary agent-vs-human signal is the structured
+# Linear author identity (see :func:`_is_agent_comment`).
 _AGENT_COMMENT_MARKER_RE = re.compile(r"\[Ship\s+SDLC:role-[\w-]+\]")
+
+
+def _is_agent_comment(comment: dict) -> bool:
+    """Single source of truth for agent-vs-human on a Linear comment
+    (ELS-250). Consumed by the clarification trigger and the
+    comment-inbound path so the two can never disagree.
+
+    Identity first, marker second:
+
+    - ``user.isMe`` true → AGENT. Ship writes tracker comments
+      through the same OAuth identity the poller reads with, so
+      "authored by me" means "authored by the workspace agent".
+    - ``botActor`` present → AGENT (app-actor provisioned installs
+      surface the OAuth application as the author instead of a user).
+    - any OTHER known author → HUMAN, even when the body quotes the
+      ``[Ship SDLC:role-…]`` marker (operators paste it when replying
+      inline to the agent's question).
+    - no author identity at all (legacy rows / older snapshots) →
+      fall back to the marker regex.
+    """
+    if not isinstance(comment, dict):
+        return False
+    user = comment.get("user")
+    if isinstance(user, dict) and user.get("isMe") is True:
+        return True
+    if comment.get("botActor"):
+        return True
+    if isinstance(user, dict) and user:
+        return False
+    body = comment.get("body") or ""
+    return bool(_AGENT_COMMENT_MARKER_RE.search(body))
 
 
 def _operator_answered_clarification(comments: list[dict]) -> bool:
     """Decide whether the operator has replied to the last agent
     clarification question.
 
-    Walks comments newest-first. The first marker-bearing comment
-    we hit is the agent's question (the one that asked). If we see
-    a non-marker comment BEFORE the agent comment in time
-    (i.e. AFTER it in the newest-first walk's prefix), the operator
-    has answered. Returns ``True`` if a fresh operator comment
-    exists since the last agent question.
+    Walks comments newest-first. The first AGENT comment we hit is
+    the agent's question (the one that asked). If we see a human
+    comment BEFORE the agent comment in time (i.e. AFTER it in the
+    newest-first walk's prefix), the operator has answered. Returns
+    ``True`` if a fresh operator comment exists since the last agent
+    question.
     """
     # Sort newest-first defensively (Linear returns newest-first
     # by default on this connection, but the contract isn't
@@ -177,8 +215,7 @@ def _operator_answered_clarification(comments: list[dict]) -> bool:
         reverse=True,
     )
     for c in rows:
-        body = c.get("body") or ""
-        if _AGENT_COMMENT_MARKER_RE.search(body):
+        if _is_agent_comment(c):
             # Hit the latest agent comment without finding an
             # operator one above it → operator hasn't replied.
             return False

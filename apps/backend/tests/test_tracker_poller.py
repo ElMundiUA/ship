@@ -295,3 +295,72 @@ async def test_install_without_team_id_is_skipped(
     # and reports 0 errors. The installation IS counted in ``installs``.
     assert summary["errors"] == 0
     assert summary["events"] == 0
+
+
+# ---------------------------------------------------------------------------
+# ELS-250 — agent-vs-human via author identity (marker = legacy fallback)
+# ---------------------------------------------------------------------------
+
+
+def test_human_pasting_marker_is_human() -> None:
+    """AC: a comment whose body QUOTES the marker but authored by a
+    human classifies as HUMAN."""
+    from backend.app.services.tracker_poller import _is_agent_comment
+
+    comment = {
+        "body": "Replying inline:\n> blah [Ship SDLC:role-developer]\nyes, ship it",
+        "user": {"displayName": "Denys", "email": "denys@bodyman.io", "isMe": False},
+    }
+    assert _is_agent_comment(comment) is False
+
+
+def test_service_account_comment_is_agent_without_marker() -> None:
+    """AC: authored by the workspace identity → AGENT even when the
+    marker text is absent."""
+    from backend.app.services.tracker_poller import _is_agent_comment
+
+    comment = {
+        "body": "Working on it.",
+        "user": {"displayName": "Ship Agent", "email": "agent@ship", "isMe": True},
+    }
+    assert _is_agent_comment(comment) is True
+
+
+def test_bot_actor_comment_is_agent() -> None:
+    from backend.app.services.tracker_poller import _is_agent_comment
+
+    comment = {"body": "Done.", "user": None, "botActor": {"id": "app-1"}}
+    assert _is_agent_comment(comment) is True
+
+
+def test_legacy_comment_without_author_falls_back_to_marker() -> None:
+    """AC: no author identity → marker regex keeps classifying
+    historical rows."""
+    from backend.app.services.tracker_poller import _is_agent_comment
+
+    agent_legacy = {"body": "Asked a question. [Ship SDLC:role-ba]"}
+    human_legacy = {"body": "here's the answer"}
+    assert _is_agent_comment(agent_legacy) is True
+    assert _is_agent_comment(human_legacy) is False
+
+
+def test_clarification_walk_uses_identity() -> None:
+    """Newest-first walk: human answer above the agent question →
+    answered; agent question on top → not answered. Identity decides
+    even when the human quotes the marker."""
+    from backend.app.services.tracker_poller import (
+        _operator_answered_clarification,
+    )
+
+    agent_q = {
+        "body": "Which region? [Ship SDLC:role-ba]",
+        "createdAt": "2026-06-12T10:00:00Z",
+        "user": {"displayName": "Ship", "isMe": True},
+    }
+    human_quoting = {
+        "body": "> [Ship SDLC:role-ba] Which region?\neu-central please",
+        "createdAt": "2026-06-12T11:00:00Z",
+        "user": {"displayName": "Denys", "isMe": False},
+    }
+    assert _operator_answered_clarification([agent_q, human_quoting]) is True
+    assert _operator_answered_clarification([agent_q]) is False
