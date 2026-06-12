@@ -6,8 +6,8 @@ The label is already in ``OVERLAY_FREEZE_LABEL_PREFIXES``; the picker
 drops the ticket from every subsequent candidate scan until the
 operator clears the label in Linear. No auto-cascade, no
 ``dev_implementation`` rewrite, no refire-cap detector, no synthetic
-finish — the operator unblocks once and the cascade resumes via the
-Linear webhook.
+finish — the operator unblocks once and the tracker poller resumes
+the pending stage on the next tick (ELS-278).
 
 These tests pin the new contract:
 

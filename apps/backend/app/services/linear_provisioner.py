@@ -142,6 +142,74 @@ def previous_stage(stage: str) -> str | None:
     return None
 
 
+def matched_overlay_labels(labels: list[str]) -> list[str]:
+    """Return labels matching an overlay-freeze prefix (ELS-84).
+
+    Match is case-insensitive — for each prefix ``p`` in
+    :data:`OVERLAY_FREEZE_LABEL_PREFIXES`, a label ``l`` is a hit if
+    ``l == p`` (exact), ``l.startswith(p + "-")`` (operator-friendly
+    suffix like ``blocked-on-acme``), or ``l.startswith(p + ":")``
+    (label-namespace suffix like ``blocked:foo``). Returns the
+    *original* label strings so the audit row surfaces what the
+    operator actually sees in Linear.
+    """
+    matched: list[str] = []
+    for raw in labels:
+        if not isinstance(raw, str):
+            continue
+        candidate = raw.strip().lower()
+        if not candidate:
+            continue
+        for prefix in OVERLAY_FREEZE_LABEL_PREFIXES:
+            if (
+                candidate == prefix
+                or candidate.startswith(prefix + "-")
+                or candidate.startswith(prefix + ":")
+            ):
+                matched.append(raw)
+                break
+    return matched
+
+
+def resolve_fsm_stage_from_labels(
+    labels: list[str], state: str | None = None
+) -> str | None:
+    """Return the highest-order FSM stage from Linear ``stage:*`` labels.
+
+    Default-entry fallback: a Linear-native ticket the operator
+    files directly often has **no** ``stage:*`` labels at all. If
+    the state is ``Todo``, treat that as the implicit entry into
+    the SDLC chain (``task_intake`` is the entry stage; the
+    dispatcher's _STAGE_TO_ROUTINE maps it to the planning bundle).
+
+    Terminal-state short-circuit: a finished chain leaves accumulated
+    ``stage:*`` breadcrumbs on the ticket. Done / Canceled / Duplicate
+    mean "no more work expected"; return None so the dispatcher noops.
+
+    When multiple ``stage:*`` breadcrumbs exist, return the stage with
+    the highest order in ``FSM_STAGE_ORDER``, then ``DEVOPS_STAGE_ORDER``,
+    then ``DECOMPOSITION_STAGE_ORDER`` — not the first label in Linear's
+    arbitrary list (ELS-278).
+    """
+    if state in ("Done", "Canceled", "Duplicate"):
+        return None
+    stage_label_prefix = "stage:"
+    label_stages = {
+        label[len(stage_label_prefix):].strip()
+        for label in labels
+        if isinstance(label, str)
+        and label.startswith(stage_label_prefix)
+        and label[len(stage_label_prefix):].strip()
+    }
+    for chain in (FSM_STAGE_ORDER, DEVOPS_STAGE_ORDER, DECOMPOSITION_STAGE_ORDER):
+        for stage in reversed(chain):
+            if stage in label_stages:
+                return stage
+    if state == "Todo":
+        return "task_intake"
+    return None
+
+
 def previous_stages(stage: str) -> list[str]:
     """All possible immediate predecessors of ``stage`` across every
     chain, de-duplicated in first-seen order.
@@ -196,8 +264,8 @@ SIGNAL_LABELS: dict[str, str] = {
     # when an agent reports ``outcome=blocked``. The label is already in
     # OVERLAY_FREEZE_LABEL_PREFIXES below — picker and dispatcher refuse
     # any ticket carrying it. Operator clears the label in Linear to
-    # resume work; the webhook ingest catches the label removal and
-    # cascades the next dispatch automatically.
+    # resume work; the tracker poller detects overlay-label removal on
+    # the next tick and re-cascades the pending stage (ELS-278).
     "blocked": "blocked",
 }
 
