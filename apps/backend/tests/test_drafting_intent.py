@@ -288,3 +288,98 @@ async def test_empty_message_returns_neutral() -> None:
         ],
     )
     assert decision.verdict == "NEUTRAL"
+
+
+# ---------------------------------------------------------------------------
+# ESCALATE — local-executor escalation classifier (ELS-247)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        "build the export flow end to end, then open a PR for review",
+        "this is a big feature touching auth, billing and the console",
+        "needs a code review once done — multi-file change",
+        "сделай пулл-реквест с этой фичей",
+        "это большая фича, заведи тикет",
+        "нужно ревью — меняем схему по всему репозиторию",
+    ],
+)
+def test_explicit_escalate_canonical_phrases(phrase: str) -> None:
+    from backend.app.services.agent.drafting_intent import explicit_escalate
+
+    assert explicit_escalate(phrase) is True
+
+
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        "fix the typo on the landing hero",
+        "make the subtitle shorter",
+        "поправь отступ в хедере",
+        "rename this variable to snake_case",
+    ],
+)
+def test_explicit_escalate_negative_cases(phrase: str) -> None:
+    from backend.app.services.agent.drafting_intent import explicit_escalate
+
+    assert explicit_escalate(phrase) is False
+
+
+@pytest.mark.asyncio
+async def test_escalate_fast_path_skips_llm() -> None:
+    svc = _service()  # acomplete would assert if called
+    decision = await svc.classify_local_escalation(
+        operator_ask="this is a big feature, needs a PR",
+    )
+    assert decision.verdict == "ESCALATE"
+    assert decision.reason
+
+
+@pytest.mark.asyncio
+async def test_escalate_short_ask_neutral_without_llm() -> None:
+    svc = _service()  # acomplete would assert if called
+    decision = await svc.classify_local_escalation(
+        operator_ask="tweak the hero copy",
+    )
+    assert decision.verdict == "NEUTRAL"
+
+
+@pytest.mark.asyncio
+async def test_escalate_llm_verdict_propagates() -> None:
+    svc = _service(
+        llm_response='{"verdict": "ESCALATE", "reason": "schema change", "suggested_title": "Rework billing exports"}'
+    )
+    decision = await svc.classify_local_escalation(
+        operator_ask=(
+            "rework how exports are produced so the billing data lands in "
+            "the warehouse with the new partitioning scheme and backfill"
+        ),
+    )
+    assert decision.verdict == "ESCALATE"
+    assert decision.suggested_title == "Rework billing exports"
+
+
+@pytest.mark.asyncio
+async def test_escalate_llm_failure_degrades_neutral() -> None:
+    svc = _service(llm_raises=RuntimeError("llm down"))
+    decision = await svc.classify_local_escalation(
+        operator_ask=(
+            "rework how exports are produced so the billing data lands in "
+            "the warehouse with the new partitioning scheme and backfill"
+        ),
+    )
+    assert decision.verdict == "NEUTRAL"
+
+
+@pytest.mark.asyncio
+async def test_escalate_llm_bogus_verdict_neutral() -> None:
+    svc = _service(llm_response='{"verdict": "ENTER", "reason": "nope"}')
+    decision = await svc.classify_local_escalation(
+        operator_ask=(
+            "rework how exports are produced so the billing data lands in "
+            "the warehouse with the new partitioning scheme and backfill"
+        ),
+    )
+    assert decision.verdict == "NEUTRAL"

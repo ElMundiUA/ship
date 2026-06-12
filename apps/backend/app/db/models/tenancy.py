@@ -179,6 +179,16 @@ class Workspace(Base):
     agent_provider: Mapped[str] = mapped_column(
         String(16), nullable=False, server_default=text("'cursor'")
     )
+    # Thesis-7 autonomy dial — how much the *agent* may do on its own
+    # (skip approvals, self-merge, self-pick work). One of ``high`` /
+    # ``balanced`` / ``conservative`` (CHECK-pinned at the DB, mirrored
+    # in :func:`agent_provider_resolver.resolve_autonomy_for_workspace`).
+    # ``balanced`` is the default everywhere; ``high`` is opt-in only.
+    # The dial NEVER loosens the control plane — lease / cap / cascade
+    # / idempotency stay fixed across all profiles.
+    autonomy: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'balanced'")
+    )
     # E16 dispatcher cap — null means "use the global default from
     # ``SHIP_DEFAULT_WORKSPACE_DISPATCH_CAP``"; an integer pins the
     # ceiling for parallel ``agent_dispatch_locks`` per this workspace.

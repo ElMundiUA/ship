@@ -1545,6 +1545,42 @@ class ToolBox:
                 },
             ),
             ToolSpec(
+                name="run_workflow",
+                description=(
+                    "Fire a deterministic bounded workflow (thesis 8): "
+                    "a named multi-agent pipeline from the workspace's "
+                    "workflow registry (e.g. ``pr-review``, "
+                    "``codebase-audit``). The chat stays LOCK-FREE — "
+                    "this tool only QUEUES the run and returns its id; "
+                    "the control plane (cap / cascade / leases) governs "
+                    "every spawn afterwards. Admin-only, "
+                    "internal/dogfood at launch."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "workflow_name": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 120,
+                            "description": (
+                                "Registered workflow spec name. Unknown "
+                                "names return the available list."
+                            ),
+                        },
+                        "inputs": {
+                            "type": "object",
+                            "description": (
+                                "Input values declared by the spec "
+                                "(e.g. {\"pr_url\": …})."
+                            ),
+                        },
+                    },
+                    "required": ["workflow_name"],
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
                 name="web_fetch",
                 description=(
                     "Fetch one URL via Firecrawl and return its "
@@ -1788,6 +1824,7 @@ class ToolBox:
             "ticket_update": self._tool_ticket_update,
             "project_priority_set": self._tool_project_priority_set,
             "run_subagent": self._tool_run_subagent,
+            "run_workflow": self._tool_run_workflow,
             "config_help": self._tool_config_help,
             "config_put": self._tool_config_put,
             "web_fetch": self._tool_web_fetch,
@@ -5585,6 +5622,93 @@ class ToolBox:
             )
         return _json_result(result)
 
+    async def _tool_run_workflow(self, args: dict[str, Any]) -> str:
+        """W8.4 (ELS-260) — chat trigger for the workflow primitive.
+
+        The chat loop stays LOCK-FREE (thesis 3a): this handler only
+        persists a ``queued`` run row and schedules a background task
+        that drives the runtime THROUGH the dispatch gate — no
+        ``agent_dispatch_locks`` row is taken in the chat process.
+        Escalation, not in-loop dispatch (the a→b rule).
+        """
+        if self._subagent_active:
+            raise ToolInvocationError(
+                "nested run_workflow is not allowed (already running "
+                "inside a subagent)"
+            )
+        from backend.app.api.v1.routes.workspaces import ROLES_ADMIN
+
+        await self._require_workspace_role(ROLES_ADMIN)
+
+        from backend.app.db.models.workflow import AgentWorkflowRun
+        from backend.app.services.workflow.registry import (
+            list_available_specs,
+            resolve_spec,
+        )
+
+        workflow_name = _require_str(args, "workflow_name").strip()
+        inputs_raw = args.get("inputs")
+        inputs = inputs_raw if isinstance(inputs_raw, dict) else {}
+
+        spec = resolve_spec(workflow_name)
+        if spec is None:
+            return _json_result(
+                {
+                    "error": "unknown_workflow",
+                    "message": f"no workflow named '{workflow_name}'",
+                    "available": list_available_specs(),
+                }
+            )
+
+        run = AgentWorkflowRun(
+            workspace_id=self._workspace_id,
+            spec_name=spec.name,
+            spec_version=spec.version,
+            inputs=inputs,
+            trigger_kind="chat",
+            triggered_by=f"user:{self._user_id}" if self._user_id else "chat",
+            status="queued",
+        )
+        self._session.add(run)
+        await self._session.flush()
+
+        self._session.add(
+            AuditLog(
+                workspace_id=self._workspace_id,
+                actor_user_id=self._user_id,
+                action="workflow.run_queued",
+                target_kind="workflow_run",
+                target_id=str(run.id),
+                payload={
+                    "spec_name": spec.name,
+                    "trigger_kind": "chat",
+                    "inputs": {k: str(v)[:200] for k, v in inputs.items()},
+                },
+            )
+        )
+        await self._session.flush()
+
+        import asyncio as _asyncio
+
+        from backend.app.services.workflow.runtime import advance_run_by_id
+
+        _asyncio.create_task(
+            advance_run_by_id(run.id, actor_user_id=self._user_id),
+            name=f"ship.workflow.{run.id}",
+        )
+        return _json_result(
+            {
+                "workflow_run_id": str(run.id),
+                "spec_name": spec.name,
+                "status": "queued",
+                "note": (
+                    "queued; spawns go through the dispatch gate "
+                    "(cap/cascade apply). Check status via the audit "
+                    "log (workflow.step_*) or the run row."
+                ),
+            }
+        )
+
     async def _tool_run_subagent(self, args: dict[str, Any]) -> str:
         """Polymorphic subagent spawner. Branches on ``kind`` to
         decomposition (project-anchor chain) or specialist consult
@@ -5832,7 +5956,13 @@ class ToolBox:
         # it doesn't know about); the ``_subagent_active`` flag is
         # guard #2.
         all_specs = self.specs()
-        sub_specs = [s for s in all_specs if s.name != "consult_specialist"]
+        # run_workflow joins the recursion-guard exclusion set (W8.4):
+        # a subagent must never fan out further agents.
+        sub_specs = [
+            s
+            for s in all_specs
+            if s.name not in ("consult_specialist", "run_workflow")
+        ]
 
         self._subagent_active = True
         try:

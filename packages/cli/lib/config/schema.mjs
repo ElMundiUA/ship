@@ -121,6 +121,11 @@ export const PRESETS = Object.freeze([
 
 export const CHANNELS = Object.freeze(["stable", "edge"]);
 
+/* Headless-pivot config spine (ELS-218): mirrors the backend
+ * config_registry scopes `console.surface` / `autonomy.profile`. */
+export const CONSOLE_SURFACES = Object.freeze(["full", "residual", "off"]);
+export const AUTONOMY_PROFILES = Object.freeze(["high", "balanced", "conservative"]);
+
 export const KINDS = Object.freeze(["collection"]);
 
 export const AGENT_IDS = Object.freeze(Object.keys(KNOWN_AGENTS));
@@ -247,6 +252,8 @@ const KNOWN_TOP_LEVEL_V2 = new Set([
   "artifacts",
   "cache",
   "telemetry",
+  "console",
+  "autonomy",
 ]);
 
 /* Back-compat export — keep the old symbol alive so external importers
@@ -261,6 +268,8 @@ const KNOWN_ARTIFACTS = new Set(["pins", "auto_update"]);
 const KNOWN_CACHE = new Set(["vcs_tracked"]);
 const KNOWN_TELEMETRY = new Set(["share", "anonymous_id", "scope"]);
 const KNOWN_TELEMETRY_SCOPE = new Set(["artifact_usage", "improvement_drafts", "errors"]);
+const KNOWN_CONSOLE = new Set(["surface"]);
+const KNOWN_AUTONOMY = new Set(["profile"]);
 
 function isPlainObject(v) {
   return v !== null && typeof v === "object" && !Array.isArray(v);
@@ -1030,6 +1039,38 @@ export function validateConfig(obj) {
             }
           }
         }
+      }
+    }
+  }
+
+  /* console / autonomy — the headless-pivot config spine (ELS-218).
+   * Both blocks are optional; absent means full console + balanced
+   * autonomy. Mirrors the backend config_registry scopes
+   * `console.surface` and `autonomy.profile`. */
+  const consoleBlock = obj.console;
+  if (consoleBlock !== undefined) {
+    if (!isPlainObject(consoleBlock)) {
+      errors.push("console: must be an object");
+    } else {
+      pushUnknownKeyWarnings(consoleBlock, KNOWN_CONSOLE, "console", warnings);
+      if (consoleBlock.surface !== undefined && !CONSOLE_SURFACES.includes(consoleBlock.surface)) {
+        errors.push(
+          `console.surface: ${JSON.stringify(consoleBlock.surface)} is not valid. Expected one of: ${CONSOLE_SURFACES.join(", ")}`,
+        );
+      }
+    }
+  }
+
+  const autonomy = obj.autonomy;
+  if (autonomy !== undefined) {
+    if (!isPlainObject(autonomy)) {
+      errors.push("autonomy: must be an object");
+    } else {
+      pushUnknownKeyWarnings(autonomy, KNOWN_AUTONOMY, "autonomy", warnings);
+      if (autonomy.profile !== undefined && !AUTONOMY_PROFILES.includes(autonomy.profile)) {
+        errors.push(
+          `autonomy.profile: ${JSON.stringify(autonomy.profile)} is not valid. Expected one of: ${AUTONOMY_PROFILES.join(", ")}`,
+        );
       }
     }
   }

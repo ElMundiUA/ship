@@ -56,6 +56,7 @@ import { cn } from "@/lib/cn";
 import { getSessionToken } from "@/lib/api/session";
 
 import { ConfirmStep } from "./confirm-step";
+import { DigitalOceanConnectionCard } from "./digitalocean-connection-card";
 import { DoneStep } from "./done-step";
 import { OnboardingHub } from "./hub";
 import { type RepoCardInitial } from "./repo-card";
@@ -415,9 +416,12 @@ export default async function OnboardingPage({
   let rolesInitial: RolesStepInitial | null = null;
   if (step === "roles" && wsId && apiConfigured) {
     try {
-      const [workspaces, integrations] = await Promise.all([
+      const [workspaces, integrations, activatedRepos] = await Promise.all([
         listWorkspaces(sessionToken ?? undefined),
         listIntegrations(wsId, sessionToken ?? undefined),
+        listActivatedRepos(wsId, sessionToken ?? undefined).catch(
+          () => [] as Awaited<ReturnType<typeof listActivatedRepos>>,
+        ),
       ]);
       const ws = workspaces.find((w) => w.id === wsId);
       // Tracker candidates = integration rows that can play the
@@ -454,6 +458,11 @@ export default async function OnboardingPage({
       }
       rolesInitial = {
         workspaceId: wsId,
+        repos: activatedRepos.map((r) => ({
+          id: r.id,
+          full_name: r.full_name,
+          private: r.private,
+        })),
         trackerCandidates,
         currentTrackerKind,
         currentAgentProfile: ws?.default_agent_profile ?? null,
@@ -466,6 +475,7 @@ export default async function OnboardingPage({
       console.error("[onboarding] roles step load failed", err);
       rolesInitial = {
         workspaceId: wsId,
+        repos: [],
         trackerCandidates: githubAppInstalled ? ["github"] : [],
         currentTrackerKind: null,
         currentAgentProfile: null,
@@ -1292,7 +1302,7 @@ function TrackerStep({
       </h1>
       <p className="mt-3 max-w-2xl text-sm leading-relaxed text-white/70">
         Hook up the tools your team already uses — issue trackers, doc
-        stores, repo hosts. Each one can play more than one role
+        stores, repo hosts, and deployment providers. Each one can play more than one role
         (Linear/Jira track tickets, Confluence/Notion hold docs); you
         pick which integration plays which role on the next step.
         GitHub Issues comes free with the App you installed in step 1.
@@ -1349,6 +1359,7 @@ function TrackerStep({
         ))}
 
       <div className="mt-7 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <DigitalOceanConnectionCard wsId={wsId} />
         {tiles.map((tile) => {
           // Connected = workspace has an Integration row with a token
           // for this kind (or the GitHub App is installed for the
@@ -1583,6 +1594,8 @@ async function loadRepoCardInitial(
       default_branch: repo.default_branch,
       installed_bundle_version: repo.installed_bundle_version,
       current_bundle_version: repo.current_bundle_version,
+      deploy_planner_provider: repo.deploy_planner_provider,
+      deploy_planner_model: repo.deploy_planner_model,
     },
     tracker,
     agents,

@@ -21,13 +21,13 @@ from backend.app.api.v1.routes import (
     artifact_repos,
     audit,
     auth,
-    analytics_dora,
     process_templates,
     chat,
     clarifications,
     config,
-    dashboard,
-    dashboard_live_system,
+    engine_health,
+    deploy,
+    digitalocean_oauth,
     dashboard_priorities,
     distiller,
     github_app,
@@ -52,7 +52,6 @@ from backend.app.api.v1.routes import (
     processes,
     runs,
     policies,
-    repo_home,
     repo_routing,
     repo_secrets,
     repos,
@@ -119,6 +118,17 @@ api_router.include_router(linear_oauth.router)
 api_router.include_router(linear_webhook.router)
 # Notion OAuth (pilot Day 2 — tracker WOW flow). Same shape as Linear.
 api_router.include_router(notion_oauth.router)
+# Deploy routes — trigger + poll deployments (DO App Platform first provider).
+# POST /v1/workspaces/{ws}/repos/{id}/deploy
+# GET  /v1/workspaces/{ws}/deployments/{id}
+# GET  /v1/workspaces/{ws}/repos/{id}/deployments
+api_router.include_router(deploy.router)
+
+# DigitalOcean OAuth (deploy provider — App Platform). Same install/start
+# + install/callback shape as Notion; callback is public so DO's browser
+# redirect can hit it without a session. Writes only native_integration
+# rows (deploy provider, not a tracker) and persists the refresh token.
+api_router.include_router(digitalocean_oauth.router)
 # Telegram bot adapter (group ↔ workspace bridge). Console-facing
 # endpoints only — bind preview/confirm + linked-groups list/delete.
 # The bot worker process talks to ``/v1/workspaces/{ws}/chat/stream``
@@ -132,7 +142,6 @@ api_router.include_router(telegram.router)
 api_router.include_router(runs.router)
 api_router.include_router(runs.public_router)
 api_router.include_router(processes.router)
-api_router.include_router(dashboard.router)
 # Dashboard v2 prioritizer surface (PR-1). GET / POST under
 # ``/v1/workspaces/{ws}/priorities`` — list+reorder of tracker
 # projects, plus the workspace-level autonomy pause toggle.
@@ -142,12 +151,10 @@ api_router.include_router(dashboard_priorities.router)
 # (masthead glyphs, knowledge, routines, daily-digest, specialist
 # health) so the Console doesn't fan out to half a dozen routes
 # on every render.
-api_router.include_router(dashboard_live_system.router)
-api_router.include_router(analytics_dora.router)
+api_router.include_router(engine_health.router)
 # Per-repo Home rollup (RFC-0008 §F — PR-4) — a single snapshot the
 # /r/<slug> page renders as Now + Trends tabs without fanning out to
 # the four source endpoints client-side.
-api_router.include_router(repo_home.router)
 # Process-template surface — ``GET /v1/processes/default`` returns
 # the canonical agent-role bundle Ship installs in every new repo.
 # (Replaced the legacy ``/v1/catalog/default-bundle`` route after

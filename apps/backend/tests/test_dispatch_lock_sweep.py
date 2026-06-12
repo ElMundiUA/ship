@@ -25,7 +25,26 @@ from backend.app.db.models.agent_dispatch import AgentDispatchLock
 from backend.app.db.models.tenancy import AuditLog
 from backend.app.services.dispatch_lock_sweep import (
     sweep_dangling_project_locks,
+    sweep_expired_locks_tick,
 )
+
+
+@pytest.fixture
+def _patch_lock_sweep_sessionmaker(db_session, monkeypatch):
+    """Wire tick helpers to the test's transactional session."""
+    from contextlib import asynccontextmanager
+
+    from backend.app.services import dispatch_lock_sweep
+
+    @asynccontextmanager
+    async def _bound_session_factory():
+        yield db_session
+
+    class _SM:
+        def __call__(self):
+            return _bound_session_factory()
+
+    monkeypatch.setattr(dispatch_lock_sweep, "get_sessionmaker", lambda: _SM())
 
 
 async def _make_workspace(db_session) -> uuid.UUID:
@@ -267,3 +286,136 @@ async def test_lock_without_owning_dispatch_is_left_alone(
 
     released = await sweep_dangling_project_locks(db_session)
     assert released == 0
+
+
+async def _insert_scheduled_lock(
+    db_session,
+    *,
+    workspace_id,
+    key,
+    expires_offset_minutes: int,
+) -> uuid.UUID:
+    """Insert a ``*:scheduled`` lock with a specific ``expires_at``."""
+    now = datetime.now(timezone.utc)
+    claimed_at = now - timedelta(hours=1)
+    expires_at = now + timedelta(minutes=expires_offset_minutes)
+    lock = AgentDispatchLock(
+        workspace_id=workspace_id,
+        key=key,
+        claimed_at=claimed_at,
+        expires_at=expires_at,
+    )
+    db_session.add(lock)
+    await db_session.flush()
+    return lock.id
+
+
+@pytest.mark.asyncio
+async def test_expired_scheduled_lock_swept_on_tick(
+    db_session, _patch_lock_sweep_sessionmaker
+) -> None:
+    """ELS-264 AC#3 — expired ``self-heal:scheduled`` row is deleted."""
+    ws = await _make_workspace(db_session)
+    await _insert_scheduled_lock(
+        db_session,
+        workspace_id=ws,
+        key="self-heal:scheduled",
+        expires_offset_minutes=-60,
+    )
+
+    await sweep_expired_locks_tick()
+
+    remaining = (
+        await db_session.execute(
+            select(AgentDispatchLock).where(
+                AgentDispatchLock.workspace_id == ws,
+                AgentDispatchLock.key == "self-heal:scheduled",
+            )
+        )
+    ).scalars().all()
+    assert remaining == []
+
+
+@pytest.mark.asyncio
+async def test_non_expired_scheduled_lock_preserved(
+    db_session, _patch_lock_sweep_sessionmaker
+) -> None:
+    """Future ``expires_at`` on a bundle lock must survive the TTL tick."""
+    ws = await _make_workspace(db_session)
+    await _insert_scheduled_lock(
+        db_session,
+        workspace_id=ws,
+        key="daily-digest:scheduled",
+        expires_offset_minutes=30,
+    )
+
+    await sweep_expired_locks_tick()
+
+    remaining = (
+        await db_session.execute(
+            select(AgentDispatchLock).where(
+                AgentDispatchLock.workspace_id == ws,
+                AgentDispatchLock.key == "daily-digest:scheduled",
+            )
+        )
+    ).scalars().all()
+    assert len(remaining) == 1
+
+
+@pytest.mark.asyncio
+async def test_expired_lock_tick_deletes_all_namespaces(
+    db_session, _patch_lock_sweep_sessionmaker
+) -> None:
+    """Global TTL sweep removes expired ``ticket:*`` and ``project:*`` rows."""
+    ws = await _make_workspace(db_session)
+    for key in ("ticket:ELS-99", "project:proj-1", "weekly-audit:scheduled"):
+        await _insert_scheduled_lock(
+            db_session,
+            workspace_id=ws,
+            key=key,
+            expires_offset_minutes=-10,
+        )
+
+    await sweep_expired_locks_tick()
+
+    remaining = (
+        await db_session.execute(
+            select(AgentDispatchLock).where(AgentDispatchLock.workspace_id == ws)
+        )
+    ).scalars().all()
+    assert remaining == []
+
+
+@pytest.mark.asyncio
+async def test_agent_dispatch_lock_sweep_tick_runs_ttl_cleanup(
+    db_session, monkeypatch, _patch_lock_sweep_sessionmaker
+) -> None:
+    """Cron wiring — combined tick invokes TTL cleanup before project sweep."""
+    ws = await _make_workspace(db_session)
+    await _insert_scheduled_lock(
+        db_session,
+        workspace_id=ws,
+        key="self-heal:scheduled",
+        expires_offset_minutes=-60,
+    )
+    project_sweep_called = {"value": False}
+
+    async def _stub_project_sweep() -> None:
+        project_sweep_called["value"] = True
+
+    monkeypatch.setattr(
+        "backend.app.services.dispatch_lock_sweep.sweep_dangling_project_locks_tick",
+        _stub_project_sweep,
+    )
+
+    from backend.app.services.cron_jobs import _agent_dispatch_lock_sweep_tick
+
+    await _agent_dispatch_lock_sweep_tick()
+
+    assert project_sweep_called["value"] is True
+    remaining = (
+        await db_session.execute(
+            select(AgentDispatchLock).where(AgentDispatchLock.workspace_id == ws)
+        )
+    ).scalars().all()
+    assert remaining == []

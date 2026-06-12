@@ -9,6 +9,7 @@ artifact-repo wiring follow in subsequent slices.
 from __future__ import annotations
 
 import copy
+import logging
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
@@ -568,6 +569,37 @@ async def delete_workspace(
         )
     )
     await session.flush()
+
+    # Orphan-billing guard: tear down live cloud deployments BEFORE the cascade
+    # drops their rows + provider token. This is billing-critical, so workspace
+    # deletion is blocked if provider teardown cannot be confirmed.
+    try:
+        from backend.app.services.deploy.teardown import teardown_workspace_apps
+
+        res = await teardown_workspace_apps(session, workspace_id)
+        if res.failed_app_ids:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=(
+                    "Could not delete all cloud apps for this workspace. "
+                    "Workspace deletion was stopped so billing handles are not lost."
+                ),
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger(__name__).exception(
+            "workspace %s delete: deploy teardown raised; blocking delete",
+            workspace_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=(
+                "Could not confirm cloud teardown for this workspace. "
+                "Workspace deletion was stopped so billing handles are not lost."
+            ),
+        ) from exc
+
     await session.delete(workspace)
     await session.flush()
     return Response(status_code=status.HTTP_204_NO_CONTENT)

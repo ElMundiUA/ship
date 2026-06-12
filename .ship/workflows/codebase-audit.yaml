@@ -1,0 +1,52 @@
+# Nightly codebase audit: enumerate hotspots → parallel audits →
+# judge ranks tech-debt items (W8.8, dogfood). Fired via cron
+# (trigger c).
+name: codebase-audit
+version: "1"
+inputs:
+  focus: string
+max_fanout: 3
+max_depth: 2
+steps:
+  - id: enumerate
+    kind: pipeline
+    agent: {kind: coding, provider: claude}
+    inputs:
+      routine_id: weekly-audit
+      focus: "{{ inputs.focus }}"
+  - id: audits
+    kind: parallel
+    needs: [enumerate]
+    steps:
+      - id: audit.complexity
+        kind: pipeline
+        agent: {kind: reasoning, role: tech-architect}
+        inputs: {hotspots: "{{ steps.enumerate.output }}", lens: complexity}
+      - id: audit.coupling
+        kind: pipeline
+        agent: {kind: reasoning, role: tech-architect}
+        inputs: {hotspots: "{{ steps.enumerate.output }}", lens: coupling}
+      - id: audit.test-gaps
+        kind: pipeline
+        agent: {kind: reasoning, role: qa-architect}
+        inputs: {hotspots: "{{ steps.enumerate.output }}", lens: test-gaps}
+  - id: rank
+    kind: judge
+    needs: [audits]
+    inputs:
+      complexity: "{{ steps.audit.complexity.output }}"
+      coupling: "{{ steps.audit.coupling.output }}"
+      test_gaps: "{{ steps.audit.test-gaps.output }}"
+    output_schema:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            required: [rank, title]
+            properties:
+              rank: {type: integer}
+              title: {type: string}
+              effort: {type: string}

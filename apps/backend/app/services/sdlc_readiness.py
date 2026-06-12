@@ -351,12 +351,20 @@ async def file_bootstrap_recommendation(
             f"{len(report.external_checklist)} setup step(s) need you."
         )
 
-    item = InboxItem(
+    from backend.app.services.notify import (
+        NotifyChannel,
+        NotifyLevel,
+        notify,
+    )
+
+    notify_result = await notify(
+        session,
         workspace_id=repo.workspace_id,
         repo_id=repo.id,
-        type="improvement",
         title=f"Set up {report.project_type} SDLC for {repo.full_name}"[:255],
-        summary=" ".join(summary_parts),
+        body=" ".join(summary_parts),
+        level=NotifyLevel.INFO,
+        dedup_key=handle,
         payload={
             "kind": "bootstrap_readiness",
             "project_type": report.project_type,
@@ -392,15 +400,15 @@ async def file_bootstrap_recommendation(
             ],
             "resolution_mode": "single_choice",
         },
-        status="new",
-        category="attention",
-        priority=30,
-        intake_handle=handle,
-        intake_reason="bootstrap_readiness",
+        inbox_overrides={
+            "category": "attention",
+            "priority": 30,
+            "intake_reason": "bootstrap_readiness",
+        },
     )
-    session.add(item)
     await session.flush()
-    return item
+    inbox = notify_result.for_channel(NotifyChannel.INBOX)
+    return inbox.inbox_item if inbox else None
 
 
 __all__ = [
