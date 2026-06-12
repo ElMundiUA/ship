@@ -1577,10 +1577,19 @@ async function fetchWorkspaceAgentProvider({ apiBase, apiToken, workspaceId }) {
 }
 
 
-export function renderPrompt({ patternBody, baseBody, role, routineSpec, task, fsmStage, fileOverlapWarnings = "", finishCtx }) {
-  const issueRef = task?.ticket_ref ? task.ticket_ref : "(no ticket)";
-  const title = task?.title || "";
-  const description = task?.body || "";
+export function renderPrompt({ patternBody, baseBody, role, routineSpec, task, fsmStage, fileOverlapWarnings = "", finishCtx, mode = "ticket", localAsk = "" }) {
+  // ``mode: "local"`` (ELS-246) renders the trigger-(a) scratch-run
+  // variant: same system base + role body + lifecycle hooks, but NO
+  // ticket block and NO sidecar/finish/PR exit protocol — the local
+  // executor stops before any push. The ticket path is untouched.
+  const local = mode === "local";
+  const issueRef = local
+    ? "(local scratch session — no ticket)"
+    : task?.ticket_ref ? task.ticket_ref : "(no ticket)";
+  const title = local
+    ? (localAsk.trim().split("\n", 1)[0] || "Local scratch session")
+    : task?.title || "";
+  const description = local ? localAsk : task?.body || "";
 
   // Pattern-template substitution. Order matters: expand {{BASE}} first
   // so any further {{ROLE}} / {{SKILLS_CONTEXT}} placeholders inside
@@ -1615,8 +1624,14 @@ export function renderPrompt({ patternBody, baseBody, role, routineSpec, task, f
   }
   out.push(expanded.trim());
   out.push("");
-  out.push(renderLifecycleHooks());
-  if (task) {
+  out.push(renderLifecycleHooks({ local }));
+  if (local && localAsk.trim()) {
+    out.push("");
+    out.push("## Operator ask");
+    out.push("");
+    out.push(localAsk.trim());
+  }
+  if (task && !local) {
     // ELS-86: parent project context (Brief / WBS / Architecture /
     // Test architecture / Tasks). The server lifts and caps it; we
     // render it BEFORE the per-ticket block so the agent sees the
@@ -1651,12 +1666,12 @@ export function renderPrompt({ patternBody, baseBody, role, routineSpec, task, f
     }
   }
   out.push("");
-  out.push(renderExitProtocol(finishCtx));
+  out.push(local ? renderLocalScratchProtocol() : renderExitProtocol(finishCtx));
   return out.join("\n");
 }
 
 
-function renderLifecycleHooks() {
+function renderLifecycleHooks({ local = false } = {}) {
   // Phase 4: every run is bracketed by two auditable lifecycle hooks
   // — knowledge-fetch first, knowledge-feedback last. We render them
   // as explicit prompt instructions so they show up in the agent's
@@ -1673,13 +1688,41 @@ function renderLifecycleHooks() {
     "tool call wasn't a knowledge fetch; do not skip this to save",
     "tokens.",
     "",
-    "**Last call — knowledge feedback.** Before calling the finish",
-    "endpoint, leave one-line learnings via the Ship knowledge",
+    local
+      ? "**Last call — knowledge feedback.** Before your session ends,"
+      : "**Last call — knowledge feedback.** Before calling the finish\nendpoint,",
+    "leave one-line learnings via the Ship knowledge",
     "feedback channel (`shipctl feedback draft` → `feedback submit`)",
     "if you discovered something a future run on this codebase would",
     "want to know. Empty findings are a valid outcome — better no",
     "feedback than fabricated polish.",
   ].join("\n");
+}
+
+
+function renderLocalScratchProtocol() {
+  // Trigger-(a) contract (ELS-246): the scratch session edits the
+  // throwaway tree and stops. Escalation is a SUGGESTION to the
+  // operator (E20 pattern) — never a block, never an automatic
+  // ticket.
+  return `## Local scratch run — required behavior
+
+This is a **local scratch run**: a throwaway checkout, no ticket, no
+lease, no lifecycle state. When you are done editing, just stop.
+
+- Do **not** push any branch or commit to any remote.
+- Do **not** open a pull request.
+- Do **not** call any Ship finish endpoint or write any
+  \`.ship/agent-finish.json\` sidecar — there is no runner contract
+  here; the operator reviews the scratch diff directly.
+- Commit locally inside the scratch tree if it helps you organize the
+  work; the tree itself is disposable.
+
+If the ask turns out to be a **big feature** (multi-file change that
+deserves review, tests, and a PR), finish what is reasonable locally
+and tell the operator — in your final message — that this belongs in
+a tracked ticket and they should escalate (\`shipctl local\` offers
+escalation). Suggest; do not refuse the local work.`;
 }
 
 
