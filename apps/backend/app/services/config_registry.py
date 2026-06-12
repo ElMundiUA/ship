@@ -156,6 +156,24 @@ async def _write_autonomy_profile(_s: AsyncSession, ws: Workspace, value: Any) -
     ws.autonomy = str(value)
 
 
+async def _read_local_executor_enabled(_s: AsyncSession, ws: Workspace) -> Any:
+    raw = (ws.settings or {}).get("local_executor") or {}
+    return bool(raw.get("enabled", False))
+
+
+async def _write_local_executor_enabled(
+    _s: AsyncSession, ws: Workspace, value: Any
+) -> None:
+    if not isinstance(value, bool):
+        raise ValueError("local_executor.enabled must be a boolean")
+    settings = dict(ws.settings or {})
+    local_executor = dict(settings.get("local_executor") or {})
+    local_executor["enabled"] = value
+    settings["local_executor"] = local_executor
+    # Reassign (not mutate) so SQLAlchemy's JSONB change detection fires.
+    ws.settings = settings
+
+
 _CATALOG_KEYS = ("global", "workspace", "project")
 
 
@@ -285,6 +303,25 @@ _SCOPE_LIST: tuple[ConfigScope, ...] = (
         read=_read_autonomy_profile,
         write=_write_autonomy_profile,
         audit_event="workspace.autonomy.set",
+    ),
+    ConfigScope(
+        slug="local_executor.enabled",
+        description=(
+            "Whether ``shipctl local`` (trigger-(a) scratch sessions: "
+            "no ticket, no lease, stop-before-push) may run for this "
+            "workspace. FOUNDER DECISION: default-OFF everywhere — "
+            "``autonomy.profile: high`` does NOT auto-enable it."
+        ),
+        schema={
+            "type": "boolean",
+            "description": (
+                "Opt-in flag for the local synchronous executor. "
+                "Independent of the autonomy dial by design."
+            ),
+        },
+        read=_read_local_executor_enabled,
+        write=_write_local_executor_enabled,
+        audit_event="workspace.local_executor_enabled.set",
     ),
 )
 
