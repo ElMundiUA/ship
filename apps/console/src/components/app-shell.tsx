@@ -3,8 +3,11 @@
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import {
+  createContext,
   type ReactNode,
   Suspense,
+  useCallback,
+  useContext,
   useEffect,
   useRef,
   useState,
@@ -145,6 +148,236 @@ function DotIcon() {
       aria-hidden
       className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-current opacity-70"
     />
+  );
+}
+
+type MobileNavContextValue = {
+  open: boolean;
+  setOpen: (next: boolean) => void;
+  toggle: () => void;
+  menuButtonRef: React.RefObject<HTMLButtonElement | null>;
+};
+
+const MobileNavContext = createContext<MobileNavContextValue | null>(null);
+
+function useMobileNav(): MobileNavContextValue | null {
+  return useContext(MobileNavContext);
+}
+
+function MobileNavMenuButton() {
+  const nav = useMobileNav();
+  if (!nav) return null;
+  return (
+    <button
+      ref={nav.menuButtonRef}
+      type="button"
+      className="grid h-10 w-10 shrink-0 place-items-center rounded-lg border border-white/10 bg-white/[0.04] text-white/80 transition hover:bg-white/[0.08] hover:text-white lg:hidden"
+      aria-label="Open navigation menu"
+      aria-expanded={nav.open}
+      aria-controls="mobile-nav-drawer"
+      onClick={nav.toggle}
+    >
+      <svg
+        aria-hidden
+        viewBox="0 0 24 24"
+        className="h-5 w-5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+      >
+        <path d="M4 7h16M4 12h16M4 17h16" />
+      </svg>
+    </button>
+  );
+}
+
+type SidebarPanelProps = {
+  wsLabel: string;
+  wsKicker: string;
+  wsOpen: boolean;
+  setWsOpen: (next: boolean | ((prev: boolean) => boolean)) => void;
+  pathname: string | null;
+  workspace?: AppShellWorkspace;
+  allWorkspaces?: AppShellWorkspace[];
+  multiWorkspace: boolean;
+  withWorkspaceHref: (href: string) => string;
+  nav: NavGroup[];
+  allNavHrefs: string[];
+  repoChip: { slug: string } | null;
+  userInfo: AppShellUser;
+  onNavInteract?: () => void;
+};
+
+function SidebarPanel({
+  wsLabel,
+  wsKicker,
+  wsOpen,
+  setWsOpen,
+  pathname,
+  workspace,
+  allWorkspaces,
+  multiWorkspace,
+  withWorkspaceHref,
+  nav,
+  allNavHrefs,
+  repoChip,
+  userInfo,
+  onNavInteract,
+}: SidebarPanelProps) {
+  const onPickWorkspace = () => {
+    setWsOpen(false);
+    onNavInteract?.();
+  };
+  return (
+    <>
+      <div className="border-b border-white/10 px-4 py-5">
+        <Link
+          href={withWorkspaceHref("/")}
+          className="font-display text-base font-bold tracking-tight text-white"
+          onClick={onNavInteract}
+        >
+          Ship<span className="text-aqua">.</span>
+          <span className="ml-1 rounded-md border border-aqua/40 bg-aqua/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-widest text-aqua/90">
+            cloud
+          </span>
+        </Link>
+      </div>
+
+      <WorkspaceSwitcherBlock
+        wsLabel={wsLabel}
+        wsKicker={wsKicker}
+        wsOpen={wsOpen}
+        setWsOpen={setWsOpen}
+        pathname={pathname}
+        workspace={workspace}
+        allWorkspaces={allWorkspaces}
+        multiWorkspace={multiWorkspace}
+        withWorkspaceHref={withWorkspaceHref}
+        onPick={onPickWorkspace}
+      />
+
+      {repoChip && (
+        <div className="border-b border-white/10 px-3 py-3">
+          <Link
+            href={withWorkspaceHref("/")}
+            className="mb-2 inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-widest text-white/45 hover:text-white"
+            title="Back to workspace home"
+            onClick={onNavInteract}
+          >
+            <span aria-hidden>←</span>
+            <span>Workspace</span>
+          </Link>
+          <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-2">
+            <span className="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-gradient-to-br from-lilac via-aqua to-coral text-[10px] font-bold text-ink">
+              {initialsOf(repoChip.slug.split("/", 1)[0] ?? repoChip.slug)}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-[10px] font-semibold uppercase tracking-widest text-white/45">
+                {repoChip.slug.split("/", 1)[0]}
+              </span>
+              <span className="block truncate text-sm font-semibold text-white">
+                {repoChip.slug.split("/").slice(1).join("/") || repoChip.slug}
+              </span>
+            </span>
+          </div>
+        </div>
+      )}
+
+      <nav className="flex-1 overflow-y-auto px-2 py-3">
+        {nav.map((group) => (
+          <div key={group.section} className="mb-4">
+            <div className="px-3 pb-1.5 text-[10px] font-bold uppercase tracking-[0.18em] text-white/35">
+              {group.section}
+            </div>
+            <ul className="space-y-0.5">
+              {group.items.map((item) => {
+                const active = isNavItemActive(pathname, item.href, allNavHrefs);
+                return (
+                  <li key={item.href}>
+                    <Link
+                      href={withWorkspaceHref(item.href)}
+                      aria-current={active ? "page" : undefined}
+                      onClick={onNavInteract}
+                      className={cn(
+                        "flex items-center gap-2.5 rounded-md px-3 py-1.5 text-sm transition",
+                        active
+                          ? "bg-white/[0.08] text-white shadow-[inset_2px_0_0_theme(colors.aqua)]"
+                          : "text-white/65 hover:bg-white/[0.04] hover:text-white",
+                      )}
+                    >
+                      <span className={active ? "text-aqua" : "text-white/50"}>
+                        {item.icon}
+                      </span>
+                      <span className="flex-1 truncate">{item.label}</span>
+                      {item.badge && (
+                        <span className="rounded-full bg-coral/20 px-1.5 py-px text-[10px] font-bold text-coral">
+                          {item.badge}
+                        </span>
+                      )}
+                    </Link>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        ))}
+      </nav>
+
+      {SHIP_FEEDBACK_URL ? (
+        <div className="border-t border-white/10 px-3 py-2">
+          <a
+            href={SHIP_FEEDBACK_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="block rounded-md px-2 py-1.5 text-[11px] font-semibold text-aqua/90 transition hover:bg-white/[0.04] hover:text-aqua"
+          >
+            {SHIP_FEEDBACK_LABEL}
+            <span className="ml-1 text-white/45" aria-hidden>
+              ↗
+            </span>
+          </a>
+          <p className="mt-0.5 px-2 text-[10px] leading-snug text-white/35">
+            Bugs and product ideas for Ship itself.
+          </p>
+        </div>
+      ) : null}
+
+      <div className="border-t border-white/10 p-3">
+        <div className="flex items-center gap-2 rounded-md px-2 py-1.5">
+          <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-gradient-to-br from-aqua via-lilac to-coral text-[10px] font-bold text-ink">
+            {userInfo.initials}
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-xs font-semibold text-white">
+              {userInfo.name}
+            </div>
+            <div className="truncate text-[10px] text-white/40">
+              {userInfo.email}
+            </div>
+          </div>
+          <Link
+            href={withWorkspaceHref("/settings")}
+            className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-xl text-white/55 transition hover:bg-white/10 hover:text-white"
+            aria-label="Workspace settings"
+            title="Workspace settings"
+            onClick={onNavInteract}
+          >
+            ⚙︎
+          </Link>
+          <form action="/logout" method="POST" className="contents">
+            <button
+              type="submit"
+              className="rounded-md p-1 text-white/40 hover:bg-white/5 hover:text-white"
+              aria-label="Sign out"
+              title="Sign out"
+            >
+              ⎋
+            </button>
+          </form>
+        </div>
+      </div>
+    </>
   );
 }
 
@@ -299,6 +532,38 @@ export function AppShellChrome({
 }) {
   const pathname = usePathname();
   const [wsOpen, setWsOpen] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const menuButtonRef = useRef<HTMLButtonElement | null>(null);
+  const closeMobileNav = useCallback(() => {
+    setMobileNavOpen(false);
+    menuButtonRef.current?.focus();
+  }, []);
+  const toggleMobileNav = useCallback(() => {
+    setMobileNavOpen((open) => !open);
+  }, []);
+
+  useEffect(() => {
+    setMobileNavOpen(false);
+  }, [pathname]);
+
+  useEffect(() => {
+    if (!mobileNavOpen) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [mobileNavOpen]);
+
+  useEffect(() => {
+    if (!mobileNavOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      closeMobileNav();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [mobileNavOpen, closeMobileNav]);
   const defaultWs = { name: "Workspace", org: "Organization" };
   // The layout passes ``workspace`` based on the SSR cookie, but
   // middleware can't update the cookie *for the same request* — so
@@ -384,6 +649,29 @@ export function AppShellChrome({
       }
     : null;
 
+  const sidebarProps: SidebarPanelProps = {
+    wsLabel,
+    wsKicker,
+    wsOpen,
+    setWsOpen,
+    pathname,
+    workspace: effectiveWorkspace,
+    allWorkspaces,
+    multiWorkspace,
+    withWorkspaceHref,
+    nav: NAV,
+    allNavHrefs,
+    repoChip,
+    userInfo,
+  };
+
+  const mobileNavContext: MobileNavContextValue = {
+    open: mobileNavOpen,
+    setOpen: setMobileNavOpen,
+    toggle: toggleMobileNav,
+    menuButtonRef,
+  };
+
   return (
     // No ``bg-ink`` here — the body already paints the brand radials
     // (lilac top-centre, gold top-right, coral mid-left) and an ink fill
@@ -394,149 +682,33 @@ export function AppShellChrome({
         {/* sidebar — semi-translucent so the body radials still bleed
             through, with the same inset blik landing's panels use. */}
         <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-white/10 bg-black/20 shadow-[inset_-1px_0_0_rgba(255,255,255,0.04)] backdrop-blur-xl lg:flex">
-          <div className="border-b border-white/10 px-4 py-5">
-            <Link
-              href={withWorkspaceHref("/")}
-              className="font-display text-base font-bold tracking-tight text-white"
-            >
-              Ship<span className="text-aqua">.</span>
-              <span className="ml-1 rounded-md border border-aqua/40 bg-aqua/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-widest text-aqua/90">
-                cloud
-              </span>
-            </Link>
-          </div>
-
-          <WorkspaceSwitcherBlock
-            wsLabel={wsLabel}
-            wsKicker={wsKicker}
-            wsOpen={wsOpen}
-            setWsOpen={setWsOpen}
-            pathname={pathname}
-            workspace={effectiveWorkspace}
-            allWorkspaces={allWorkspaces}
-            multiWorkspace={multiWorkspace}
-            withWorkspaceHref={withWorkspaceHref}
-          />
-
-          {repoChip && (
-            <div className="border-b border-white/10 px-3 py-3">
-              <Link
-                href={withWorkspaceHref("/")}
-                className="mb-2 inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-widest text-white/45 hover:text-white"
-                title="Back to workspace home"
-              >
-                <span aria-hidden>←</span>
-                <span>Workspace</span>
-              </Link>
-              <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-2">
-                <span className="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-gradient-to-br from-lilac via-aqua to-coral text-[10px] font-bold text-ink">
-                  {initialsOf(
-                    repoChip.slug.split("/", 1)[0] ?? repoChip.slug,
-                  )}
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[10px] font-semibold uppercase tracking-widest text-white/45">
-                    {repoChip.slug.split("/", 1)[0]}
-                  </span>
-                  <span className="block truncate text-sm font-semibold text-white">
-                    {repoChip.slug.split("/").slice(1).join("/") ||
-                      repoChip.slug}
-                  </span>
-                </span>
-              </div>
-            </div>
-          )}
-
-          <nav className="flex-1 overflow-y-auto px-2 py-3">
-            {NAV.map((group) => (
-              <div key={group.section} className="mb-4">
-                <div className="px-3 pb-1.5 text-[10px] font-bold uppercase tracking-[0.18em] text-white/35">
-                  {group.section}
-                </div>
-                <ul className="space-y-0.5">
-                  {group.items.map((item) => {
-                    const active = isNavItemActive(pathname, item.href, allNavHrefs);
-                    return (
-                      <li key={item.href}>
-                        <Link
-                          href={withWorkspaceHref(item.href)}
-                          aria-current={active ? "page" : undefined}
-                          className={cn(
-                            "flex items-center gap-2.5 rounded-md px-3 py-1.5 text-sm transition",
-                            active
-                              ? "bg-white/[0.08] text-white shadow-[inset_2px_0_0_theme(colors.aqua)]"
-                              : "text-white/65 hover:bg-white/[0.04] hover:text-white"
-                          )}
-                        >
-                          <span className={active ? "text-aqua" : "text-white/50"}>{item.icon}</span>
-                          <span className="flex-1 truncate">{item.label}</span>
-                          {item.badge && (
-                            <span className="rounded-full bg-coral/20 px-1.5 py-px text-[10px] font-bold text-coral">
-                              {item.badge}
-                            </span>
-                          )}
-                        </Link>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </div>
-            ))}
-          </nav>
-
-          {SHIP_FEEDBACK_URL ? (
-            <div className="border-t border-white/10 px-3 py-2">
-              <a
-                href={SHIP_FEEDBACK_URL}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="block rounded-md px-2 py-1.5 text-[11px] font-semibold text-aqua/90 transition hover:bg-white/[0.04] hover:text-aqua"
-              >
-                {SHIP_FEEDBACK_LABEL}
-                <span className="ml-1 text-white/45" aria-hidden>
-                  ↗
-                </span>
-              </a>
-              <p className="mt-0.5 px-2 text-[10px] leading-snug text-white/35">
-                Bugs and product ideas for Ship itself.
-              </p>
-            </div>
-          ) : null}
-
-          <div className="border-t border-white/10 p-3">
-            <div className="flex items-center gap-2 rounded-md px-2 py-1.5">
-              <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-gradient-to-br from-aqua via-lilac to-coral text-[10px] font-bold text-ink">
-                {userInfo.initials}
-              </span>
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-xs font-semibold text-white">{userInfo.name}</div>
-                <div className="truncate text-[10px] text-white/40">{userInfo.email}</div>
-              </div>
-              <Link
-                href={withWorkspaceHref("/settings")}
-                className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-xl text-white/55 transition hover:bg-white/10 hover:text-white"
-                aria-label="Workspace settings"
-                title="Workspace settings"
-              >
-                ⚙︎
-              </Link>
-              <form action="/logout" method="POST" className="contents">
-                <button
-                  type="submit"
-                  className="rounded-md p-1 text-white/40 hover:bg-white/5 hover:text-white"
-                  aria-label="Sign out"
-                  title="Sign out"
-                >
-                  ⎋
-                </button>
-              </form>
-            </div>
-          </div>
+          <SidebarPanel {...sidebarProps} />
         </aside>
+
+        {mobileNavOpen ? (
+          <div
+            className="fixed inset-0 z-50 lg:hidden"
+            role="dialog"
+            aria-modal="true"
+            id="mobile-nav-drawer"
+          >
+            <button
+              type="button"
+              className="absolute inset-0 bg-black/60"
+              aria-label="Close navigation menu"
+              onClick={closeMobileNav}
+            />
+            <aside className="relative flex h-full w-[min(100%,20rem)] max-w-full flex-col border-r border-white/10 bg-black/20 shadow-[inset_-1px_0_0_rgba(255,255,255,0.04)] backdrop-blur-xl">
+              <SidebarPanel {...sidebarProps} onNavInteract={closeMobileNav} />
+            </aside>
+          </div>
+        ) : null}
 
         {/* main column */}
         <div className="flex min-w-0 flex-1 flex-col">
-          <main className="flex flex-col">{children}</main>
+          <MobileNavContext.Provider value={mobileNavContext}>
+            <main className="flex flex-col">{children}</main>
+          </MobileNavContext.Provider>
         </div>
       </div>
       {effectiveWorkspace?.id ? (
@@ -566,6 +738,7 @@ export function PageHeader({
   return (
     <header className="sticky top-0 z-40 border-b border-white/10 bg-ink/60 shadow-[inset_0_-1px_0_rgba(255,255,255,0.04)] backdrop-blur-xl">
       <div className="flex items-center gap-3 px-6 py-4 lg:px-8">
+        <MobileNavMenuButton />
         <div className="relative min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             {scopePill}
@@ -622,6 +795,7 @@ function WorkspaceSwitcherBlock({
   allWorkspaces,
   multiWorkspace,
   withWorkspaceHref,
+  onPick,
 }: {
   wsLabel: string;
   wsKicker: string;
@@ -632,6 +806,7 @@ function WorkspaceSwitcherBlock({
   allWorkspaces?: AppShellWorkspace[];
   multiWorkspace: boolean;
   withWorkspaceHref: (href: string) => string;
+  onPick?: () => void;
 }) {
   const ref = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -679,7 +854,10 @@ function WorkspaceSwitcherBlock({
             allWorkspaces={allWorkspaces}
             multiWorkspace={multiWorkspace}
             withWorkspaceHref={withWorkspaceHref}
-            onPick={() => setWsOpen(false)}
+            onPick={() => {
+              setWsOpen(false);
+              onPick?.();
+            }}
           />
         </Suspense>
       )}
