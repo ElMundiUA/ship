@@ -61,9 +61,53 @@ _TEXT_MIMES: frozenset[str] = frozenset(
 
 ALLOWED_MIME_TYPES: frozenset[str] = _IMAGE_MIMES | _PDF_MIMES | _TEXT_MIMES
 
+_GENERIC_MIMES: frozenset[str] = frozenset({"", "application/octet-stream"})
+
+# Extension fallback when browsers omit ``File.type`` (common for .md).
+EXTENSION_TO_MIME: dict[str, str] = {
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "png": "image/png",
+    "webp": "image/webp",
+    "gif": "image/gif",
+    "pdf": "application/pdf",
+    "md": "text/markdown",
+    "txt": "text/plain",
+    "csv": "text/csv",
+    "json": "application/json",
+    "yaml": "application/yaml",
+    "yml": "application/yaml",
+}
+
 MAX_SIZE_BYTES_PER_FILE: int = 10 * 1024 * 1024      # 10 MiB
 MAX_TOTAL_BYTES_PER_MESSAGE: int = 30 * 1024 * 1024  # 30 MiB
 MAX_FILES_PER_MESSAGE: int = 5
+
+
+def _extension_mime(filename: str) -> str | None:
+    """Map a whitelisted file extension to its canonical MIME, or None."""
+    if not filename or "." not in filename:
+        return None
+    ext = filename.rsplit(".", 1)[-1].lower()
+    return EXTENSION_TO_MIME.get(ext)
+
+
+def resolve_mime(filename: str, reported_mime: str | None) -> str:
+    """Resolve the canonical MIME for an upload.
+
+    Browsers often leave ``File.type`` empty for ``.md`` and other text
+    formats. When the reported type is missing or generic, infer from
+    the filename extension. Explicit whitelisted types are preserved;
+    disallowed reported types fall back to extension when possible.
+    """
+    mime = (reported_mime or "").strip()
+    if mime in ALLOWED_MIME_TYPES:
+        return mime
+    inferred = _extension_mime(filename)
+    if mime in _GENERIC_MIMES or mime not in ALLOWED_MIME_TYPES:
+        if inferred is not None:
+            return inferred
+    return mime or "application/octet-stream"
 
 
 def classify_kind(mime: str) -> str:
@@ -124,9 +168,11 @@ def validate_upload(
 __all__ = [
     "ALLOWED_MIME_TYPES",
     "AttachmentPolicyError",
+    "EXTENSION_TO_MIME",
     "MAX_FILES_PER_MESSAGE",
     "MAX_SIZE_BYTES_PER_FILE",
     "MAX_TOTAL_BYTES_PER_MESSAGE",
     "classify_kind",
+    "resolve_mime",
     "validate_upload",
 ]

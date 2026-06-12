@@ -781,6 +781,7 @@ async def chat_stream(
             MAX_TOTAL_BYTES_PER_MESSAGE,
             persist_attachment,
         )
+        from backend.app.services.attachments.policy import resolve_mime
         from backend.app.services.agent.client import MessageAttachment
 
         if len(files) > MAX_FILES_PER_MESSAGE:
@@ -805,7 +806,10 @@ async def chat_stream(
                     workspace_id=workspace_id,
                     message_id=user_msg.id,
                     filename=upload.filename or "attachment",
-                    mime=upload.content_type or "application/octet-stream",
+                    mime=resolve_mime(
+                        upload.filename or "attachment",
+                        upload.content_type,
+                    ),
                     data=data,
                 )
             except AttachmentPolicyError as exc:

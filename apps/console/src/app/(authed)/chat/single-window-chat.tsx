@@ -56,6 +56,10 @@ import {
 
 import { ChatMarkdown, ChoiceProvider } from "./chat-markdown";
 import {
+  isAllowedAttachment,
+  resolveMime,
+} from "@/lib/attachment-policy";
+import {
   JsonFallback,
   TOOL_RENDERERS,
   friendlyToolVerb,
@@ -985,31 +989,23 @@ export function SingleWindowChat({
       // ``backend.app.services.attachments.policy``. The client-side
       // copy lets us reject in the composer without round-tripping a
       // 5 MiB image to discover it was the wrong MIME.
-      const ALLOWED = new Set([
-        "image/jpeg",
-        "image/png",
-        "image/webp",
-        "image/gif",
-        "application/pdf",
-        "text/markdown",
-        "text/plain",
-        "text/csv",
-        "application/json",
-        "application/yaml",
-        "application/x-yaml",
-      ]);
       const MAX_FILES = 5;
       const MAX_PER_FILE = 10 * 1024 * 1024;
       const MAX_TOTAL = 30 * 1024 * 1024;
       setAttachError(null);
-      const combined = [...pendingFiles, ...incoming];
+      const normalizedIncoming = incoming.map((f) => {
+        const mime = resolveMime(f.name, f.type);
+        if (mime === f.type) return f;
+        return new File([f], f.name, { type: mime });
+      });
+      const combined = [...pendingFiles, ...normalizedIncoming];
       if (combined.length > MAX_FILES) {
         setAttachError(`Up to ${MAX_FILES} files per message.`);
         return;
       }
       let total = 0;
       for (const f of combined) {
-        if (!ALLOWED.has(f.type)) {
+        if (!isAllowedAttachment(f.name, f.type)) {
           setAttachError(
             `${f.name}: type ${f.type || "unknown"} isn't supported. ` +
               "Allowed: jpeg/png/webp/gif, PDF, txt/md/csv/json/yaml.",
