@@ -27,7 +27,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.app.db.base import Base
@@ -117,5 +117,67 @@ class TelegramThreadMap(Base):
         UUID(as_uuid=True),
         ForeignKey("chat_threads.id", ondelete="CASCADE"),
         nullable=False,
+    )
+    created_at: Mapped[datetime] = _ts_created()
+
+
+class TelegramPendingAction(Base):
+    """Durable store for inline-keyboard option lists (ELS-252).
+
+    Replaces the process-local ``_CHOICE_CACHE``: leader failover /
+    deploy / autoscale used to wipe the cache and leave every
+    previously-attached keyboard dead-on-click. One row per attached
+    keyboard; the row id travels inside the signed ``callback_data``
+    (ELS-253) and the option list lives here, safely past Telegram's
+    64-byte callback cap.
+
+    Single-use: ``consumed_at`` is claimed atomically on the first
+    valid click (UPDATE … WHERE consumed_at IS NULL); a second click
+    with the same nonce loses the race and is answered as stale.
+
+    Deliberately NOT an ``inbox_items`` row — chat plumbing must never
+    leak into the operator's Console Inbox views (the founder-flagged
+    pollution risk in ELS-252).
+    """
+
+    __tablename__ = "telegram_pending_actions"
+    __table_args__ = (
+        UniqueConstraint("token_nonce", name="uq_telegram_pending_nonce"),
+        Index(
+            "ix_telegram_pending_chat_message",
+            "telegram_chat_id",
+            "bot_message_id",
+        ),
+        Index("ix_telegram_pending_workspace", "workspace_id"),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    telegram_chat_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    bot_message_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    # Navigator thread the buttons belong to (resolved at click time
+    # from telegram_thread_map historically; cached here so the click
+    # handler has one read).
+    ship_thread_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("chat_threads.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    # [{"label": "...", "value": "..."}, ...] in button order.
+    options: Mapped[list] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    # Random server-side nonce mixed into the callback HMAC — a forged
+    # callback_data can't be signed without it + the JWT secret.
+    token_nonce: Mapped[str] = mapped_column(String(64), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    consumed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
     created_at: Mapped[datetime] = _ts_created()

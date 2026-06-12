@@ -251,6 +251,29 @@ class Settings(BaseSettings):
     tracker_poll_fire: bool = Field(
         default=False, alias="SHIP_TRACKER_POLL_FIRE"
     )
+    # Global kill-switch for the notification seam (ELS-219). While
+    # ``False`` the ``notify()`` router forces inbox-only regardless
+    # of per-workspace channel routing — instant global rollback for
+    # the Linear/email egress channels. Same shadow-then-fire pattern
+    # as ``tracker_poll_fire`` above.
+    notification_channels_enabled: bool = Field(
+        default=False, alias="SHIP_NOTIFY_CHANNELS"
+    )
+    # Stall notifier (ELS-231): forward engine_health stalls through
+    # notify() on a schedule. Off by default — the residue surface is
+    # query-only until an operator opts into push.
+    stall_notify_enabled: bool = Field(
+        default=False, alias="SHIP_STALL_NOTIFY"
+    )
+    stall_notify_cooldown_minutes: int = Field(
+        default=360, alias="SHIP_STALL_NOTIFY_COOLDOWN_MIN"
+    )
+    # StateProjector strangler (ELS-229): when on, every FSM->tracker
+    # status write funnels through services/state_projector.py. Off
+    # (default) keeps the original direct gateway.transition paths.
+    state_projector_unified: bool = Field(
+        default=False, alias="SHIP_STATE_PROJECTOR_UNIFIED"
+    )
 
     # --- Auth0 (used when auth_mode == "auth0") ---
     auth0_domain: str | None = Field(default=None, alias="AUTH0_DOMAIN")

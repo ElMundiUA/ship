@@ -163,6 +163,17 @@ class CronLockId(IntEnum):
     # vanished from DigitalOcean flips to red + an activity event, so cards
     # never show a stale green. See :mod:`services.deploy.reconcile`.
     DEPLOYMENTS_RECONCILE = 1024
+    # ELS-231: stall notifier — forwards engine_health stalls through
+    # notify() on a schedule (report-only; never mutates locks).
+    STALL_NOTIFY = 1025
+    # ELS-233: scheduled ticket-creating routines (trigger c) — one id
+    # per routine kind, fresh numbers (never reuse retired ids).
+    SCHEDULED_ROUTINE_DAILY = 1026
+    SCHEDULED_ROUTINE_RETRO = 1027
+    SCHEDULED_ROUTINE_TECHDEBT = 1028
+    # W8.5 (ELS-261) — nightly workflow trigger (c). Next free
+    # integer; never reuse a retired id.
+    WORKFLOW_NIGHTLY = 1029
 
 
 # ---------------------------------------------------------------------------

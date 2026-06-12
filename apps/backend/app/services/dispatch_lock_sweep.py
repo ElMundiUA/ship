@@ -1,4 +1,11 @@
-"""Background sweeper for dangling ``project:*`` dispatch locks (ELS-149).
+"""Background sweepers for agent dispatch locks (ELS-149, ELS-264).
+
+Includes:
+
+- **TTL sweep** — deletes every row past ``expires_at`` (e.g. leaked
+  ``*:scheduled`` bundle locks).
+- **Project heuristic sweep** — releases dangling ``project:*`` locks
+  whose owning chain is dead.
 
 The dispatcher's per-project WIP lock has a 24-hour TTL and only
 auto-releases via :func:`_release_project_lock_for_ticket` calls from
@@ -227,6 +234,23 @@ async def sweep_dangling_project_locks(session: AsyncSession) -> int:
     return released
 
 
+async def sweep_expired_locks_tick() -> None:
+    """Cron entrypoint — global TTL cleanup via
+    :func:`backend.app.services.dispatcher.sweep_expired_locks`."""
+    from backend.app.services.dispatcher import sweep_expired_locks
+
+    sessionmaker = get_sessionmaker()
+    async with sessionmaker() as session:
+        try:
+            deleted = await sweep_expired_locks(session)
+        except Exception:
+            await session.rollback()
+            raise
+        await session.commit()
+    if deleted:
+        log.info("lock_sweep: tick deleted %d expired lock(s)", deleted)
+
+
 async def sweep_dangling_project_locks_tick() -> None:
     """Cron entrypoint — wraps :func:`sweep_dangling_project_locks`
     with the sessionmaker boilerplate and a single commit at the end."""
@@ -247,4 +271,5 @@ __all__ = [
     "ACTIVE_CHAIN_WINDOW_MIN",
     "sweep_dangling_project_locks",
     "sweep_dangling_project_locks_tick",
+    "sweep_expired_locks_tick",
 ]
