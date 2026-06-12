@@ -1417,7 +1417,7 @@ function stripSlash(s) {
  * unless ``optional`` is set (then 404 *and* errors return ``null``
  * with a one-line warning).
  */
-async function resolveAgentRole({
+export async function resolveAgentRole({
   apiBase,
   apiToken,
   workspaceId,
@@ -1475,7 +1475,7 @@ async function resolveAgentRole({
  * this flow because the CLI mints ``run_id`` locally; the
  * workspace-scoped variant takes membership instead.
  */
-async function fetchPoliciesPreamble({ apiBase, apiToken, workspaceId, role }) {
+export async function fetchPoliciesPreamble({ apiBase, apiToken, workspaceId, role }) {
   if (!apiBase || !apiToken || !workspaceId) return null;
   const qs = role ? `?role=${encodeURIComponent(role)}` : "";
   const url = `${apiBase}/v1/workspaces/${encodeURIComponent(workspaceId)}/policies/preamble${qs}`;
@@ -1549,7 +1549,7 @@ async function getNextTask({ apiBase, apiToken, workspaceId, state, ticketRef })
  * any failure so the caller can degrade to ``DEFAULT_PROVIDER``
  * rather than stranding the runner.
  */
-async function fetchWorkspaceAgentProvider({ apiBase, apiToken, workspaceId }) {
+export async function fetchWorkspaceAgentProvider({ apiBase, apiToken, workspaceId }) {
   if (!apiBase || !apiToken || !workspaceId) return null;
   const url = `${apiBase}/v1/workspaces/${encodeURIComponent(workspaceId)}/agent-provider`;
   let res;
@@ -1709,6 +1709,12 @@ function renderLocalScratchProtocol() {
 
 This is a **local scratch run**: a throwaway checkout, no ticket, no
 lease, no lifecycle state. When you are done editing, just stop.
+
+**This section supersedes the shared role template above.** Any
+earlier instructions about reading a Linear ticket, re-entrant
+pipeline reconciliation, branch naming, sidecars, or calling a
+finish endpoint come from the ticket-pipeline template and do NOT
+apply here — there is no ticket and no runner contract.
 
 - Do **not** push any branch or commit to any remote.
 - Do **not** open a pull request.

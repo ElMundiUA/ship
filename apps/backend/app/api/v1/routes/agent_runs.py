@@ -3239,7 +3239,10 @@ class CreateTicketIn(BaseModel):
     in the wrong inbox.
     """
 
-    project_id: str = Field(min_length=1, max_length=128)
+    # Optional since ELS-249: the local-executor a→b escalation files
+    # tickets without a project anchor — the tracker adapter lands
+    # them in the team's default backlog and task_intake routes them.
+    project_id: str | None = Field(default=None, max_length=128)
     title: str = Field(min_length=1, max_length=300)
     body: str = Field(min_length=1, max_length=32 * 1024)
     labels: list[str] = Field(default_factory=list, max_length=20)
@@ -3350,6 +3353,62 @@ async def post_create_ticket(
     await session.flush()
     return CreateTicketOut(
         ok=True, ticket_ref=created.display_id, url=created.url or None
+    )
+
+
+class LocalEscalationIn(BaseModel):
+    """Ask text a ``shipctl local`` session submits for escalation
+    classification (ELS-247/249)."""
+
+    ask: str = Field(min_length=1, max_length=16 * 1024)
+    scratch_summary: str | None = Field(default=None, max_length=8 * 1024)
+
+
+class LocalEscalationOut(BaseModel):
+    verdict: Literal["ESCALATE", "NEUTRAL"]
+    reason: str = ""
+    suggested_title: str | None = None
+
+
+@router.post("/local-executor/classify", response_model=LocalEscalationOut)
+async def post_local_executor_classify(
+    workspace_id: uuid.UUID,
+    payload: LocalEscalationIn,
+    auth: AuthContext = Depends(get_current_auth),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> LocalEscalationOut:
+    """Classify a local-executor ask as ESCALATE (big async feature
+    that belongs in a tracked ticket) or NEUTRAL.
+
+    Suggestion-only contract (E20): the CLI renders the verdict as an
+    offer; the local run proceeds either way. Degrades to the regex
+    fast-path when no LLM key is configured — never 412s, because a
+    missing suggestion must not break ``shipctl local``.
+    """
+    from backend.app.services.agent.client import pick_default_client
+    from backend.app.services.agent.drafting_intent import DraftingIntentService
+
+    await _require_membership(session, workspace_id, auth.user.id, ROLES_ADMIN)
+
+    try:
+        client = pick_default_client(settings)
+    except RuntimeError:
+        # No LLM configured: the service's regex fast-path still runs;
+        # the LLM fallback raises inside classify_local_escalation's
+        # try block and degrades to NEUTRAL by contract.
+        client = None
+
+    service = DraftingIntentService(settings=settings, client=client)
+    decision = await service.classify_local_escalation(
+        operator_ask=payload.ask,
+        scratch_summary=payload.scratch_summary,
+    )
+    verdict = "ESCALATE" if decision.verdict == "ESCALATE" else "NEUTRAL"
+    return LocalEscalationOut(
+        verdict=verdict,
+        reason=decision.reason,
+        suggested_title=decision.suggested_title,
     )
 
 
