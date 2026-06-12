@@ -55,6 +55,53 @@ describe("renderToolResult", () => {
     expect(rowOpen).toBeDefined();
   });
 
+  it("U1b — inbox_list Open Inbox header chip stays list-only", () => {
+    render(
+      <>
+        {renderToolResult("inbox_list", {
+          items: [{ id: "abc", type: "clarification", title: "t" }],
+        })}
+      </>,
+    );
+    const openInbox = screen
+      .getAllByRole("link")
+      .find((el) => el.textContent?.match(/Open Inbox/i));
+    expect(openInbox?.getAttribute("href")).toBe("/inbox");
+  });
+
+  it("U1c — inbox_get Open in Inbox uses selected query param", () => {
+    render(
+      <>
+        {renderToolResult("inbox_get", {
+          id: "uuid-1",
+          type: "clarification",
+          status: "pending",
+          title: "Need operator input",
+        })}
+      </>,
+    );
+    const openLink = screen
+      .getAllByRole("link")
+      .find((el) => el.textContent?.match(/Open in Inbox/i));
+    expect(openLink?.getAttribute("href")).toBe("/inbox?selected=uuid-1");
+  });
+
+  it("U1d — inbox_dispose Open in Inbox uses selected query param", () => {
+    render(
+      <>
+        {renderToolResult("inbox_dispose", {
+          inbox_item_id: "uuid-2",
+          new_status: "resolved",
+          applied_disposition: "answered",
+        })}
+      </>,
+    );
+    const openLink = screen
+      .getAllByRole("link")
+      .find((el) => el.textContent?.match(/Open in Inbox/i));
+    expect(openLink?.getAttribute("href")).toBe("/inbox?selected=uuid-2");
+  });
+
   it("U2 — inbox_list empty items renders the cleared-queue state", () => {
     render(
       <>{renderToolResult("inbox_list", { items: [] })}</>,
