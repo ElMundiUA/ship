@@ -40,6 +40,7 @@ def test_list_scopes_returns_every_registered_slug() -> None:
         "catalog.sources",
         "console.surface",
         "autonomy.profile",
+        "local_executor.enabled",
     }
     # Every row carries a non-empty description (consumed by the
     # help-without-scope path).
@@ -141,3 +142,33 @@ async def test_autonomy_profile_read_falls_back_on_garbage_column() -> None:
     ws = _FakeWorkspace()
     ws.autonomy = "wat"
     assert await scope.read(None, ws) == "balanced"
+
+
+@pytest.mark.asyncio
+async def test_local_executor_enabled_defaults_off() -> None:
+    """ELS-247 FOUNDER DECISION: default-OFF for every workspace."""
+    scope = SCOPES["local_executor.enabled"]
+    ws = _FakeWorkspace()
+    assert await scope.read(None, ws) is False
+
+
+@pytest.mark.asyncio
+async def test_local_executor_enabled_round_trips_and_merges() -> None:
+    scope = SCOPES["local_executor.enabled"]
+    ws = _FakeWorkspace()
+    ws.settings = {"console": {"surface": "residual"}}
+    await scope.write(None, ws, True)
+    assert ws.settings["console"] == {"surface": "residual"}
+    assert ws.settings["local_executor"] == {"enabled": True}
+    assert await scope.read(None, ws) is True
+    await scope.write(None, ws, False)
+    assert await scope.read(None, ws) is False
+
+
+@pytest.mark.asyncio
+async def test_local_executor_enabled_rejects_non_bool() -> None:
+    scope = SCOPES["local_executor.enabled"]
+    ws = _FakeWorkspace()
+    with pytest.raises(ValueError):
+        await scope.write(None, ws, "yes")
+    assert "local_executor" not in ws.settings

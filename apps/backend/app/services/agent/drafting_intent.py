@@ -35,7 +35,7 @@ from backend.app.services.agent.topic import _last_turns_text
 logger = logging.getLogger(__name__)
 
 
-Verdict = Literal["ENTER", "EXIT", "NEUTRAL"]
+Verdict = Literal["ENTER", "EXIT", "NEUTRAL", "ESCALATE"]
 
 
 @dataclass(slots=True)
@@ -95,6 +95,30 @@ _EXIT_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
 )
 
 
+# Canonical "this local turn is really a big async feature" cues
+# (ELS-247, trigger-(a) → (b) escalation). Mirrors _ENTER_PATTERNS'
+# bilingual structure. Fired by ``classify_local_escalation`` only —
+# the chat ENTER/EXIT path never sees these.
+_ESCALATE_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        # English — needs a PR / review / a tracked ticket
+        r"\b(?:open|raise|create|needs?|want)\s+(?:a\s+)?(?:pull request|pr)\b",
+        r"\bneeds?\s+(?:a\s+)?(?:code\s+)?review\b",
+        r"\b(?:create|file|open)\s+(?:a\s+)?ticket\b",
+        r"\b(?:big|large|major)\s+(?:feature|refactor|change|rework)\b",
+        r"\b(?:multi[- ]file|across\s+(?:the\s+)?(?:codebase|repo|many files))\b",
+        r"\bend[- ]to[- ]end\s+feature\b",
+        # Russian — нужен ПР / ревью / тикет / большая фича
+        r"\b(?:нужен|нужно|надо|сдела(?:й|ть))\s+(?:пулл?[- ]?реквест|пр|pr)\b",
+        r"\bнужно?\s+ревью\b",
+        r"\b(?:заведи|создай|оформи)\s+тикет\b",
+        r"\b(?:больш(?:ая|ой|ую)|крупн(?:ая|ый|ую))\s+(?:фич[ауи]|задач[ауи]|рефакторинг)\b",
+        r"\bпо\s+всему\s+(?:коду|репо|репозиторию)\b",
+    )
+)
+
+
 def _matches_any(message: str, patterns: tuple[re.Pattern[str], ...]) -> bool:
     if not message:
         return False
@@ -109,6 +133,11 @@ def explicit_enter(message: str) -> bool:
 def explicit_exit(message: str) -> bool:
     """Cheap "stop drafting" detector."""
     return _matches_any(message, _EXIT_PATTERNS)
+
+
+def explicit_escalate(message: str) -> bool:
+    """Cheap "this belongs in a tracked ticket / PR" detector."""
+    return _matches_any(message, _ESCALATE_PATTERNS)
 
 
 # ---------------------------------------------------------------------------
@@ -248,10 +277,101 @@ class DraftingIntentService:
         )
 
 
+    async def classify_local_escalation(
+        self,
+        *,
+        operator_ask: str,
+        scratch_summary: str | None = None,
+    ) -> DraftingIntentDecision:
+        """Decide whether a trigger-(a) local scratch ask is really a
+        big async feature that belongs in a tracked (b) ticket
+        (ELS-247).
+
+        Separate entry point from :meth:`classify` on purpose: the
+        chat ENTER/EXIT path and the local-executor ESCALATE path
+        share the cost model (regex fast-path → small JSON LLM) but
+        never each other's verdicts.
+
+        Returns ``ESCALATE`` or ``NEUTRAL``; ``NEUTRAL`` on every
+        failure path. FOUNDER DECISION: this is a *suggestion* engine
+        — the local run proceeds either way; the caller renders an
+        offer, never a block.
+        """
+        ask = (operator_ask or "").strip()
+        if not ask:
+            return DraftingIntentDecision(verdict="NEUTRAL")
+
+        if explicit_escalate(ask):
+            return DraftingIntentDecision(
+                verdict="ESCALATE",
+                reason=(
+                    "This sounds like a tracked feature (PR/review/"
+                    "multi-file scope) — consider escalating to a "
+                    "ticket so it runs the full pipeline."
+                ),
+            )
+
+        # LLM fallback only when the ask is meaty enough to carry
+        # signal; one-liners ("fix typo on the landing") stay local
+        # without spending tokens.
+        context = f"{ask}\n{scratch_summary or ''}"
+        if len(context.strip()) < _LLM_MIN_CONTEXT_CHARS:
+            return DraftingIntentDecision(verdict="NEUTRAL")
+
+        prompt = (
+            "You are an escalation classifier for a local scratch "
+            "coding session (no ticket, no PR, throwaway checkout). "
+            "Decide whether the operator's ask is really a BIG async "
+            "feature that deserves a tracked ticket with review and a "
+            "pull request — verdict ESCALATE — or a small local tweak "
+            "— verdict NEUTRAL. Signals for ESCALATE: multi-file "
+            "feature work, schema/API changes, anything the operator "
+            "says needs review or a PR.\n\n"
+            f"Operator ask:\n{ask}\n\n"
+            f"Scratch context (may be empty): {scratch_summary or '—'}\n\n"
+            "Respond with a single JSON object: "
+            '{"verdict": "ESCALATE"|"NEUTRAL", '
+            '"reason": "short explanation", '
+            '"suggested_title": "one-line ticket title or null"}. '
+            "No prose outside the JSON."
+        )
+
+        try:
+            raw = await self._client.acomplete(
+                [ChatMessage(role="user", content=prompt)],
+                model=self._settings.agent_model_fast,
+                max_tokens=160,
+                temperature=0.0,
+                response_format={"type": "json_object"},
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("local-escalation classifier failed: %s", exc)
+            return DraftingIntentDecision(verdict="NEUTRAL")
+
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            return DraftingIntentDecision(verdict="NEUTRAL")
+
+        verdict_raw = str(payload.get("verdict") or "").upper().strip()
+        if verdict_raw not in {"ESCALATE", "NEUTRAL"}:
+            return DraftingIntentDecision(verdict="NEUTRAL")
+
+        title = payload.get("suggested_title")
+        if not isinstance(title, str) or not title.strip():
+            title = None
+        return DraftingIntentDecision(
+            verdict=verdict_raw,  # type: ignore[arg-type]
+            reason=str(payload.get("reason") or "")[:512],
+            suggested_title=title,
+        )
+
+
 __all__ = [
     "DraftingIntentDecision",
     "DraftingIntentService",
     "Verdict",
     "explicit_enter",
+    "explicit_escalate",
     "explicit_exit",
 ]
