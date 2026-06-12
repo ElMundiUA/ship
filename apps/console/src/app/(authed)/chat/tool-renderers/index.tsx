@@ -46,6 +46,7 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 
+import { inboxItemUrl } from "@/components/inbox/inbox-url";
 import { Badge, type BadgeTone } from "@/components/ui";
 import { cn } from "@/lib/cn";
 import { RenderProposeMassPlan } from "./mass-planning-preview";
@@ -608,7 +609,7 @@ function RenderInboxList(result: ToolResult): ReactNode {
               ) : null}
               {it.id ? (
                 <Chip
-                  href={`/inbox/${it.id}`}
+                  href={inboxItemUrl(it.id)}
                   label="Open"
                   glyph="→"
                   tone="muted"
@@ -679,7 +680,9 @@ function RenderInboxGet(result: ToolResult): ReactNode {
             ) : null}
           </div>
         </div>
-        {id ? <Chip href={`/inbox/${id}`} label="Open in Inbox" glyph="↗" /> : null}
+        {id ? (
+          <Chip href={inboxItemUrl(id)} label="Open in Inbox" glyph="↗" />
+        ) : null}
       </div>
 
       {summary ? (
@@ -770,7 +773,7 @@ function RenderInboxDispose(result: ToolResult): ReactNode {
           </div>
         </div>
         {itemId ? (
-          <Chip href={`/inbox/${itemId}`} label="Open in Inbox" glyph="↗" />
+          <Chip href={inboxItemUrl(itemId)} label="Open in Inbox" glyph="↗" />
         ) : null}
       </div>
 
@@ -1009,7 +1012,7 @@ function RenderRunDetail(result: ToolResult): ReactNode {
                 {esc.status ? <StatusChip status={esc.status} /> : null}
                 {esc.inbox_item_id ? (
                   <Chip
-                    href={`/inbox/${esc.inbox_item_id}`}
+                    href={inboxItemUrl(esc.inbox_item_id)}
                     label="Open in Inbox"
                     glyph="→"
                     tone="muted"

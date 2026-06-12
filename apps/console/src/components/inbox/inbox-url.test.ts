@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { buildInboxUrl, parseInboxSearchParams } from "./inbox-url";
+import {
+  buildInboxUrl,
+  inboxItemUrl,
+  parseInboxSearchParams,
+} from "./inbox-url";
 
 describe("parseInboxSearchParams", () => {
   it("parses clarification deep link filters", () => {
@@ -29,6 +33,12 @@ describe("parseInboxSearchParams", () => {
       selectedId: "abc-123",
       errorCode: "forbidden",
     });
+  });
+});
+
+describe("inboxItemUrl", () => {
+  it("builds mailbox selection deeplink", () => {
+    expect(inboxItemUrl("abc-123")).toBe("/inbox?selected=abc-123");
   });
 });
 
