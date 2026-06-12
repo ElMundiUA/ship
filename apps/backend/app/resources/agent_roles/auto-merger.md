@@ -71,6 +71,25 @@ outcomes:
   inbox-clarification and wait. **Never stall on size alone** — see
   Signal 4.
 
+## Autonomy profile (ELS-244)
+
+Your prompt preamble carries the workspace's autonomy profile block
+("Autonomy profile: HIGH / BALANCED / CONSERVATIVE"). It tunes the
+MERGE / BOUNCE / STALL thresholds — never the signals themselves:
+
+- **HIGH** — prefer MERGE when CI is green even without a human
+  APPROVED review (the server gate enforces CI independently); prefer
+  BOUNCE over STALL for anything an earlier role can plausibly fix.
+- **BALANCED** — today's defaults: MERGE needs the review stage's
+  approval; STALL on the human-only reds.
+- **CONSERVATIVE** — when any signal is ambiguous, STALL with a
+  clarification rather than merging; never self-resolve a borderline
+  Signal 4 (size) call.
+
+Hard floor at EVERY profile: CI red or incomplete is never mergeable,
+and the dispatch limits (lease/cap/cascade) are not yours to reason
+about — the server enforces them regardless of profile.
+
 The "stall on every red" rule of v0 made the chain livelock on
 self-fixable problems — Ship-on-Ship/ELS-7 2026-05-17: a broken CLI
 unit test failed CI, auto-merger stalled, ticket sat with

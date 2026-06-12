@@ -564,27 +564,30 @@ async def _emit_self_heal_blocker_inbox(
     )
     if int(exists or 0) > 0:
         return
-    from backend.app.services.inbox.headline import derive_headline
+    from backend.app.services.notify import NotifyLevel, notify
 
     summary = (run.summary or routine.lane_id or "Self-heal")[:500]
     title = f"Self-heal could not fix: {summary}"[:255]
-    session.add(
-        InboxItem(
-            workspace_id=run.workspace_id,
-            repo_id=routine.repo_id,
-            type="blocker",
-            title=title,
-            headline=derive_headline(summary=summary, title=title),
-            summary=summary,
-            payload={
-                "kind": "self_heal_failed",
-                "routine_id": str(routine.id),
-                "run_id": str(run.id),
-            },
-            status="new",
-            source_table="self_heal_run",
-            source_id=run.id,
-        )
+    # headline rides the InboxItem before_insert backstop — same
+    # derive_headline(summary, title) the site called explicitly before.
+    await notify(
+        session,
+        workspace_id=run.workspace_id,
+        repo_id=routine.repo_id,
+        title=title,
+        body=summary,
+        level=NotifyLevel.BLOCKER,
+        payload={
+            "kind": "self_heal_failed",
+            "routine_id": str(routine.id),
+            "run_id": str(run.id),
+        },
+        inbox_overrides={
+            "title": title,
+            "summary": summary,
+            "source_table": "self_heal_run",
+            "source_id": run.id,
+        },
     )
 
 
@@ -1035,12 +1038,21 @@ async def get_run_policies_preamble(
 ) -> PoliciesPreambleOut:
     """Return the workspace's prose policies for the run's workspace."""
 
-    from backend.app.services.policies import render_policies_preamble
+    from backend.app.services.policies import (
+        render_autonomy_preamble,
+        render_policies_preamble,
+    )
 
     preamble = await render_policies_preamble(
         session, ctx.workspace_id, role_slug=role
     )
-    return PoliciesPreambleOut(preamble=preamble)
+    # ELS-244: the autonomy action-rights block rides the same
+    # centralised path so chat + CI agents see byte-identical text.
+    autonomy_block = await render_autonomy_preamble(session, ctx.workspace_id)
+    combined = (
+        f"{preamble}\n\n{autonomy_block}" if preamble else autonomy_block
+    )
+    return PoliciesPreambleOut(preamble=combined)
 
 
 # ---------------------------------------------------------------------------

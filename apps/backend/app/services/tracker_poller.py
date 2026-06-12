@@ -56,7 +56,7 @@ from backend.app.db.models.integrations import (
     NativeIntegrationInstallation,
     NativeIntegrationSyncState,
 )
-from backend.app.db.models.tenancy import AuditLog, Integration
+from backend.app.db.models.tenancy import AuditLog, Integration, Workspace
 from backend.app.db.session import get_sessionmaker
 from backend.app.integrations.linear.tracker_adapter import LinearTracker
 from backend.app.security.encryption import safe_decrypt
@@ -99,12 +99,18 @@ query ShipTrackerPoll($filter: IssueFilter, $after: String) {
       # (createdAt DESC by default on the connection). 20 is enough
       # to cover the most-recent agent question + the answer; older
       # threads don't affect the trigger decision.
+      # ``isMe`` + ``botActor`` carry the author identity the
+      # agent-vs-human classifier keys on (ELS-250) — Ship writes
+      # through the same OAuth identity this poller reads with, so
+      # ``isMe: true`` means "our own comment"; app-actor
+      # provisioned installs surface as ``botActor`` instead.
       comments(first: 20) {
         nodes {
           id
           body
           createdAt
-          user { displayName email }
+          user { displayName email isMe }
+          botActor { id }
         }
       }
     }
@@ -152,21 +158,53 @@ def _extract_fsm_stage(labels: list[str], state: str | None = None) -> str | Non
 
 
 # Agent comments end with ``[Ship SDLC:role-<name>]`` per system.md
-# `outcome` rules. A comment that doesn't carry this marker is from
-# a human and counts as a "real answer" for clarification flow.
+# `outcome` rules. Since ELS-250 the marker is only the LEGACY
+# fallback — the primary agent-vs-human signal is the structured
+# Linear author identity (see :func:`_is_agent_comment`).
 _AGENT_COMMENT_MARKER_RE = re.compile(r"\[Ship\s+SDLC:role-[\w-]+\]")
+
+
+def _is_agent_comment(comment: dict) -> bool:
+    """Single source of truth for agent-vs-human on a Linear comment
+    (ELS-250). Consumed by the clarification trigger and the
+    comment-inbound path so the two can never disagree.
+
+    Identity first, marker second:
+
+    - ``user.isMe`` true → AGENT. Ship writes tracker comments
+      through the same OAuth identity the poller reads with, so
+      "authored by me" means "authored by the workspace agent".
+    - ``botActor`` present → AGENT (app-actor provisioned installs
+      surface the OAuth application as the author instead of a user).
+    - any OTHER known author → HUMAN, even when the body quotes the
+      ``[Ship SDLC:role-…]`` marker (operators paste it when replying
+      inline to the agent's question).
+    - no author identity at all (legacy rows / older snapshots) →
+      fall back to the marker regex.
+    """
+    if not isinstance(comment, dict):
+        return False
+    user = comment.get("user")
+    if isinstance(user, dict) and user.get("isMe") is True:
+        return True
+    if comment.get("botActor"):
+        return True
+    if isinstance(user, dict) and user:
+        return False
+    body = comment.get("body") or ""
+    return bool(_AGENT_COMMENT_MARKER_RE.search(body))
 
 
 def _operator_answered_clarification(comments: list[dict]) -> bool:
     """Decide whether the operator has replied to the last agent
     clarification question.
 
-    Walks comments newest-first. The first marker-bearing comment
-    we hit is the agent's question (the one that asked). If we see
-    a non-marker comment BEFORE the agent comment in time
-    (i.e. AFTER it in the newest-first walk's prefix), the operator
-    has answered. Returns ``True`` if a fresh operator comment
-    exists since the last agent question.
+    Walks comments newest-first. The first AGENT comment we hit is
+    the agent's question (the one that asked). If we see a human
+    comment BEFORE the agent comment in time (i.e. AFTER it in the
+    newest-first walk's prefix), the operator has answered. Returns
+    ``True`` if a fresh operator comment exists since the last agent
+    question.
     """
     # Sort newest-first defensively (Linear returns newest-first
     # by default on this connection, but the contract isn't
@@ -177,14 +215,88 @@ def _operator_answered_clarification(comments: list[dict]) -> bool:
         reverse=True,
     )
     for c in rows:
-        body = c.get("body") or ""
-        if _AGENT_COMMENT_MARKER_RE.search(body):
+        if _is_agent_comment(c):
             # Hit the latest agent comment without finding an
             # operator one above it → operator hasn't replied.
             return False
         # Non-agent comment newer than the latest agent comment.
         return True
     return False
+
+
+async def _ingest_fresh_operator_comments(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    ticket_ref: str,
+    ticket_title: str | None,
+    comments: list[dict],
+    comment_cursor: dict[str, str],
+) -> int:
+    """Feed NEW non-agent comments on ``ticket_ref`` into the
+    Navigator (ELS-251). Returns the number of turns run.
+
+    Dedup contract: ``comment_cursor[ticket_ref]`` holds the
+    ``createdAt`` of the newest comment already handled. First sight
+    of a ticket BASELINES to its newest existing comment without
+    ingesting — enabling the flag must not replay months of history.
+    The caller persists the mutated cursor alongside the poller's
+    state cursor, so re-running poll_once with no new comment is a
+    no-op.
+    """
+    rows = sorted(
+        (c for c in comments if isinstance(c, dict) and c.get("createdAt")),
+        key=lambda c: c["createdAt"],
+    )
+    if not rows:
+        return 0
+    newest = rows[-1]["createdAt"]
+    baseline = comment_cursor.get(ticket_ref)
+    if baseline is None:
+        comment_cursor[ticket_ref] = newest
+        return 0
+    fresh_human = [
+        c
+        for c in rows
+        if c["createdAt"] > baseline and not _is_agent_comment(c)
+    ]
+    # Advance the cursor past EVERYTHING seen this tick (agent
+    # comments included) so an agent reply doesn't get re-examined
+    # forever.
+    if newest > baseline:
+        comment_cursor[ticket_ref] = newest
+    if not fresh_human:
+        return 0
+
+    from backend.app.core.config import get_settings as _gs
+    from backend.app.services.agent.comment_inbound import (
+        ingest_operator_comment,
+    )
+
+    settings = _gs()
+    ingested = 0
+    for c in fresh_human:
+        author = None
+        user = c.get("user")
+        if isinstance(user, dict):
+            author = user.get("displayName") or user.get("email")
+        ran = await ingest_operator_comment(
+            session,
+            settings=settings,
+            workspace_id=workspace_id,
+            ticket_ref=ticket_ref,
+            ticket_title=ticket_title,
+            comment_id=str(c.get("id") or ""),
+            comment_body=c.get("body") or "",
+            comment_author=author,
+        )
+        if ran:
+            ingested += 1
+            log.info(
+                "tracker_poll: comment inbound ws=%s ref=%s comment=%s",
+                workspace_id, ticket_ref, c.get("id"),
+            )
+    return ingested
 
 
 async def _clear_clarification_and_dispatch(
@@ -397,8 +509,14 @@ async def _fetch_updated_issues(
 
 async def _load_cursor(
     session: AsyncSession, installation_id: uuid.UUID
-) -> tuple[str | None, dict[str, str]]:
-    """Return ``(updated_at_iso, last_seen_states)`` for this installation."""
+) -> tuple[str | None, dict[str, str], dict[str, str]]:
+    """Return ``(updated_at_iso, last_seen_states, comment_cursor)``.
+
+    ``comment_cursor`` maps ticket_ref → the ``createdAt`` of the
+    newest comment already ingested (or baselined) by the comment-
+    inbound path (ELS-251); it rides the same cursor JSONB so the
+    dedup guarantee survives restarts exactly like state dedup does.
+    """
     row = (
         await session.execute(
             select(NativeIntegrationSyncState).where(
@@ -409,8 +527,12 @@ async def _load_cursor(
         )
     ).scalar_one_or_none()
     if row is None or not row.cursor:
-        return None, {}
-    return row.cursor.get("updated_at"), dict(row.cursor.get("states") or {})
+        return None, {}, {}
+    return (
+        row.cursor.get("updated_at"),
+        dict(row.cursor.get("states") or {}),
+        dict(row.cursor.get("comments") or {}),
+    )
 
 
 async def _save_cursor(
@@ -419,6 +541,7 @@ async def _save_cursor(
     updated_at_iso: str | None,
     states: dict[str, str],
     *,
+    comments: dict[str, str] | None = None,
     status: str = "ready",
     last_error: str | None = None,
 ) -> None:
@@ -430,6 +553,8 @@ async def _save_cursor(
     do the upsert by hand inside one transaction.
     """
     payload: dict[str, Any] = {"states": states}
+    if comments:
+        payload["comments"] = comments
     if updated_at_iso:
         payload["updated_at"] = updated_at_iso
     existing = (
@@ -581,7 +706,17 @@ async def _poll_installation(
         )
         return 0, 0
 
-    cursor_iso, last_states = await _load_cursor(session, install.id)
+    cursor_iso, last_states, comment_cursor = await _load_cursor(
+        session, install.id
+    )
+
+    # Comment-inbound flag (ELS-251): one settings read per
+    # installation tick. Default OFF — the whole block below is inert
+    # until the workspace opts in via ``chat.comment_inbound``.
+    ws_row = await session.get(Workspace, install.workspace_id)
+    comment_inbound_enabled = bool(
+        ((ws_row.settings or {}).get("chat") or {}).get("comment_inbound", False)
+    ) if ws_row else False
 
     issues = await _fetch_updated_issues(
         token=token, team_id=team_id, since_iso=cursor_iso, client=client
@@ -658,6 +793,38 @@ async def _poll_installation(
                         "ws=%s ref=%s err=%s",
                         install.workspace_id, ref, exc,
                     )
+        # Comment-inbound (ELS-251): surface fresh NON-AGENT comments
+        # on active tickets into the ticket's Navigator thread.
+        # Context only — nothing in this block (or in the service it
+        # calls) touches transition()/state; the STATUS field stays
+        # the only FSM signal. Skips:
+        #   - terminal tickets (no conversation to continue),
+        #   - needs:clarification tickets (the clarification flow
+        #     above owns that round-trip),
+        #   - everything, when the per-workspace flag is off.
+        elif (
+            comment_inbound_enabled
+            and new_state not in ("Done", "Canceled", "Duplicate")
+        ):
+            comment_nodes = (
+                (issue.get("comments") or {}).get("nodes") or []
+            )
+            try:
+                ingested = await _ingest_fresh_operator_comments(
+                    session,
+                    workspace_id=install.workspace_id,
+                    ticket_ref=ref,
+                    ticket_title=issue.get("title"),
+                    comments=comment_nodes,
+                    comment_cursor=comment_cursor,
+                )
+                events += ingested
+            except Exception as exc:  # noqa: BLE001 — best-effort
+                log.warning(
+                    "tracker_poll: comment inbound failed ws=%s ref=%s "
+                    "err=%s",
+                    install.workspace_id, ref, exc,
+                )
         if updated_at and (
             max_updated_at is None or updated_at > max_updated_at
         ):
@@ -676,8 +843,19 @@ async def _poll_installation(
         except Exception:  # noqa: BLE001 — best-effort, keep raw
             pass
 
+    # Prune comment-cursor entries for terminal tickets so the JSONB
+    # doesn't grow unbounded across a team's history.
+    for ref_key, state_val in last_states.items():
+        if state_val in ("Done", "Canceled", "Duplicate"):
+            comment_cursor.pop(ref_key, None)
+
     await _save_cursor(
-        session, install.id, next_cursor, last_states, status="ready"
+        session,
+        install.id,
+        next_cursor,
+        last_states,
+        comments=comment_cursor,
+        status="ready",
     )
     return events, len(issues)
 
@@ -759,14 +937,15 @@ async def poll_once() -> dict[str, int]:
                         # Record the failure in sync_state so operators
                         # can see "this tenant is stuck" in the dashboard.
                         try:
-                            cursor_iso, last_states = await _load_cursor(
-                                session, install.id
+                            cursor_iso, last_states, comment_cursor = (
+                                await _load_cursor(session, install.id)
                             )
                             await _save_cursor(
                                 session,
                                 install.id,
                                 cursor_iso,
                                 last_states,
+                                comments=comment_cursor,
                                 status="error",
                                 last_error=str(exc)[:1000],
                             )

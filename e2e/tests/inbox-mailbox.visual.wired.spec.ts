@@ -4,13 +4,15 @@ import { mintInboxItem } from "../lib/inbox-helpers";
 import { hasShipApiCredentials, shipResolveWorkspaceId } from "../lib/ship-api";
 import { hasPlaywrightStorageState } from "../lib/storage";
 
+// Only types the seed endpoint accepts (InboxItemIn literal — ELS-144
+// dropped "failure"/"stuck" from the write surface; those rows are
+// minted by internal flows only). approval/improvement/exception all
+// render the ★ ATTENTION kicker, so glyph coverage is unchanged.
 const INBOX_TYPES = [
   "clarification",
   "improvement",
-  "failure",
   "approval",
   "exception",
-  "stuck",
   "blocker",
   "report",
 ] as const;

@@ -33,7 +33,7 @@
  */
 
 import { useRouter } from "next/navigation";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type {
   ApiAgentSecretStatus,
@@ -70,6 +70,13 @@ export interface RepoCardInitial {
      * meta endpoint.
      */
     current_bundle_version: string;
+    /**
+     * Persisted deploy-planner preference (provider + model). Set here
+     * in the wizard, prefilled + editable later in the New deployment
+     * modal. ``null`` → Ship's default for the provider at deploy time.
+     */
+    deploy_planner_provider: string | null;
+    deploy_planner_model: string | null;
   };
   tracker: ApiTrackerBinding;
   agents: ApiAgentSecretStatus[];
@@ -145,9 +152,35 @@ export function RepoCard({
   const [activateBlocked, setActivateBlocked] = useState<string | null>(null);
 
   // ── Derived ───────────────────────────────────────────────────
-  const missingRequiredSecrets = useMemo(
-    () => agents.filter((a) => a.required && !a.present),
+  // Coding-agent keys (Claude Code / Cursor / Codex / Copilot) drive
+  // the seed gate. ``llm-`` slugs are deploy-planner / future-AI
+  // fallbacks (Gemini, Mistral, plus the OpenAI/Anthropic LLM rows)
+  // — always optional, rendered in their own section below so they
+  // don't get tangled up with the "pick one coding agent" copy.
+  const agentSecrets = useMemo(
+    () => agents.filter((a) => !a.slug.startsWith("llm-")),
     [agents],
+  );
+  // LLM fallbacks, minus any whose GitHub secret is already offered by
+  // a coding-agent row above. ``llm-openai`` / ``llm-anthropic`` write
+  // the same ``OPENAI_API_KEY`` / ``ANTHROPIC_API_KEY`` as the Codex /
+  // Claude Code rows, so showing both reads as a duplicate field. We
+  // keep only the genuinely-new vendors here (Gemini, Mistral).
+  const llmSecrets = useMemo(() => {
+    const codingSecretNames = new Set(
+      agents
+        .filter((a) => !a.slug.startsWith("llm-") && a.secret_name)
+        .map((a) => a.secret_name),
+    );
+    return agents.filter(
+      (a) =>
+        a.slug.startsWith("llm-") &&
+        !(a.secret_name && codingSecretNames.has(a.secret_name)),
+    );
+  }, [agents]);
+  const missingRequiredSecrets = useMemo(
+    () => agentSecrets.filter((a) => a.required && !a.present),
+    [agentSecrets],
   );
 
   // Tracker is considered "ready" if any kind is wired (per-repo or
@@ -190,6 +223,164 @@ export function RepoCard({
       : installed === current
         ? "up_to_date"
         : "update_available";
+
+  // ── Secret save (shared) ──────────────────────────────────────
+  // One handler for both the coding-agent section and the LLM-keys
+  // section. It pushes every non-empty draft in ``secretDrafts``
+  // (keyed by slug) in a single batch, so whichever button the
+  // operator clicks saves everything they've typed. Both sections
+  // write into the same ``secretDrafts`` state, so re-checking after
+  // the push refreshes ``present`` flags across both lists.
+  const saveSecrets = async () => {
+    setSecretsSaving(true);
+    setSecretsError(null);
+    setSecretsFailed([]);
+    const payload = Object.entries(secretDrafts)
+      .filter(([, v]) => v.trim().length > 0)
+      .map(([slug, plaintext]) => ({
+        slug,
+        plaintext: plaintext.trim(),
+      }));
+    const resp = await fetch("/api/onboard/agent-secrets", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        workspace_id: workspaceId,
+        repo_id: initial.repo.id,
+        secrets: payload,
+      }),
+    });
+    setSecretsSaving(false);
+    if (!resp.ok) {
+      const p = await resp.json().catch(() => ({}));
+      setSecretsError(p?.error ?? "unknown");
+      return;
+    }
+    const body = (await resp.json()) as {
+      result: { pushed: string[]; failed: { slug: string }[] };
+    };
+    try {
+      const checkResp = await fetch(
+        `/api/onboard/agent-secrets?workspace_id=${encodeURIComponent(
+          workspaceId,
+        )}&repo_id=${encodeURIComponent(initial.repo.id)}`,
+      );
+      if (checkResp.ok) {
+        const c = (await checkResp.json()) as {
+          check: { agents: ApiAgentSecretStatus[] };
+        };
+        setAgents(c.check.agents);
+      }
+    } catch {
+      // Non-fatal: stale ``present`` flag, user can re-check.
+    }
+    const pushed = new Set(body.result.pushed);
+    setSecretDrafts((d) => {
+      const next = { ...d };
+      for (const slug of Object.keys(next)) {
+        if (pushed.has(slug)) delete next[slug];
+      }
+      return next;
+    });
+    setSecretsFailed(body.result.failed.map((f) => f.slug));
+  };
+
+  const hasPendingSecretDrafts = Object.values(secretDrafts).some(
+    (v) => v.trim().length > 0,
+  );
+
+  // Per-secret card. Shared by the coding-agent catalog and the LLM
+  // keys section so the paste-field / status-pill markup stays in
+  // one place.
+  const renderSecretRow = (a: ApiAgentSecretStatus) => {
+    const hasDraft = secretDrafts[a.slug]?.length > 0;
+    const failed = secretsFailed.includes(a.slug);
+    return (
+      <div
+        key={a.slug}
+        className="rounded-xl border border-white/[0.08] bg-white/[0.02] p-3"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="font-semibold text-white">{a.label}</span>
+              {a.required ? (
+                a.present ? (
+                  <span className="rounded bg-aqua/15 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-aqua">
+                    present
+                  </span>
+                ) : (
+                  <span className="rounded bg-coral/15 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-coral">
+                    missing
+                  </span>
+                )
+              ) : a.secret_name ? (
+                a.present ? (
+                  <span className="rounded bg-aqua/15 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-aqua">
+                    present
+                  </span>
+                ) : (
+                  <span className="rounded bg-amber-500/15 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-amber-200">
+                    optional
+                  </span>
+                )
+              ) : (
+                <span className="rounded bg-white/5 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-white/55">
+                  no key needed
+                </span>
+              )}
+              {failed && (
+                <span className="rounded bg-coral/15 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-coral">
+                  push failed
+                </span>
+              )}
+            </div>
+            {a.description && (
+              <p className="mt-0.5 text-[11px] leading-snug text-white/55">
+                {a.description}
+              </p>
+            )}
+            {a.secret_name && (
+              <code className="mt-1 inline-block rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-white/60">
+                secrets.{a.secret_name}
+              </code>
+            )}
+          </div>
+          {a.vendor_url && (
+            <a
+              href={a.vendor_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[11px] text-aqua/80 underline-offset-2 hover:text-aqua hover:underline"
+            >
+              Get key →
+            </a>
+          )}
+        </div>
+        {a.secret_name && !a.present && (
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <input
+              type="password"
+              placeholder={`${a.secret_name} — paste plaintext key`}
+              value={secretDrafts[a.slug] ?? ""}
+              onChange={(e) =>
+                setSecretDrafts((d) => ({
+                  ...d,
+                  [a.slug]: e.target.value,
+                }))
+              }
+              className="min-w-[240px] flex-1 rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-1.5 font-mono text-xs text-white placeholder-white/35"
+            />
+            {hasDraft && (
+              <span className="text-[11px] text-white/45">
+                (will push on &ldquo;Save secrets&rdquo;)
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <section
@@ -501,7 +692,7 @@ export function RepoCard({
             </span>
             <span className="text-[11px] text-white/45">
               {(() => {
-                const required = agents.filter((a) => a.required);
+                const required = agentSecrets.filter((a) => a.required);
                 const present = required.filter((a) => a.present).length;
                 const missing = required.length - present;
                 if (missing > 0)
@@ -517,7 +708,8 @@ export function RepoCard({
           — Claude Code (Anthropic), Cursor Cloud, OpenAI Codex,{" "}
           <em>or</em> use GitHub Copilot (no extra secret; it uses the
           runner&apos;s <code className="text-white/60">GITHUB_TOKEN</code>
-          ). When you open the seed PR, Ship also writes{" "}
+          ). Gemini and Mistral keys are optional deploy-planner fallbacks.
+          When you open the seed PR, Ship also writes{" "}
           <code className="text-white/60">SHIP_API_BASE</code> and{" "}
           <code className="text-white/60">SHIP_API_TOKEN</code> to GitHub
           Actions for <code className="text-white/60">shipctl run</code>.
@@ -528,168 +720,71 @@ export function RepoCard({
           <AgentsProbeError message={initial.probe_errors.agents} />
         )}
         <div className="mt-2 space-y-2">
-          {agents.map((a) => {
-            const hasDraft = secretDrafts[a.slug]?.length > 0;
-            const failed = secretsFailed.includes(a.slug);
-            return (
-              <div
-                key={a.slug}
-                className="rounded-xl border border-white/[0.08] bg-white/[0.02] p-3"
-              >
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="font-semibold text-white">{a.label}</span>
-                      {a.required ? (
-                        a.present ? (
-                          <span className="rounded bg-aqua/15 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-aqua">
-                            present
-                          </span>
-                        ) : (
-                          <span className="rounded bg-coral/15 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-coral">
-                            missing
-                          </span>
-                        )
-                      ) : a.secret_name ? (
-                        a.present ? (
-                          <span className="rounded bg-aqua/15 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-aqua">
-                            present
-                          </span>
-                        ) : (
-                          <span className="rounded bg-amber-500/15 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-amber-200">
-                            optional
-                          </span>
-                        )
-                      ) : (
-                        <span className="rounded bg-white/5 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-white/55">
-                          no key needed
-                        </span>
-                      )}
-                      {failed && (
-                        <span className="rounded bg-coral/15 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-coral">
-                          push failed
-                        </span>
-                      )}
-                    </div>
-                    {a.description && (
-                      <p className="mt-0.5 text-[11px] leading-snug text-white/55">
-                        {a.description}
-                      </p>
-                    )}
-                    {a.secret_name && (
-                      <code className="mt-1 inline-block rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-white/60">
-                        secrets.{a.secret_name}
-                      </code>
-                    )}
-                  </div>
-                  {a.vendor_url && (
-                    <a
-                      href={a.vendor_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-[11px] text-aqua/80 underline-offset-2 hover:text-aqua hover:underline"
-                    >
-                      Get key →
-                    </a>
-                  )}
-                </div>
-                {a.secret_name && !a.present && (
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <input
-                      type="password"
-                      placeholder={`${a.secret_name} — paste plaintext key`}
-                      value={secretDrafts[a.slug] ?? ""}
-                      onChange={(e) =>
-                        setSecretDrafts((d) => ({
-                          ...d,
-                          [a.slug]: e.target.value,
-                        }))
-                      }
-                      className="min-w-[240px] flex-1 rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-1.5 font-mono text-xs text-white placeholder-white/35"
-                    />
-                    {hasDraft && (
-                      <span className="text-[11px] text-white/45">
-                        (will push on &ldquo;Save secrets&rdquo;)
-                      </span>
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-
-        <div className="mt-3 flex flex-wrap items-center gap-3">
-          <button
-            type="button"
-            disabled={
-              secretsSaving ||
-              !Object.values(secretDrafts).some((v) => v.trim().length > 0)
-            }
-            onClick={async () => {
-              setSecretsSaving(true);
-              setSecretsError(null);
-              setSecretsFailed([]);
-              const payload = Object.entries(secretDrafts)
-                .filter(([, v]) => v.trim().length > 0)
-                .map(([slug, plaintext]) => ({
-                  slug,
-                  plaintext: plaintext.trim(),
-                }));
-              const resp = await fetch("/api/onboard/agent-secrets", {
-                method: "POST",
-                headers: { "content-type": "application/json" },
-                body: JSON.stringify({
-                  workspace_id: workspaceId,
-                  repo_id: initial.repo.id,
-                  secrets: payload,
-                }),
-              });
-              setSecretsSaving(false);
-              if (!resp.ok) {
-                const p = await resp.json().catch(() => ({}));
-                setSecretsError(p?.error ?? "unknown");
-                return;
-              }
-              const body = (await resp.json()) as {
-                result: { pushed: string[]; failed: { slug: string }[] };
-              };
-              try {
-                const checkResp = await fetch(
-                  `/api/onboard/agent-secrets?workspace_id=${encodeURIComponent(
-                    workspaceId,
-                  )}&repo_id=${encodeURIComponent(initial.repo.id)}`,
-                );
-                if (checkResp.ok) {
-                  const c = (await checkResp.json()) as {
-                    check: { agents: ApiAgentSecretStatus[] };
-                  };
-                  setAgents(c.check.agents);
-                }
-              } catch {
-                // Non-fatal: stale ``present`` flag, user can re-check.
-              }
-              const pushed = new Set(body.result.pushed);
-              setSecretDrafts((d) => {
-                const next = { ...d };
-                for (const slug of Object.keys(next)) {
-                  if (pushed.has(slug)) delete next[slug];
-                }
-                return next;
-              });
-              setSecretsFailed(body.result.failed.map((f) => f.slug));
-            }}
-            className="rounded-full border border-aqua/40 bg-aqua/[0.08] px-3 py-1 text-[11px] font-semibold text-aqua transition hover:bg-aqua/[0.16] disabled:opacity-40"
-          >
-            {secretsSaving ? "Pushing..." : "Save secrets"}
-          </button>
-          {secretsError && (
-            <span className="text-[11px] text-coral">
-              Couldn&apos;t push ({secretsError}).
-            </span>
-          )}
+          {agentSecrets.map((a) => renderSecretRow(a))}
         </div>
       </details>
+
+      {/* ── LLM API keys (optional) ──────────────────────────────
+          deploy-planner / future-AI fallbacks (Gemini, Mistral, plus
+          OpenAI/Anthropic LLM rows). All optional — they never gate
+          the seed PR. Collapsed by default since most operators only
+          need a coding-agent key above; opened when there's a draft
+          or a freshly-failed push to surface. Pushes through the same
+          /api/onboard/agent-secrets batch as the coding-agent keys. */}
+      {llmSecrets.length > 0 && (
+        <details className="mt-5 group/llm" open>
+          <summary className="cursor-pointer list-none [&::-webkit-details-marker]:hidden">
+            <span className="inline-flex items-center gap-2">
+              <span
+                aria-hidden
+                className="text-white/40 transition-transform group-open/llm:rotate-90"
+              >
+                ▸
+              </span>
+              <span className="text-[11px] font-bold uppercase tracking-widest text-white/55">
+                LLM API keys
+              </span>
+              <span className="text-[11px] text-white/45">
+                {(() => {
+                  const present = llmSecrets.filter((a) => a.present).length;
+                  return present > 0
+                    ? `${present}/${llmSecrets.length} present · optional`
+                    : "optional";
+                })()}
+              </span>
+            </span>
+          </summary>
+          <p className="mt-2 text-[11px] text-white/55">
+            Optional keys for deployment planning and future AI workflows.
+            Add any you want available — none of these block the seed PR.
+            Anything you paste goes straight to GitHub Actions and is never
+            stored on Ship.
+          </p>
+          <div className="mt-2 space-y-2">
+            {llmSecrets.map((a) => renderSecretRow(a))}
+          </div>
+        </details>
+      )}
+
+      {/* One Save button for every pasted key. ``saveSecrets`` pushes
+          all non-empty drafts across both the coding-agent and LLM
+          sections in a single batch, so a single control covers them
+          — no need to duplicate it per section. */}
+      <div className="mt-3 flex flex-wrap items-center gap-3">
+        <button
+          type="button"
+          disabled={secretsSaving || !hasPendingSecretDrafts}
+          onClick={saveSecrets}
+          className="rounded-full border border-aqua/40 bg-aqua/[0.08] px-3 py-1 text-[11px] font-semibold text-aqua transition hover:bg-aqua/[0.16] disabled:opacity-40"
+        >
+          {secretsSaving ? "Pushing..." : "Save secrets"}
+        </button>
+        {secretsError && (
+          <span className="text-[11px] text-coral">
+            Couldn&apos;t push ({secretsError}).
+          </span>
+        )}
+      </div>
 
       {/* ── Seed button ────────────────────────────────────────── */}
       <footer className="mt-6 border-t border-white/[0.08] pt-4">
@@ -835,6 +930,20 @@ export function RepoCard({
         />
       </div>
 
+      {/* Deploy planner model — set it here so the New deployment modal
+          prefills it later. Optional; blank = Ship's default. */}
+      <div className="mt-5 border-t border-white/[0.06] pt-4">
+        <p className="mb-2 text-[11px] font-bold uppercase tracking-widest text-white/55">
+          Deploy planner model
+        </p>
+        <DeployPlannerPicker
+          workspaceId={workspaceId}
+          repoId={initial.repo.id}
+          initialProvider={initial.repo.deploy_planner_provider}
+          initialModel={initial.repo.deploy_planner_model}
+        />
+      </div>
+
       {pendingSeed && (
         <ActivationModal
           repoFullName={initial.repo.full_name}
@@ -926,6 +1035,152 @@ export function RepoCard({
 function pickConfig(config: Record<string, unknown>, key: string): string | undefined {
   const v = config?.[key];
   return typeof v === "string" ? v : undefined;
+}
+
+const PLANNER_PROVIDERS: { id: string; label: string }[] = [
+  { id: "gemini", label: "Gemini" },
+  { id: "openai", label: "OpenAI" },
+  { id: "anthropic", label: "Anthropic" },
+  { id: "mistral", label: "Mistral" },
+];
+
+/**
+ * DeployPlannerPicker — pick the LLM + model that plans deployments for
+ * this repo, right in the wizard. Saved as the repo's deploy-planner
+ * preference (``/api/deploy/planner-pref``); the New deployment modal
+ * prefills from it and can change it later.
+ *
+ * The model field is a combobox over a keyless catalogue
+ * (``/api/deploy/planner-models`` → models.dev): pick a suggestion or
+ * type any id by hand (free-text fallback when the catalogue is empty or
+ * down). Blank = Ship's default for the provider at deploy time.
+ */
+function DeployPlannerPicker({
+  workspaceId,
+  repoId,
+  initialProvider,
+  initialModel,
+}: {
+  workspaceId: string;
+  repoId: string;
+  initialProvider: string | null;
+  initialModel: string | null;
+}) {
+  const [provider, setProvider] = useState(initialProvider || "gemini");
+  const [model, setModel] = useState(initialModel || "");
+  const [models, setModels] = useState<string[]>([]);
+  const [defaultModel, setDefaultModel] = useState("");
+  const [source, setSource] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const touched = useRef(false);
+
+  // Load the keyless model catalogue for the chosen provider.
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    fetch("/api/deploy/planner-models", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ws: workspaceId, repoId, provider }),
+    })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((d: { models: string[]; default_model: string; source: string }) => {
+        if (!alive) return;
+        setModels(d.models ?? []);
+        setDefaultModel(d.default_model ?? "");
+        setSource(d.source ?? "");
+      })
+      .catch(() => {
+        if (!alive) return;
+        setModels([]);
+        setDefaultModel("");
+        setSource("error");
+      })
+      .finally(() => {
+        if (alive) setLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [workspaceId, repoId, provider]);
+
+  // Persist (debounced) once the operator touches the picker.
+  useEffect(() => {
+    if (!touched.current) return;
+    setSaved(false);
+    const t = setTimeout(() => {
+      fetch("/api/deploy/planner-pref", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ws: workspaceId,
+          repoId,
+          provider: provider || null,
+          model: model.trim() || null,
+        }),
+      })
+        .then((r) => {
+          if (r.ok) setSaved(true);
+        })
+        .catch(() => {
+          // Non-fatal: can be set later from the deploy modal.
+        });
+    }, 600);
+    return () => clearTimeout(t);
+  }, [workspaceId, repoId, provider, model]);
+
+  const datalistId = `planner-models-${repoId}`;
+  return (
+    <div className="grid gap-2 sm:grid-cols-2">
+      <select
+        value={provider}
+        onChange={(e) => {
+          touched.current = true;
+          setProvider(e.target.value);
+          setModel("");
+        }}
+        className="rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-2 text-xs text-white"
+      >
+        {PLANNER_PROVIDERS.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.label}
+          </option>
+        ))}
+      </select>
+      <input
+        type="text"
+        list={datalistId}
+        value={model}
+        onChange={(e) => {
+          touched.current = true;
+          setModel(e.target.value);
+        }}
+        placeholder={
+          loading
+            ? "Loading models…"
+            : `Default${defaultModel ? ` (${defaultModel})` : ""} — or type an id`
+        }
+        autoComplete="off"
+        spellCheck={false}
+        className="rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-2 font-mono text-xs text-white placeholder-white/35"
+      />
+      <datalist id={datalistId}>
+        {models.map((m) => (
+          <option key={m} value={m} />
+        ))}
+      </datalist>
+      <p className="text-[11px] leading-snug text-white/40 sm:col-span-2">
+        {saved
+          ? "Saved — the deploy modal will prefill this."
+          : source === "catalog"
+            ? "Pick a model or type an id. Blank = Ship's default."
+            : source === "error"
+              ? "Couldn't load the list — type the model id by hand, or leave blank."
+              : "Optional. Blank = Ship's default for the provider."}
+      </p>
+    </div>
+  );
 }
 
 /**

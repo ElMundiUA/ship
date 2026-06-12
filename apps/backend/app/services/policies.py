@@ -134,5 +134,133 @@ async def render_policies_preamble(
 __all__ = [
     "format_policies_preamble",
     "list_enabled_policies",
+    "render_autonomy_preamble",
     "render_policies_preamble",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Autonomy preamble (ELS-244, thesis 7) — rendered through the SAME
+# module as the policies preamble so Navigator chat and shipctl run
+# emit byte-identical text (thesis 5: value enters through the prompt,
+# never tool-native config).
+# ---------------------------------------------------------------------------
+
+_AUTONOMY_BLOCKS: dict[str, str] = {
+    "high": (
+        "# Autonomy profile: HIGH\n"
+        "\n"
+        "Action rights for this workspace (opted in by the operator):\n"
+        "\n"
+        "- Skip optional approval pauses; proceed when CI is green.\n"
+        "- Broader edits are allowed: refactor adjacent code when it\n"
+        "  serves the task; keep commits reviewable.\n"
+        "- Self-pick follow-up work and create tickets / decompose\n"
+        "  without asking for confirmation first.\n"
+        "- Your PRs are self-merge-eligible once the server gate sees\n"
+        "  green CI (the gate still verifies — never claim falsely).\n"
+        "\n"
+        "Hard limits that NEVER loosen: CI must be green; the FSM gates\n"
+        "and dispatch limits (lease/cap/cascade) apply unchanged; no\n"
+        "force-pushes; no bypassing review stages by editing tracker\n"
+        "state directly.\n"
+    ),
+    "balanced": (
+        "# Autonomy profile: BALANCED\n"
+        "\n"
+        "Action rights for this workspace:\n"
+        "\n"
+        "- Proceed autonomously through the normal FSM stages.\n"
+        "- Confirm before destructive or structural operations\n"
+        "  (schema changes, deletions, dependency major bumps).\n"
+        "- Ticket creation / decomposition: propose first when the\n"
+        "  scope is new; proceed when it directly serves the current\n"
+        "  ticket.\n"
+        "- Merges require the review stage's approval as usual.\n"
+    ),
+    "conservative": (
+        "# Autonomy profile: CONSERVATIVE\n"
+        "\n"
+        "Action rights for this workspace:\n"
+        "\n"
+        "- Keep edits narrow: only what the ticket explicitly asks.\n"
+        "- Confirm before any merge, structural change, or new ticket\n"
+        "  creation.\n"
+        "- Prefer asking a clarification over assuming intent.\n"
+    ),
+}
+
+
+async def _has_knowledge_surface(
+    session: AsyncSession, workspace_id: uuid.UUID
+) -> bool:
+    """High autonomy only works WITH rich context (founder decision).
+
+    'Non-empty knowledge surface' = at least one enabled policy OR at
+    least one knowledge-base chunk for the workspace."""
+    policies = await list_enabled_policies(session, workspace_id)
+    if policies:
+        return True
+    from sqlalchemy import func, select as sa_select
+
+    from backend.app.db.models.agent_memory import KbChunk
+
+    chunks = await session.scalar(
+        sa_select(func.count(KbChunk.id)).where(
+            KbChunk.workspace_id == workspace_id
+        )
+    )
+    return bool(chunks)
+
+
+async def render_autonomy_preamble(
+    session: AsyncSession,
+    workspace_id: uuid.UUID,
+) -> str:
+    """Render the workspace's autonomy action-rights block.
+
+    Coupling guard: ``high`` on a workspace with NO knowledge surface
+    is downgraded to ``balanced`` for the rendered prompt, with an
+    audited warning — high rights + thin context is the chaos
+    combination the founder vetoed. The downgrade is per-render
+    (effective), not persisted: fixing the knowledge surface restores
+    high on the next render with no further action.
+    """
+    from backend.app.services.agent_provider_resolver import (
+        resolve_autonomy_for_workspace,
+    )
+
+    profile = await resolve_autonomy_for_workspace(
+        session=session, workspace_id=workspace_id
+    )
+    effective = profile
+    if profile == "high" and not await _has_knowledge_surface(
+        session, workspace_id
+    ):
+        effective = "balanced"
+        from backend.app.db.models.tenancy import AuditLog
+
+        session.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                actor_user_id=None,
+                actor_token_id=None,
+                action="workspace.autonomy.downgraded_effective",
+                target_kind="workspace",
+                target_id=str(workspace_id),
+                payload={
+                    "configured": "high",
+                    "effective": "balanced",
+                    "reason": "no_knowledge_surface",
+                },
+            )
+        )
+    block = _AUTONOMY_BLOCKS[effective]
+    if effective != profile:
+        block += (
+            "\n_Note: this workspace is configured HIGH but has no "
+            "knowledge surface (no enabled policies, empty knowledge "
+            "base) — rights are rendered as BALANCED until context "
+            "exists._\n"
+        )
+    return block

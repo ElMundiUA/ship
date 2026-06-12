@@ -41,7 +41,10 @@ from backend.app.services.config_registry import (
 )
 
 
-router = APIRouter(prefix="/v1/workspaces/{workspace_id}/config", tags=["config"])
+# NOTE: no ``/v1`` here — ``api_router`` already mounts every child under
+# ``/v1``. A self-prefix would double it (``/v1/v1/…``) and strand the
+# routes where no client looks (the pre-ELS-236 state of this file).
+router = APIRouter(prefix="/workspaces/{workspace_id}/config", tags=["config"])
 
 
 # ---------------------------------------------------------------------------
