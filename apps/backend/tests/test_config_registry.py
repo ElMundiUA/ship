@@ -41,6 +41,7 @@ def test_list_scopes_returns_every_registered_slug() -> None:
         "console.surface",
         "autonomy.profile",
         "local_executor.enabled",
+        "chat.comment_inbound",
     }
     # Every row carries a non-empty description (consumed by the
     # help-without-scope path).
