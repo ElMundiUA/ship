@@ -126,10 +126,16 @@ test.describe("process editor (wired, serial)", () => {
     await expect(page.getByText("Mon", { exact: true }).first()).toBeVisible();
     const addWindow = page.getByRole("button", { name: "+ Time window" });
     await expect(addWindow).toBeVisible();
+    const windowCountBefore = await page
+      .getByText(/\d+ time windows/)
+      .textContent();
     await addWindow.click();
-    await expect(page.getByText("Review before publishing")).toBeVisible({
+    await expect(page.getByText("08:00", { exact: true }).first()).toBeVisible({
       timeout: 10_000,
     });
+    await expect(page.getByText(/\d+ time windows/)).not.toHaveText(
+      windowCountBefore ?? "",
+    );
   });
 
   test("stage inspector edit surfaces validation and dirty UI", async ({
