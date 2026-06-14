@@ -14,7 +14,6 @@ import { PageBody, PageHeader } from "@/components/app-shell";
 import { ApiUnavailable } from "@/components/api-unavailable";
 import { ConfigScopeCard } from "@/components/config-scope-card";
 import { RepoRoutingPanel } from "@/components/repo-routing-panel";
-import { SdlcReadinessCard } from "@/components/sdlc-readiness-card";
 import {
   IntegrationsWorkspaceBody,
   loadIntegrationsWorkspaceMode,
@@ -110,23 +109,40 @@ function errorMessage(code: string): string {
   }
 }
 
+// MCP-first console (ELS-304): five tabs, down from ten. Config folds
+// into General; Connected code + Registries + Integrations merge into
+// Connections; Agent roles folds into Agents & access; Workspaces +
+// Danger merge into Workspace. Legacy tab ids alias to their new parent
+// below so deep-links + the per-tab route files keep resolving.
 const TABS = [
   { id: "general", label: "General" },
-  { id: "workspaces", label: "Workspaces" },
-  { id: "config", label: "Config" },
-  { id: "repositories", label: "Connected code" },
-  { id: "registries", label: "Registries" },
+  { id: "connections", label: "Connections" },
   { id: "members", label: "Members" },
-  { id: "integrations", label: "Integrations" },
-  { id: "agent-roles", label: "Agent roles" },
   { id: "api-keys", label: "Agents & access" },
-  { id: "danger", label: "Danger zone" },
+  { id: "workspace", label: "Workspace" },
 ] as const;
 type TabId = (typeof TABS)[number]["id"];
 const TAB_IDS = TABS.map((t) => t.id);
 
-function isTabId(value: string): value is TabId {
-  return (TAB_IDS as readonly string[]).includes(value);
+// Old tab id → new parent. Keeps ``?tab=`` deep-links and the per-tab
+// route files (settings/{old}/page.tsx) landing on the right merged tab.
+const TAB_ALIASES: Record<string, TabId> = {
+  tokens: "api-keys",
+  repos: "connections",
+  catalog: "general",
+  config: "general",
+  workspaces: "workspace",
+  danger: "workspace",
+  repositories: "connections",
+  registries: "connections",
+  integrations: "connections",
+  "agent-roles": "api-keys",
+};
+
+function resolveTabId(value: string | null | undefined): TabId | null {
+  if (!value) return null;
+  if ((TAB_IDS as readonly string[]).includes(value)) return value as TabId;
+  return TAB_ALIASES[value] ?? null;
 }
 
 async function load(
@@ -267,7 +283,9 @@ export async function SettingsShell({
   activeTab: activeTabFromRoute,
   searchParams,
 }: {
-  activeTab?: TabId;
+  // Accept any string (route files pin legacy ids like "config" /
+  // "registries"); resolveTabId folds them into the 5 parents.
+  activeTab?: string;
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const params = ((await (searchParams ?? Promise.resolve({}))) ?? {}) as Record<
@@ -277,13 +295,9 @@ export async function SettingsShell({
   const data = await load(params);
   const errorCode = typeof params.error === "string" ? params.error : null;
   const renamedFlag = params.renamed === "1";
-  let requestedTab = typeof params.tab === "string" ? params.tab : null;
-  if (requestedTab === "tokens") requestedTab = "api-keys";
-  if (requestedTab === "repos") requestedTab = "registries";
-  if (requestedTab === "catalog") requestedTab = "general";
+  const requestedTab = typeof params.tab === "string" ? params.tab : null;
   const activeTab: TabId =
-    activeTabFromRoute ??
-    (requestedTab && isTabId(requestedTab) ? requestedTab : "general");
+    resolveTabId(activeTabFromRoute) ?? resolveTabId(requestedTab) ?? "general";
   const justMintedFlag =
     typeof params.just_minted === "string" && params.just_minted === "1";
 
@@ -388,27 +402,23 @@ export async function SettingsShell({
                 workspaceId={workspace.id}
                 scope="agent.provider"
               />
-              <DispatchRoutineCard
-                workspace={workspace}
-                repos={activatedRepos}
-              />
               <AdvancedSurfacesCard workspaceId={workspace.id} multiWs={multiWs} />
+              <ConfigPanel workspaceId={workspace.id} />
             </div>
           )}
 
-          {activeTab === "workspaces" && (
-            <WorkspacesPanel
-              current={workspace}
-              memberships={allWorkspaces}
-            />
+          {activeTab === "workspace" && (
+            <div className="space-y-6">
+              <WorkspacesPanel
+                current={workspace}
+                memberships={allWorkspaces}
+              />
+              <DangerZone workspace={workspace} />
+            </div>
           )}
 
-          {activeTab === "config" && (
-            <ConfigPanel workspaceId={workspace.id} />
-          )}
-
-          {activeTab === "repositories" && (
-            <>
+          {activeTab === "connections" && (
+            <div className="space-y-6">
               <RepositoriesPanel
                 workspaceId={workspace.id}
                 repositories={activatedRepos}
@@ -418,11 +428,8 @@ export async function SettingsShell({
                 workspaceId={workspace.id}
                 repositories={activatedRepos}
               />
-            </>
-          )}
-
-          {activeTab === "registries" && (
-            <Card>
+              <SettingsIntegrationsTab searchParams={params} />
+              <Card>
               <CardHeader
                 title="Registries"
                 subtitle="Package and artifact sources Ship merges for this workspace. File paths work offline; git URLs sync in the background."
@@ -454,42 +461,34 @@ export async function SettingsShell({
               )}
               <AddRepoForm workspaceId={workspace.id} />
             </Card>
+            </div>
           )}
 
           {activeTab === "api-keys" && (
-            <TokensPanel
-              workspaceId={workspace.id}
-              tokens={tokens}
-              freshSecret={freshSecret}
-            />
+            <div className="space-y-6">
+              <TokensPanel
+                workspaceId={workspace.id}
+                tokens={tokens}
+                freshSecret={freshSecret}
+              />
+              <Card>
+                <CardHeader
+                  title="Agent roles"
+                  subtitle="Specialist prompts agents load when a routine fires. Ship ships read-only defaults; override one for this workspace, or clone a default into a custom slug. Most teams never touch this — defaults work."
+                />
+                <div className="mt-4">
+                  <AgentRolesList
+                    workspaceId={workspace.id}
+                    defaults={agentRoleDefaults}
+                    customs={agentRoleCustoms}
+                  />
+                </div>
+              </Card>
+            </div>
           )}
 
           {activeTab === "members" && (
             <WorkspaceMembersPanelLoader searchParams={searchParams} />
-          )}
-
-          {activeTab === "integrations" && (
-            <SettingsIntegrationsTab searchParams={params} />
-          )}
-
-          {activeTab === "agent-roles" && (
-            <Card>
-              <CardHeader
-                title="Agent roles"
-                subtitle="Specialist prompts agents load when a routine fires. Ship ships read-only defaults; override one for this workspace, or clone a default into a custom slug. Most teams never touch this — defaults work."
-              />
-              <div className="mt-4">
-                <AgentRolesList
-                  workspaceId={workspace.id}
-                  defaults={agentRoleDefaults}
-                  customs={agentRoleCustoms}
-                />
-              </div>
-            </Card>
-          )}
-
-          {activeTab === "danger" && (
-            <DangerZone workspace={workspace} />
           )}
         </div>
         </div>
@@ -666,27 +665,6 @@ function RepositoriesPanel({
               ))}
             </tbody>
           </table>
-        </div>
-      )}
-      {repositories.length > 0 && (
-        <div className="mt-6">
-          <h4 className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-white/45">
-            SDLC readiness
-          </h4>
-          <p className="mb-3 text-[11px] text-white/45">
-            Check whether each repo is set up for its project type (tests,
-            Docker, deploy) and generate the DevOps tickets to close the gaps.
-          </p>
-          <div className="space-y-2">
-            {repositories.map((repo) => (
-              <SdlcReadinessCard
-                key={repo.id}
-                workspaceId={workspaceId}
-                repoId={repo.id}
-                repoFullName={repo.full_name}
-              />
-            ))}
-          </div>
         </div>
       )}
       <div className="mt-4 rounded-xl border border-aqua/20 bg-aqua/[0.04] px-3 py-2.5 text-[11px] leading-relaxed text-aqua/85">
@@ -973,89 +951,6 @@ function AdvancedSurfacesCard({
           </li>
         ))}
       </ul>
-    </Card>
-  );
-}
-
-function DispatchRoutineCard({
-  workspace,
-  repos,
-}: {
-  workspace: ApiWorkspace;
-  repos: ApiActivatedRepo[];
-}) {
-  const hasRepo = repos.length > 0;
-  const defaultRepoId = repos[0]?.id ?? "";
-  return (
-    <Card>
-      <CardHeader
-        title="Dispatch routine (debug)"
-        subtitle="Fire any FSM routine manually against the bound provider — the GHA workflow_dispatch runs shipctl run --routine X --debug, which streams a step-by-step log into the runner output. Admin-only; consumes agent quota."
-      />
-      {!hasRepo && (
-        <div className="mb-4 rounded-xl border border-sun/30 bg-sun/[0.06] px-3 py-2 text-xs text-sun/95">
-          No activated repos yet. Activate one before dispatching.
-        </div>
-      )}
-      <form
-        action="/api/settings/dispatch-routine"
-        method="POST"
-        className="grid gap-3 sm:grid-cols-[1fr,1fr,1fr,auto]"
-      >
-        <input type="hidden" name="ws" value={workspace.id} suppressHydrationWarning />
-        <label className="flex flex-col gap-1">
-          <span className="text-[10px] font-bold uppercase tracking-widest text-white/55">
-            Repo
-          </span>
-          <select
-            name="repo"
-            defaultValue={defaultRepoId}
-            required
-            disabled={!hasRepo}
-            className="rounded border border-white/10 bg-white/[0.04] px-2 py-2 text-sm text-white outline-none focus:border-aqua/40 disabled:opacity-50"
-          >
-            {repos.map((r) => (
-              <option key={r.id} value={r.id}>
-                {r.full_name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="flex flex-col gap-1">
-          <span className="text-[10px] font-bold uppercase tracking-widest text-white/55">
-            Routine id
-          </span>
-          <input
-            name="routine"
-            type="text"
-            placeholder="intake / dev_implementation / qa_manual …"
-            required
-            pattern="[A-Za-z0-9_-]{1,64}"
-            disabled={!hasRepo}
-            className="rounded border border-white/10 bg-white/[0.04] px-2 py-2 font-mono text-sm text-white outline-none focus:border-aqua/40 disabled:opacity-50"
-          />
-        </label>
-        <label className="flex flex-col gap-1">
-          <span className="text-[10px] font-bold uppercase tracking-widest text-white/55">
-            Pin ticket (optional)
-          </span>
-          <input
-            name="ticket"
-            type="text"
-            placeholder="ELS-15"
-            pattern="[A-Z0-9-]{1,32}"
-            disabled={!hasRepo}
-            className="rounded border border-white/10 bg-white/[0.04] px-2 py-2 font-mono text-sm text-white outline-none focus:border-aqua/40 disabled:opacity-50"
-          />
-        </label>
-        <button
-          type="submit"
-          disabled={!hasRepo}
-          className="h-10 self-end whitespace-nowrap rounded-full border border-aqua/30 bg-aqua/10 px-4 text-xs font-bold text-aqua transition hover:bg-aqua/15 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          Dispatch
-        </button>
-      </form>
     </Card>
   );
 }
