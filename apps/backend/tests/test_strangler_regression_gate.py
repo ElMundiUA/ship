@@ -13,11 +13,35 @@ from __future__ import annotations
 def _route_paths() -> set[str]:
     from backend.app.main import app
 
-    # Some FastAPI/Starlette versions leave a path-less ``_IncludedRouter``
-    # proxy in ``app.routes`` per ``include_router`` call (seen in CI once
-    # the MCP edge + OAuth broker routers were mounted). Those carry no
-    # path to gate on — skip anything without a ``.path``.
-    return {r.path for r in app.routes if hasattr(r, "path")}
+    # Source of truth = the OpenAPI path table. FastAPI builds it by
+    # properly traversing the route tree, so it is immune to how
+    # ``app.routes`` is shaped — newer Starlette leaves a path-less
+    # router *proxy* in ``app.routes`` per ``include_router`` call (only
+    # surfaces in the full CI suite), which made the old
+    # ``{r.path for r in app.routes}`` either crash (no ``.path``) or
+    # drop the routes it wrapped (``agent_runs boundary missing``).
+    paths: set[str] = set(app.openapi().get("paths", {}))
+
+    # Belt-and-suspenders: union a defensive recursive walk so any
+    # ``include_in_schema=False`` route (absent from OpenAPI) is still
+    # gated. Skips path-less proxies, recurses into nested routers.
+    seen: set[int] = set()
+
+    def walk(routes) -> None:
+        for route in routes or ():
+            if id(route) in seen:
+                continue
+            seen.add(id(route))
+            path = getattr(route, "path", None)
+            if isinstance(path, str):
+                paths.add(path)
+            walk(getattr(route, "routes", None))
+            inner = getattr(route, "router", None)
+            if inner is not None:
+                walk(getattr(inner, "routes", None))
+
+    walk(app.routes)
+    return paths
 
 
 def test_deleted_render_routes_are_gone() -> None:
