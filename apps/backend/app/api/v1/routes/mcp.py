@@ -153,8 +153,12 @@ Typical flows:
   they merge the seed PR, Ship's bootstrap runs itself.
 - "what does this repo still need / set up deploy + tests" →
   `sdlc_assess` to classify the repo and list its SDLC gaps +
-  recommended tickets. Proactively offer those to the operator; on a
-  yes, file them with `project_create` / `ticket_create`.
+  recommended tickets. Proactively offer the gaps to the operator; on
+  a yes, file them with `project_create` / `ticket_create`. If the repo
+  ALREADY has some setup (`existing_capabilities` / `integration_
+  decision` in the result), don't scaffold over it — ask the operator
+  how they want Ship to integrate (coexist / replace / adopt), present
+  the options, and act on their pick.
 - open questions / approvals → `inbox_list`, then `inbox_get` and
   `inbox_update`. Disposing an APPROVAL item requires passing
   `approval_echo` with the item's exact title — quote it to the
@@ -787,30 +791,66 @@ async def _call_native(
                 }
             )
         rep = result.report
+        # Gaps are clean adds. Satisfied capabilities mean the repo
+        # ALREADY has that setup (CI, tests, Docker, deploy…) — Ship must
+        # not scaffold over them blindly; surface them so the agent asks
+        # the operator how to integrate.
         recommended = [
             {"capability": c, "title": _spec(c)[0], "scaffold": _spec(c)[1]}
             for c in rep.gaps
         ]
-        return json.dumps(
-            {
-                "repo_id": str(repo_id),
-                "project_type": rep.project_type,
-                "delivery": rep.delivery,
-                "ready": rep.ready,
-                "gaps": list(rep.gaps),
-                "missing_required_secrets": list(rep.missing_required_secrets),
-                "external_checklist": list(rep.external_checklist),
-                "recommended_tickets": recommended,
-                "harvested": harvested,
-                "guidance": (
-                    "Propose recommended_tickets to the operator; on yes, "
-                    "file them (project_create / ticket_create). Missing "
-                    "secrets stay web-only — point them at the "
-                    "repo_setup_status fix_url. Don't create tickets "
-                    "unprompted."
+        existing = [
+            {"capability": c.capability, "matched_by": c.matched_by}
+            for c in rep.capabilities
+            if c.satisfied
+        ]
+        out: dict[str, Any] = {
+            "repo_id": str(repo_id),
+            "project_type": rep.project_type,
+            "delivery": rep.delivery,
+            "ready": rep.ready,
+            "gaps": list(rep.gaps),
+            "existing_capabilities": existing,
+            "missing_required_secrets": list(rep.missing_required_secrets),
+            "external_checklist": list(rep.external_checklist),
+            "recommended_tickets": recommended,
+            "harvested": harvested,
+            "guidance": (
+                "Gaps are clean adds — propose recommended_tickets to the "
+                "operator; on yes, file them (project_create / "
+                "ticket_create). Missing secrets stay web-only — point "
+                "them at the repo_setup_status fix_url. Don't create "
+                "tickets unprompted."
+            ),
+        }
+        if existing:
+            out["integration_decision"] = {
+                "why": (
+                    "This repo already has some of what Ship would set up "
+                    "(see existing_capabilities). Do NOT scaffold over it "
+                    "blindly — ASK the operator how they want Ship to "
+                    "integrate, present the options, and act on their pick."
                 ),
+                "options": [
+                    {
+                        "id": "coexist",
+                        "label": "Coexist — Ship wraps/uses the existing "
+                        "setup, adds only the missing gaps.",
+                    },
+                    {
+                        "id": "replace",
+                        "label": "Replace — swap the existing setup for "
+                        "Ship's blueprint (the old config is removed in the "
+                        "change).",
+                    },
+                    {
+                        "id": "adopt",
+                        "label": "Adopt — keep the existing setup as-is and "
+                        "register it with Ship, scaffolding nothing for it.",
+                    },
+                ],
             }
-        )
+        return json.dumps(out)
 
     if name == "tracker_bind":
         from backend.app.api.v1.routes.tracker_binding import (
