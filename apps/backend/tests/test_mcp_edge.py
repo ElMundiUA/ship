@@ -71,12 +71,48 @@ async def test_tools_list_projection_and_natives(
         "workspace_create",
         "github_sibling_installs",
         "github_attach_install",
+        "get_policies",
     ):
         assert native in tools
     # workspace_id injected into projected tools.
     assert "workspace_id" in tools["dashboard_get"]["inputSchema"]["properties"]
     # approval_echo contract surfaced on inbox_update.
     assert "approval_echo" in tools["inbox_update"]["inputSchema"]["properties"]
+
+
+@pytest.mark.asyncio
+async def test_initialize_instructs_work_by_ship_rules(
+    db_session, v1_client, seed_workspace
+) -> None:
+    _, raw, _ = seed_workspace
+    res = await _post(v1_client, raw, _rpc("initialize", {}))
+    instructions = res.json()["result"]["instructions"]
+    assert "get_policies" in instructions
+    assert "Ship's rules" in instructions
+    # Ticket-discipline is set at connect, not left to the agent's habits:
+    # every unit of work gets a tracker ticket before code.
+    assert "ticket_create" in instructions
+    assert "BEFORE you change code" in instructions
+
+
+@pytest.mark.asyncio
+async def test_get_policies_returns_workspace_rules(
+    db_session, v1_client, seed_workspace
+) -> None:
+    _, raw, workspace = seed_workspace
+    res = await _post(
+        v1_client,
+        raw,
+        _rpc(
+            "tools/call",
+            {"name": "get_policies", "arguments": {"workspace_id": str(workspace.id)}},
+        ),
+    )
+    result = res.json()["result"]
+    assert result["isError"] is False
+    body = json.loads(result["content"][0]["text"])
+    assert body["workspace_id"] == str(workspace.id)
+    assert "policies" in body and "note" in body
 
 
 @pytest.mark.asyncio
