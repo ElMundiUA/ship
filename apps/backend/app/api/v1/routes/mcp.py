@@ -114,6 +114,14 @@ mutation is attributed to them, so never fire a mutating tool the
 operator did not explicitly ask for in this conversation
 (verify-before-mutate). Suggest first; call after they confirm.
 
+Work by Ship's rules. Each workspace carries standing rules — its
+definition-of-done, conventions and methodology, the same ones Ship's
+own execution agents follow. BEFORE you act in a workspace (planning,
+tickets, reviews, comments) call `get_policies` for it and honour what
+it returns; treat those rules as binding on how you do the work, not
+optional advice. The non-negotiable ones are also enforced server-side
+(you'll get a refusal), but most are yours to uphold.
+
 Workspaces: every tool accepts an optional `workspace_id`. If the
 operator belongs to exactly one workspace it is inferred; otherwise
 call `list_workspaces` and ask which one they mean.
@@ -209,6 +217,21 @@ _NATIVE_TOOLS: list[dict[str, Any]] = [
             "(id, slug, name)."
         ),
         "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "get_policies",
+        "description": (
+            "Load a workspace's standing rules — its definition-of-done, "
+            "conventions and methodology, the same prose policies Ship's "
+            "execution agents follow. Read this BEFORE acting in a "
+            "workspace and treat what it returns as binding on how you "
+            "plan, build and review there. Returns the rendered policy "
+            "preamble (empty when the workspace has set no rules)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"workspace_id": _WORKSPACE_ID_PROP},
+        },
     },
     {
         "name": "workspace_create",
@@ -383,6 +406,25 @@ async def _call_native(
         rows = await _member_workspaces(session, auth.user.id)
         return json.dumps(
             [{"id": str(w.id), "slug": w.slug, "name": w.name} for w in rows]
+        )
+
+    if name == "get_policies":
+        from backend.app.services.policies import render_policies_preamble
+
+        ws_id = await _resolve_workspace_id(session, auth, arguments)
+        preamble = await render_policies_preamble(session, ws_id)
+        return json.dumps(
+            {
+                "workspace_id": str(ws_id),
+                "policies": preamble or "",
+                "note": (
+                    "These are the workspace's standing rules — its "
+                    "definition of how Ship work gets done here. Follow "
+                    "them for every action you take in this workspace."
+                    if preamble
+                    else "This workspace has no standing rules set yet."
+                ),
+            }
         )
 
     if name == "workspace_create":
