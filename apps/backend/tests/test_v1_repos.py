@@ -141,6 +141,66 @@ async def test_available_returns_live_set_with_activation_flag(
 
 
 @pytest.mark.asyncio
+async def test_available_resolves_sibling_attached_install(
+    v1_client,
+    db_session,
+    seed_workspace,
+    github_app_env,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Multi-workspace per install (migration 0076 / ELS-303): the
+    workspace owns NO install of its own but activated a repo under a
+    sibling workspace's install. _resolve_installation must fall back to
+    that install via the repo's installation_id instead of 409-ing."""
+    from backend.app.api.v1.routes import repos as repos_module
+    from backend.app.db.models.integrations import WorkspaceRepo
+    from backend.app.db.models.tenancy import Workspace
+
+    _, raw, workspace = seed_workspace
+    # The install belongs to a sibling workspace in the same org.
+    sibling = Workspace(
+        org_id=workspace.org_id,
+        slug=f"sib-{uuid.uuid4().hex[:6]}",
+        name="Sibling",
+    )
+    db_session.add(sibling)
+    await db_session.flush()
+    install = await _seed_installation(
+        db_session, sibling.id, installation_id=200
+    )
+    # Target workspace activated a repo under the sibling's install.
+    db_session.add(
+        WorkspaceRepo(
+            workspace_id=workspace.id,
+            installation_id=install.id,
+            provider="github",
+            external_id=2001,
+            full_name="acme/shared",
+            default_branch="main",
+            private=False,
+            html_url="https://github.com/acme/shared",
+            activated_at=datetime.now(timezone.utc),
+        )
+    )
+    await db_session.flush()
+
+    async def _stub(self) -> list:
+        return [_summary(external_id=2001, repo="shared")]
+
+    monkeypatch.setattr(
+        repos_module.GitHubCodeHost, "list_repo_summaries", _stub
+    )
+
+    response = await v1_client.get(
+        f"/v1/workspaces/{workspace.id}/repos/available",
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    assert response.status_code == 200, response.text
+    by_id = {r["external_id"]: r for r in response.json()}
+    assert by_id[2001]["activated"] is True
+
+
+@pytest.mark.asyncio
 async def test_activate_replaces_set_and_audit_logs(
     v1_client,
     db_session,
