@@ -72,6 +72,7 @@ async def test_tools_list_projection_and_natives(
         "github_sibling_installs",
         "github_attach_install",
         "get_policies",
+        "repo_setup_status",
     ):
         assert native in tools
     # workspace_id injected into projected tools.
@@ -113,6 +114,29 @@ async def test_get_policies_returns_workspace_rules(
     body = json.loads(result["content"][0]["text"])
     assert body["workspace_id"] == str(workspace.id)
     assert "policies" in body and "note" in body
+
+
+@pytest.mark.asyncio
+async def test_repo_setup_status_reports_checklist_and_links(
+    db_session, v1_client, seed_workspace
+) -> None:
+    # Fresh workspace: no tracker, no repos → the tool reports the gaps
+    # with web fix_urls so the agent can walk the operator there.
+    _, raw, _ = seed_workspace
+    res = await _post(
+        v1_client,
+        raw,
+        _rpc("tools/call", {"name": "repo_setup_status", "arguments": {}}),
+    )
+    result = res.json()["result"]
+    assert result["isError"] is False
+    body = json.loads(result["content"][0]["text"])
+    assert body["tracker_bound"] is False
+    assert body["activated_repos"] == []
+    steps = {s["step"]: s for s in body["next_steps"]}
+    assert steps["tracker"]["do"] == "web" and steps["tracker"]["fix_url"]
+    assert "activate_repo" in steps
+    assert "secrets are web-only" in body["guidance"].lower()
 
 
 @pytest.mark.asyncio
