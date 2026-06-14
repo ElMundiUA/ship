@@ -36,7 +36,7 @@ import logging
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -507,10 +507,37 @@ def _rpc_error(req_id: Any, code: int, message: str) -> JSONResponse:
     )
 
 
+async def get_mcp_auth(
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    settings: Settings = Depends(get_settings),
+    session: AsyncSession = Depends(get_session),
+) -> AuthContext:
+    """Same bearer resolution as the rest of the API, but a 401 carries
+    the OAuth ``resource_metadata`` hint (RFC 9728 §5.1) so an MCP
+    client (Claude Code/Desktop) knows where to start the
+    add → log in → grant flow instead of demanding a pasted token."""
+    try:
+        return await get_current_auth(
+            authorization=authorization, settings=settings, session=session
+        )
+    except HTTPException as exc:
+        if exc.status_code == status.HTTP_401_UNAUTHORIZED:
+            meta = (
+                f"{settings.public_url.rstrip('/')}"
+                "/.well-known/oauth-protected-resource"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=exc.detail,
+                headers={"WWW-Authenticate": f'Bearer resource_metadata="{meta}"'},
+            ) from exc
+        raise
+
+
 @router.post("/mcp")
 async def mcp_endpoint(
     request: Request,
-    auth: AuthContext = Depends(get_current_auth),
+    auth: AuthContext = Depends(get_mcp_auth),
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> Response:

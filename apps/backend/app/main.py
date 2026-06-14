@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 import os
 import re
 import time
-import uuid
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -15,8 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-import yaml
-from fastapi import FastAPI, Header, HTTPException, Query, Response
+from fastapi import FastAPI, Header, HTTPException, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.app.api.v1 import api_router as v1_api_router
@@ -265,6 +262,15 @@ app.include_router(v1_api_router)
 from backend.app.api.v1.routes.mcp import router as mcp_router  # noqa: E402
 
 app.include_router(mcp_router)
+
+# MCP OAuth broker (ELS-296): discovery metadata, Dynamic Client
+# Registration, and the token endpoint — Ship is the authorization
+# server for the MCP edge so business operators attach with
+# add → log in → grant instead of pasting a PAT. Mounted at the app
+# root so /.well-known/* discovery resolves on the API origin.
+from backend.app.api.v1.routes.oauth import router as oauth_router  # noqa: E402
+
+app.include_router(oauth_router)
 
 
 @app.get("/healthz", tags=["meta"], include_in_schema=False)

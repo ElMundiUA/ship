@@ -3337,6 +3337,45 @@ export function mintToken(
   });
 }
 
+// --- MCP OAuth broker (ELS-296) ---------------------------------------------
+
+export type McpOAuthClientInfo = {
+  client_id: string;
+  client_name: string | null;
+  redirect_uris: string[];
+};
+
+/** Public metadata for the consent screen (session-authed). */
+export function describeOAuthClient(
+  clientId: string,
+  token?: string,
+): Promise<McpOAuthClientInfo> {
+  return apiFetch<McpOAuthClientInfo>(
+    `/oauth/clients/${encodeURIComponent(clientId)}`,
+    { token },
+  );
+}
+
+/** Operator approved consent → mint the single-use code; returns the
+ * redirect URL (``redirect_uri?code=…&state=…``) to bounce the browser to. */
+export function oauthAuthorizeGrant(
+  input: {
+    client_id: string;
+    redirect_uri: string;
+    code_challenge: string;
+    code_challenge_method: string;
+    state?: string | null;
+    scope?: string | null;
+  },
+  token?: string,
+): Promise<{ redirect_to: string }> {
+  return apiFetch<{ redirect_to: string }>(`/oauth/authorize/grant`, {
+    method: "POST",
+    body: input,
+    token,
+  });
+}
+
 export function listTokens(token?: string): Promise<ApiTokenInfo[]> {
   return apiFetch<ApiTokenInfo[]>(`/v1/auth/tokens`, { token });
 }

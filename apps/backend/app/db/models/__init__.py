@@ -54,6 +54,7 @@ from backend.app.db.models.integrations import (
 )
 from backend.app.db.models.lanes import Routine, RoutineRun
 from backend.app.db.models.notifications import WorkspaceNotification
+from backend.app.db.models.oauth import McpOAuthClient, McpOAuthCode
 from backend.app.db.models.pipelines import (
     AgentRequest,
     FleetRequest,
@@ -106,6 +107,8 @@ __all__ = [
     "Clarification",
     "FleetRequest",
     "GitHubInstallation",
+    "McpOAuthClient",
+    "McpOAuthCode",
     "GroupAssignmentState",
     "Improvement",
     "InboxItem",
