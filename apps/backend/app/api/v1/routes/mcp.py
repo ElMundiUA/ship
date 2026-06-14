@@ -145,9 +145,11 @@ Typical flows:
   from there.
 - "review this PR" → `run_workflow` with workflow_name="pr-review".
 - "set Ship up on this repo" → `repo_setup_status` to see what's
-  missing, then close gaps: `tracker_bind` (point the repo at a
-  tracker), set the default agent profile via `config_put`, and
-  `wizard_seed` to open the seed PR that wires Ship in. For web-only
+  missing, then close gaps: `github_list_install_repos` +
+  `repo_activate` (activate repos the install can see), `tracker_bind`
+  (point a repo at a tracker), set the default agent profile via
+  `config_put`, and `wizard_seed` to open the seed PR that wires Ship
+  in. For web-only
   steps (agent secrets, the first GitHub/tracker OAuth) hand the
   operator the `fix_url`, wait, then re-run `repo_setup_status`. Once
   they merge the seed PR, Ship's bootstrap runs itself.
@@ -436,6 +438,44 @@ _NATIVE_TOOLS: list[dict[str, Any]] = [
                 },
             },
             "required": ["installation_id"],
+        },
+    },
+    {
+        "name": "github_list_install_repos",
+        "description": (
+            "List the repos the workspace's GitHub App install can see, "
+            "each with its `external_id` (GitHub's numeric id), whether "
+            "it's already `activated` for Ship, and `claimed_by` (a "
+            "sibling workspace that already owns it, or null). Use this to "
+            "find the external_id to pass to repo_activate."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"workspace_id": _WORKSPACE_ID_PROP},
+        },
+    },
+    {
+        "name": "repo_activate",
+        "description": (
+            "Activate one or more repos for Ship by their GitHub "
+            "`external_id` (get them from github_list_install_repos). "
+            "ADDITIVE — already-activated repos stay activated; this only "
+            "adds the ones you pass. (Internally the activation set is "
+            "replace-based; this tool unions your ids with the current "
+            "set so you can't accidentally deactivate anything.) After "
+            "activating, run repo_setup_status to see the next steps."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "workspace_id": _WORKSPACE_ID_PROP,
+                "external_ids": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": "GitHub numeric repo ids to activate.",
+                },
+            },
+            "required": ["external_ids"],
         },
     },
 ]
@@ -988,6 +1028,80 @@ async def _call_native(
                 "attached": True,
                 "installation_id": row.installation_id,
                 "account_login": row.account_login,
+            }
+        )
+
+    if name == "github_list_install_repos":
+        from backend.app.api.v1.routes.repos import list_available_repos
+
+        ws_id = await _resolve_workspace_id(session, auth, arguments)
+        try:
+            rows = await list_available_repos(
+                workspace_id=ws_id, auth=auth, session=session, settings=settings
+            )
+        except HTTPException as exc:
+            raise _McpToolError(
+                f"could not list repos: {exc.detail}"
+            ) from exc
+        return json.dumps(
+            [
+                {
+                    "external_id": r.external_id,
+                    "full_name": r.full_name,
+                    "activated": r.activated,
+                    "claimed_by": r.claimed_by_workspace_slug,
+                }
+                for r in rows
+            ]
+        )
+
+    if name == "repo_activate":
+        from backend.app.api.v1.routes.repos import (
+            RepoActivateIn,
+            activate_repos,
+            list_available_repos,
+        )
+
+        ws_id = await _resolve_workspace_id(session, auth, arguments)
+        raw_ids = arguments.get("external_ids")
+        if not isinstance(raw_ids, list) or not raw_ids:
+            raise _McpToolError("external_ids (non-empty array of ints) is required")
+        try:
+            requested = {int(x) for x in raw_ids}
+        except (TypeError, ValueError) as exc:
+            raise _McpToolError("external_ids must all be integers") from exc
+        # Additive: union with the already-activated set so a caller
+        # passing one id can't deactivate the rest (the route replaces).
+        try:
+            available = await list_available_repos(
+                workspace_id=ws_id, auth=auth, session=session, settings=settings
+            )
+        except HTTPException as exc:
+            raise _McpToolError(f"could not read repos: {exc.detail}") from exc
+        already = {r.external_id for r in available if r.activated}
+        valid = {r.external_id for r in available}
+        unknown = requested - valid
+        if unknown:
+            raise _McpToolError(
+                f"these external_ids aren't visible to the install: "
+                f"{sorted(unknown)} — call github_list_install_repos"
+            )
+        desired = sorted(already | requested)
+        try:
+            out = await activate_repos(
+                workspace_id=ws_id,
+                payload=RepoActivateIn(external_ids=desired),
+                auth=auth,
+                session=session,
+                settings=settings,
+            )
+        except HTTPException as exc:
+            raise _McpToolError(f"activation failed: {exc.detail}") from exc
+        return json.dumps(
+            {
+                "activated_now": sorted(requested - already),
+                "activated_total": [r.external_id for r in out],
+                "next": "run repo_setup_status to see the remaining setup steps",
             }
         )
 

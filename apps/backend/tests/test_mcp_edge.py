@@ -76,6 +76,8 @@ async def test_tools_list_projection_and_natives(
         "tracker_bind",
         "wizard_seed",
         "sdlc_assess",
+        "github_list_install_repos",
+        "repo_activate",
     ):
         assert native in tools
     # workspace_id injected into projected tools.
@@ -178,6 +180,21 @@ async def test_sdlc_assess_unknown_repo_errors(
     result = res.json()["result"]
     assert result["isError"] is True
     assert "not activated" in result["content"][0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_repo_activate_requires_external_ids(
+    db_session, v1_client, seed_workspace
+) -> None:
+    _, raw, _ = seed_workspace
+    res = await _post(
+        v1_client,
+        raw,
+        _rpc("tools/call", {"name": "repo_activate", "arguments": {}}),
+    )
+    result = res.json()["result"]
+    assert result["isError"] is True
+    assert "external_ids" in result["content"][0]["text"]
 
 
 @pytest.mark.asyncio
