@@ -243,6 +243,30 @@ _NATIVE_TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "repo_setup_status",
+        "description": (
+            "Is Ship wired into this workspace's repos yet? Returns the "
+            "install checklist — GitHub App, repo activation, tracker "
+            "binding, default agent profile, agent secrets, seed PR — and "
+            "for each gap how to close it. Some steps stay web-only "
+            "(secrets, the first GitHub/tracker OAuth): for those the "
+            "result carries a `fix_url` into the Console — walk the "
+            "operator there, then re-run this to confirm. Pass `repo_id` "
+            "for full per-repo detail incl. secrets; omit it for the "
+            "workspace-level checklist + repo list."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "workspace_id": _WORKSPACE_ID_PROP,
+                "repo_id": {
+                    "type": "string",
+                    "description": "Activated-repo UUID for full detail.",
+                },
+            },
+        },
+    },
+    {
         "name": "workspace_create",
         "description": (
             "Create a new Ship workspace owned by the operator. "
@@ -401,6 +425,166 @@ async def _stakes_gate(
 # ---------------------------------------------------------------------------
 
 
+async def _repo_setup_status(
+    session: AsyncSession,
+    workspace_id: uuid.UUID,
+    repo_arg: Any,
+    *,
+    settings: Settings,
+) -> str:
+    """Install checklist for a workspace's repos + how to close each gap.
+
+    Read-only and best-effort: a step that's safe for the agent to do
+    over MCP is tagged ``do: agent``; a web-only step (secrets, the
+    first GitHub/tracker OAuth) carries a ``fix_url`` deep-link into the
+    Console so the agent can walk the operator there and re-poll. The
+    agent-doable action tools (repo_activate / tracker_bind /
+    wizard_seed) land next; until then their steps point at the wizard.
+    """
+    import json
+
+    from sqlalchemy import select as _select
+
+    from backend.app.db.models.integrations import WorkspaceRepo
+    from backend.app.db.models.tenancy import Workspace
+    from backend.app.services.dashboard_tracker_wip import (
+        workspace_has_tracker_binding,
+    )
+
+    console = settings.console_url.rstrip("/")
+    ws = await session.get(Workspace, workspace_id)
+    default_profile = getattr(ws, "default_agent_profile", None)
+    tracker_bound = await workspace_has_tracker_binding(session, workspace_id)
+
+    repos = list(
+        (
+            await session.execute(
+                _select(WorkspaceRepo).where(
+                    WorkspaceRepo.workspace_id == workspace_id
+                )
+            )
+        ).scalars().all()
+    )
+
+    def repo_brief(r: WorkspaceRepo) -> dict[str, Any]:
+        return {
+            "repo_id": str(r.id),
+            "full_name": r.full_name,
+            "github_installed": r.installation_id is not None,
+            "seeded": r.installed_bundle_version is not None,
+            "installed_bundle": r.installed_bundle_version,
+        }
+
+    out: dict[str, Any] = {
+        "workspace_id": str(workspace_id),
+        "default_agent_profile": default_profile,
+        "tracker_bound": tracker_bound,
+        "activated_repos": [repo_brief(r) for r in repos],
+    }
+
+    # Workspace-level gaps that block seeding any repo.
+    steps: list[dict[str, str]] = []
+    if not tracker_bound:
+        steps.append(
+            {
+                "step": "tracker",
+                "state": "missing",
+                "do": "web",
+                "fix_url": f"{console}/onboarding?step=tracker&ws={workspace_id}",
+                "note": "Connect a tracker (Linear/…) — OAuth in the browser.",
+            }
+        )
+    if not default_profile:
+        steps.append(
+            {
+                "step": "default_agent_profile",
+                "state": "missing",
+                "do": "agent",
+                "note": "Set agent.default_profile via config_put, or in Settings.",
+            }
+        )
+    if not repos:
+        steps.append(
+            {
+                "step": "activate_repo",
+                "state": "missing",
+                "do": "web",
+                "fix_url": f"{console}/onboarding?step=github&ws={workspace_id}",
+                "note": "Install the GitHub App + activate at least one repo.",
+            }
+        )
+
+    # Per-repo detail (incl. secrets) only when a repo_id is given —
+    # the secrets check is a GitHub round-trip, kept off the list view.
+    if repo_arg:
+        try:
+            repo_id = uuid.UUID(str(repo_arg))
+        except ValueError as exc:
+            raise _McpToolError(f"invalid repo_id: {repo_arg!r}") from exc
+        repo = next((r for r in repos if r.id == repo_id), None)
+        if repo is None:
+            raise _McpToolError("repo not activated in this workspace")
+        detail: dict[str, Any] = repo_brief(repo)
+        secrets_url = f"{console}/repos/{repo_id}/secrets"
+        if repo.installation_id is None:
+            detail["secrets"] = {"state": "unknown", "reason": "github_app_missing"}
+        else:
+            # Best-effort: degrade to the deep-link if GitHub read fails.
+            try:
+                from backend.app.api.v1.routes.agent_secrets import (
+                    _resolve_repo_and_install,
+                )
+                from backend.app.services.agent_secrets import (
+                    AGENT_SECRET_CATALOG,
+                    resolve_agent_secret_status,
+                )
+
+                _, install = await _resolve_repo_and_install(
+                    session, workspace_id, repo_id
+                )
+                statuses = await resolve_agent_secret_status(
+                    repo,
+                    install,
+                    slugs=[s.slug for s in AGENT_SECRET_CATALOG],
+                    settings=settings,
+                )
+                missing = [s.slug for s in statuses if s.required and not s.present]
+                detail["secrets"] = {
+                    "state": "ok" if not missing else "missing",
+                    "missing_required": missing,
+                    # Secrets stay web-only by policy — walk the operator here.
+                    "fix_url": secrets_url if missing else None,
+                    "do": "web" if missing else None,
+                }
+            except Exception:  # noqa: BLE001 — status must not hard-fail
+                detail["secrets"] = {
+                    "state": "unknown",
+                    "reason": "could_not_read",
+                    "fix_url": secrets_url,
+                    "do": "web",
+                }
+        if not repo.installed_bundle_version:
+            detail["seed"] = {
+                "state": "missing",
+                "do": "web",
+                "fix_url": f"{console}/onboarding?step=confirm&ws={workspace_id}",
+                "note": (
+                    "Open + merge the seed PR to wire Ship's workflows in "
+                    "(agent-doable wizard_seed tool coming)."
+                ),
+            }
+        out["repo_detail"] = detail
+
+    out["next_steps"] = steps
+    out["guidance"] = (
+        "Close agent-doable gaps yourself; for web-only ones (secrets, "
+        "first GitHub/tracker OAuth) give the operator the fix_url, ask "
+        "them to finish it, then re-run repo_setup_status to confirm. "
+        "Secrets are web-only by policy and never settable over MCP."
+    )
+    return json.dumps(out)
+
+
 async def _call_native(
     name: str,
     arguments: dict[str, Any],
@@ -434,6 +618,13 @@ async def _call_native(
                     else "This workspace has no standing rules set yet."
                 ),
             }
+        )
+
+    if name == "repo_setup_status":
+        repo_arg = arguments.pop("repo_id", None)
+        ws_id = await _resolve_workspace_id(session, auth, arguments)
+        return await _repo_setup_status(
+            session, ws_id, repo_arg, settings=settings
         )
 
     if name == "workspace_create":
