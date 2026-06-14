@@ -180,9 +180,9 @@ function ChoiceCard({ raw }: { raw: string }) {
         {options.length === 0 ? (
           <span className="text-[12px] text-white/50">No options offered.</span>
         ) : (
-          options.map((opt) => (
+          options.map((opt, i) => (
             <button
-              key={opt.value}
+              key={`${i}-${opt.value}`}
               type="button"
               disabled={!onChoose}
               onClick={() => onChoose?.(opt.value)}
@@ -353,11 +353,11 @@ function buildComponents(animate: boolean): Components {
     ),
     code: ({ className, children, ...props }) => {
       const directive = parseDirective(className);
-      const raw = typeof children === "string"
-        ? children
-        : Array.isArray(children)
-          ? children.filter((c) => typeof c === "string").join("")
-          : "";
+      // Recursive flatten, not a shallow string-filter: remark can hand
+      // nested nodes (e.g. a hard break inside the fence), and dropping
+      // them truncated the JSON so the card stuck on "Preparing…" after
+      // the stream ended (ELS-301).
+      const raw = getCodeText(children);
       if (directive === "ship-choice") {
         return <ChoiceCard raw={raw} />;
       }

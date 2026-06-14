@@ -515,6 +515,10 @@ export function SingleWindowChat({
   >(null);
 
   const abortRef = useRef<AbortController | null>(null);
+  // RAF chain that scrolls a freshly-sent user message to the top. Held
+  // so a rapid second send (or unmount) cancels the stale chain before
+  // it yanks the viewport against the new message (ELS-301).
+  const sendScrollRafRef = useRef<number | null>(null);
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const lastUserAnchorRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -565,6 +569,9 @@ export function SingleWindowChat({
   useEffect(() => {
     return () => {
       abortRef.current?.abort();
+      if (sendScrollRafRef.current !== null) {
+        cancelAnimationFrame(sendScrollRafRef.current);
+      }
     };
   }, []);
 
@@ -1068,8 +1075,12 @@ export function SingleWindowChat({
       if (scroller) {
         setBottomSpacerPx(Math.max(scroller.clientHeight - 96, 240));
       }
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
+      if (sendScrollRafRef.current !== null) {
+        cancelAnimationFrame(sendScrollRafRef.current);
+      }
+      sendScrollRafRef.current = requestAnimationFrame(() => {
+        sendScrollRafRef.current = requestAnimationFrame(() => {
+          sendScrollRafRef.current = null;
           const anchor = lastUserAnchorRef.current;
           const el = scrollerRef.current;
           if (!anchor || !el) return;

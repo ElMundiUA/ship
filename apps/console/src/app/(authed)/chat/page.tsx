@@ -186,6 +186,10 @@ export default async function ChatPage({
             </div>
           )}
           <SingleWindowChat
+            // Remount on thread switch so client state (history, segments,
+            // reveal, scroll) is rebuilt from the new thread instead of
+            // showing the previous thread's messages (ELS-301).
+            key={thread.id}
             workspaceId={workspace.id}
             hasArchivedChats={hasArchivedChats}
             thread={{
