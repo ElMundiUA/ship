@@ -62,14 +62,17 @@ export function ConfigScopeCard({
     let cancelled = false;
     setStage("loading");
     setErrMsg(null);
+    // The /api/proxy/[...path] handler prepends `/v1/` itself, so the
+    // path here must NOT include `v1/` — otherwise the backend gets
+    // `/v1/v1/...` and 404s (ELS-307; latent since ELS-236).
     fetch(
-      `/api/proxy/v1/workspaces/${encodeURIComponent(workspaceId)}/config/${encodeURIComponent(scope)}`,
+      `/api/proxy/workspaces/${encodeURIComponent(workspaceId)}/config/${encodeURIComponent(scope)}`,
       { method: "GET", cache: "no-store" },
     )
       .then(async (res) => {
         if (!res.ok) {
-          const body = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
-          throw new Error(body.message || body.error || `HTTP ${res.status}`);
+          const body = (await res.json().catch(() => ({}))) as { error?: string; message?: string; detail?: string };
+          throw new Error(body.message || body.error || body.detail || `HTTP ${res.status}`);
         }
         return (await res.json()) as ScopeDetail;
       })
@@ -95,7 +98,7 @@ export function ConfigScopeCard({
     setErrMsg(null);
     try {
       const res = await fetch(
-        `/api/proxy/v1/workspaces/${encodeURIComponent(workspaceId)}/config/${encodeURIComponent(scope)}`,
+        `/api/proxy/workspaces/${encodeURIComponent(workspaceId)}/config/${encodeURIComponent(scope)}`,
         {
           method: "PUT",
           headers: { "content-type": "application/json" },
@@ -103,8 +106,8 @@ export function ConfigScopeCard({
         },
       );
       if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
-        throw new Error(body.message || body.error || `HTTP ${res.status}`);
+        const body = (await res.json().catch(() => ({}))) as { error?: string; message?: string; detail?: string };
+        throw new Error(body.message || body.error || body.detail || `HTTP ${res.status}`);
       }
       const result = (await res.json()) as PutResult;
       // Backend re-reads after write — keep the form synced with
