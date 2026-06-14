@@ -73,6 +73,8 @@ async def test_tools_list_projection_and_natives(
         "github_attach_install",
         "get_policies",
         "repo_setup_status",
+        "tracker_bind",
+        "wizard_seed",
     ):
         assert native in tools
     # workspace_id injected into projected tools.
@@ -137,6 +139,41 @@ async def test_repo_setup_status_reports_checklist_and_links(
     assert steps["tracker"]["do"] == "web" and steps["tracker"]["fix_url"]
     assert "activate_repo" in steps
     assert "secrets are web-only" in body["guidance"].lower()
+
+
+@pytest.mark.asyncio
+async def test_wizard_seed_surfaces_precondition_error(
+    db_session, v1_client, seed_workspace
+) -> None:
+    # No such repo in this fresh workspace → the route 404s; the native
+    # must surface it as a readable tool error, not a 500.
+    _, raw, _ = seed_workspace
+    res = await _post(
+        v1_client,
+        raw,
+        _rpc(
+            "tools/call",
+            {"name": "wizard_seed", "arguments": {"repo_id": str(uuid.uuid4())}},
+        ),
+    )
+    result = res.json()["result"]
+    assert result["isError"] is True
+    assert "cannot seed yet" in result["content"][0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_tracker_bind_requires_repo_id(
+    db_session, v1_client, seed_workspace
+) -> None:
+    _, raw, _ = seed_workspace
+    res = await _post(
+        v1_client,
+        raw,
+        _rpc("tools/call", {"name": "tracker_bind", "arguments": {"kind": "linear"}}),
+    )
+    result = res.json()["result"]
+    assert result["isError"] is True
+    assert "repo_id is required" in result["content"][0]["text"]
 
 
 @pytest.mark.asyncio
