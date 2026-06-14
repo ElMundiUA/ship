@@ -151,6 +151,10 @@ Typical flows:
   steps (agent secrets, the first GitHub/tracker OAuth) hand the
   operator the `fix_url`, wait, then re-run `repo_setup_status`. Once
   they merge the seed PR, Ship's bootstrap runs itself.
+- "what does this repo still need / set up deploy + tests" →
+  `sdlc_assess` to classify the repo and list its SDLC gaps +
+  recommended tickets. Proactively offer those to the operator; on a
+  yes, file them with `project_create` / `ticket_create`.
 - open questions / approvals → `inbox_list`, then `inbox_get` and
   `inbox_update`. Disposing an APPROVAL item requires passing
   `approval_echo` with the item's exact title — quote it to the
@@ -316,6 +320,36 @@ _NATIVE_TOOLS: list[dict[str, Any]] = [
                         "Pass false on an FSM-ready repo to bump the bundle "
                         "without touching the operator's tailored process."
                     ),
+                },
+            },
+            "required": ["repo_id"],
+        },
+    },
+    {
+        "name": "sdlc_assess",
+        "description": (
+            "Assess a repo's SDLC maturity and propose what to set up. "
+            "Harvests repo intel if needed (synchronous), classifies the "
+            "project type, and reports gaps vs the blueprint — missing "
+            "tests, CI, Docker, deploy, etc. — plus the required secrets "
+            "and an external checklist. Returns `recommended_tickets` "
+            "(title + what each scaffolds) so you can proactively offer to "
+            "wire deploy/tests in; propose them to the operator and, on "
+            "yes, file them. Pass refresh=true to re-harvest. This is the "
+            "'what does this repo still need?' tool — run it after a repo "
+            "is Ship-ready (see repo_setup_status / wizard_seed)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "workspace_id": _WORKSPACE_ID_PROP,
+                "repo_id": {
+                    "type": "string",
+                    "description": "Activated-repo UUID.",
+                },
+                "refresh": {
+                    "type": "boolean",
+                    "description": "Re-harvest intel before assessing (default false).",
                 },
             },
             "required": ["repo_id"],
@@ -705,6 +739,77 @@ async def _call_native(
         ws_id = await _resolve_workspace_id(session, auth, arguments)
         return await _repo_setup_status(
             session, ws_id, repo_arg, settings=settings
+        )
+
+    if name == "sdlc_assess":
+        from backend.app.db.models.integrations import WorkspaceRepo
+        from backend.app.db.models.repo_intel import RepoIntelTriggeredBy
+        from backend.app.services.bootstrap_plan import _spec
+        from backend.app.services.repo_intel import (
+            get_current_intel,
+            harvest_repo_intel,
+        )
+        from backend.app.services.sdlc_readiness import build_readiness
+
+        refresh = bool(arguments.get("refresh"))
+        repo_id = _native_repo_id(arguments)
+        ws_id = await _resolve_workspace_id(session, auth, arguments)
+        repo = await session.get(WorkspaceRepo, repo_id)
+        if repo is None or repo.workspace_id != ws_id:
+            raise _McpToolError("repo not activated in this workspace")
+
+        # Harvest intel synchronously when missing or on refresh —
+        # best-effort: build_readiness degrades gracefully if it fails.
+        harvested = False
+        intel = await get_current_intel(session, repo_id)
+        if intel is None or refresh:
+            try:
+                await harvest_repo_intel(
+                    session=session,
+                    workspace_id=ws_id,
+                    repo_id=repo_id,
+                    triggered_by=RepoIntelTriggeredBy.MANUAL_REFRESH,
+                    settings=settings,
+                )
+                harvested = True
+            except Exception as exc:  # noqa: BLE001 — assess must not 500
+                logger.warning("sdlc_assess harvest failed for %s: %s", repo_id, exc)
+
+        result = await build_readiness(session=session, repo=repo)
+        if not result.has_blueprint or result.report is None:
+            return json.dumps(
+                {
+                    "repo_id": str(repo_id),
+                    "ready": False,
+                    "project_type": result.project_type,
+                    "detail": result.detail,
+                    "harvested": harvested,
+                }
+            )
+        rep = result.report
+        recommended = [
+            {"capability": c, "title": _spec(c)[0], "scaffold": _spec(c)[1]}
+            for c in rep.gaps
+        ]
+        return json.dumps(
+            {
+                "repo_id": str(repo_id),
+                "project_type": rep.project_type,
+                "delivery": rep.delivery,
+                "ready": rep.ready,
+                "gaps": list(rep.gaps),
+                "missing_required_secrets": list(rep.missing_required_secrets),
+                "external_checklist": list(rep.external_checklist),
+                "recommended_tickets": recommended,
+                "harvested": harvested,
+                "guidance": (
+                    "Propose recommended_tickets to the operator; on yes, "
+                    "file them (project_create / ticket_create). Missing "
+                    "secrets stay web-only — point them at the "
+                    "repo_setup_status fix_url. Don't create tickets "
+                    "unprompted."
+                ),
+            }
         )
 
     if name == "tracker_bind":
