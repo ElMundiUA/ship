@@ -49,9 +49,10 @@ describe("isPathAllowed", () => {
       expect(isPathAllowed("full", p)).toBe(true);
     }
   });
-  it("residual allows hub + approve + Chat + Settings only", () => {
+  it("residual allows hub + approve + oauth + Chat + Settings only", () => {
     expect(isPathAllowed("residual", "/")).toBe(true);
     expect(isPathAllowed("residual", "/approve/123")).toBe(true);
+    expect(isPathAllowed("residual", "/oauth/authorize")).toBe(true);
     expect(isPathAllowed("residual", "/chat")).toBe(true);
     expect(isPathAllowed("residual", "/settings/general")).toBe(true);
     expect(isPathAllowed("residual", "/inbox")).toBe(false);
@@ -59,8 +60,9 @@ describe("isPathAllowed", () => {
     expect(isPathAllowed("residual", "/process")).toBe(false);
     expect(isPathAllowed("residual", "/memory")).toBe(false);
   });
-  it("off keeps the /approve confirm surface reachable (must-fix)", () => {
+  it("off keeps the /approve + /oauth surfaces reachable (must-fix)", () => {
     expect(isPathAllowed("off", "/approve/abc")).toBe(true);
+    expect(isPathAllowed("off", "/oauth/authorize")).toBe(true);
     expect(isPathAllowed("off", "/")).toBe(true);
     expect(isPathAllowed("off", "/inbox")).toBe(false);
     expect(isPathAllowed("off", "/chat")).toBe(false);

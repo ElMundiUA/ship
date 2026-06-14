@@ -40,8 +40,8 @@ export function envDefaultMode(): ConsoleMode {
  * link target for Telegram buttons and MCP web_url refusals) is
  * reachable in EVERY mode (must-fix: never orphan pending operator
  * approvals). */
-const RESIDUAL_PREFIXES = ["/", "/approve", "/chat", "/settings"] as const;
-const OFF_PREFIXES = ["/", "/approve"] as const;
+const RESIDUAL_PREFIXES = ["/", "/approve", "/oauth", "/chat", "/settings"] as const;
+const OFF_PREFIXES = ["/", "/approve", "/oauth"] as const;
 
 function matchesPrefix(pathname: string, prefix: string): boolean {
   if (prefix === "/") return pathname === "/";

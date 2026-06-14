@@ -18,7 +18,15 @@ import { useEffect, useState } from "react";
 
 const dismissKey = (wsId: string) => `ship.connect-agent.dismissed.${wsId}`;
 
-function claudeCodeCommand(endpoint: string, secret: string | null): string {
+/** OAuth path (recommended): no token in the command — the agent
+ * discovers Ship's authorization server, opens a login, and you approve
+ * a workspace in the browser. */
+function oauthCommand(endpoint: string): string {
+  return `claude mcp add ship ${endpoint} -t http`;
+}
+
+/** Token fallback (CI / headless): bearer a minted PAT directly. */
+function tokenCommand(endpoint: string, secret: string | null): string {
   const token = secret ?? "<your-token>";
   return `claude mcp add ship ${endpoint} -t http -H "Authorization: Bearer ${token}"`;
 }
@@ -113,7 +121,8 @@ export function ConnectAgentCard({
     );
   }
 
-  const command = claudeCodeCommand(mcpEndpoint, secret);
+  const oauthCmd = oauthCommand(mcpEndpoint);
+  const tokenCmd = tokenCommand(mcpEndpoint, secret);
 
   return (
     <section
@@ -150,22 +159,51 @@ export function ConnectAgentCard({
           </code>
         </Row>
 
-        <Row label="Agent token">
-          {secret ? (
-            <div>
+        {/* Primary: OAuth — no token to paste. The agent opens a Ship
+            login and you approve a workspace in the browser. */}
+        <Row label="Claude Code">
+          <div className="flex items-start gap-2">
+            <code className="min-w-0 flex-1 break-all rounded-lg border border-white/10 bg-ink/60 p-2 font-mono text-[11px] text-white/85">
+              {oauthCmd}
+            </code>
+            <button
+              type="button"
+              onClick={() => copy("oauth", oauthCmd)}
+              className="shrink-0 rounded-full border border-white/15 px-2.5 py-1 text-[10px] font-bold text-white/70 hover:text-white"
+            >
+              {copied === "oauth" ? "Copied ✓" : "Copy"}
+            </button>
+          </div>
+          <p className="mt-1 text-[10px] text-white/50">
+            On first use your agent opens a Ship login and asks you to approve
+            a workspace — no token to paste. Revoke any time in Settings →
+            Agents &amp; access.
+          </p>
+        </Row>
+
+        <Row label="Claude Desktop">
+          <p className="text-xs text-white/65">
+            Settings → Connectors → Add custom connector — URL{" "}
+            <code className="font-mono text-white/85">{mcpEndpoint}</code>. It
+            walks you through the same login + approve.
+          </p>
+        </Row>
+
+        {/* Fallback: a long-lived PAT for CI / headless agents that
+            can't do an interactive browser login. */}
+        <details className="rounded-lg border border-white/10 bg-white/[0.02] p-2.5">
+          <summary className="cursor-pointer text-[10px] font-bold uppercase tracking-widest text-white/55 hover:text-white">
+            Headless / CI? Use a token instead
+          </summary>
+          <div className="mt-3 space-y-2">
+            {secret ? (
               <code
                 data-testid="connect-agent-secret"
                 className="block break-all rounded-lg border border-aqua/30 bg-ink/60 p-2 font-mono text-xs text-aqua/95"
               >
                 {secret}
               </code>
-              <p className="mt-1 text-[10px] text-white/50">
-                Copy it now — the secret is never shown again. Revoke any
-                time in Settings → Agents &amp; access.
-              </p>
-            </div>
-          ) : (
-            <div className="flex flex-wrap items-center gap-2">
+            ) : (
               <button
                 type="button"
                 onClick={mint}
@@ -175,49 +213,26 @@ export function ConnectAgentCard({
               >
                 {minting ? "Minting…" : "Mint agent token"}
               </button>
-              <span className="text-[10px] text-white/45">
-                or use an existing key from Settings → Agents &amp; access
-              </span>
+            )}
+            <div className="flex items-start gap-2">
+              <code className="min-w-0 flex-1 break-all rounded-lg border border-white/10 bg-ink/60 p-2 font-mono text-[11px] text-white/85">
+                {tokenCmd}
+              </code>
+              <button
+                type="button"
+                onClick={() => copy("token", tokenCmd)}
+                className="shrink-0 rounded-full border border-white/15 px-2.5 py-1 text-[10px] font-bold text-white/70 hover:text-white"
+              >
+                {copied === "token" ? "Copied ✓" : "Copy"}
+              </button>
             </div>
-          )}
-        </Row>
-
-        <Row label="Claude Code">
-          <div className="flex items-start gap-2">
-            <code className="min-w-0 flex-1 break-all rounded-lg border border-white/10 bg-ink/60 p-2 font-mono text-[11px] text-white/85">
-              {command}
-            </code>
-            <button
-              type="button"
-              onClick={() => copy("code", command)}
-              className="shrink-0 rounded-full border border-white/15 px-2.5 py-1 text-[10px] font-bold text-white/70 hover:text-white"
-            >
-              {copied === "code" ? "Copied ✓" : "Copy"}
-            </button>
+            {secret && (
+              <p className="text-[10px] text-white/50">
+                Copy it now — the secret is never shown again.
+              </p>
+            )}
           </div>
-        </Row>
-
-        <Row label="Claude Desktop">
-          <p className="text-xs text-white/65">
-            Settings → Connectors → Add custom connector — URL{" "}
-            <code className="font-mono text-white/85">{mcpEndpoint}</code>, header{" "}
-            <code className="font-mono text-white/85">
-              Authorization: Bearer {secret ? "<minted token>" : "<your-token>"}
-            </code>
-            <button
-              type="button"
-              onClick={() =>
-                copy(
-                  "desktop",
-                  `Authorization: Bearer ${secret ?? "<your-token>"}`,
-                )
-              }
-              className="ml-2 rounded-full border border-white/15 px-2 py-0.5 text-[10px] font-bold text-white/70 hover:text-white"
-            >
-              {copied === "desktop" ? "Copied ✓" : "Copy header"}
-            </button>
-          </p>
-        </Row>
+        </details>
       </div>
 
       {error && <p className="mt-3 text-xs text-coral/95">{error}</p>}
