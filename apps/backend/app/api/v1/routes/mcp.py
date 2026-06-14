@@ -144,6 +144,13 @@ Typical flows:
   field is the engine's only transition signal; the FSM takes over
   from there.
 - "review this PR" → `run_workflow` with workflow_name="pr-review".
+- "set Ship up on this repo" → `repo_setup_status` to see what's
+  missing, then close gaps: `tracker_bind` (point the repo at a
+  tracker), set the default agent profile via `config_put`, and
+  `wizard_seed` to open the seed PR that wires Ship in. For web-only
+  steps (agent secrets, the first GitHub/tracker OAuth) hand the
+  operator the `fix_url`, wait, then re-run `repo_setup_status`. Once
+  they merge the seed PR, Ship's bootstrap runs itself.
 - open questions / approvals → `inbox_list`, then `inbox_get` and
   `inbox_update`. Disposing an APPROVAL item requires passing
   `approval_echo` with the item's exact title — quote it to the
@@ -206,6 +213,17 @@ async def _resolve_workspace_id(
     )
 
 
+def _native_repo_id(arguments: dict[str, Any]) -> uuid.UUID:
+    """Pop + validate a required ``repo_id`` arg for a native tool."""
+    raw = arguments.pop("repo_id", None)
+    if not raw:
+        raise _McpToolError("repo_id is required")
+    try:
+        return uuid.UUID(str(raw))
+    except ValueError as exc:
+        raise _McpToolError(f"invalid repo_id: {raw!r}") from exc
+
+
 # ---------------------------------------------------------------------------
 # Tool registry (single source: ToolBox.specs + a few natives)
 # ---------------------------------------------------------------------------
@@ -240,6 +258,67 @@ _NATIVE_TOOLS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {"workspace_id": _WORKSPACE_ID_PROP},
+        },
+    },
+    {
+        "name": "tracker_bind",
+        "description": (
+            "Bind a repo to a tracker (linear / github / jira / notion / "
+            "…) — the per-repo override of the workspace default. Requires "
+            "the tracker integration to already be connected (its OAuth is "
+            "browser-only; repo_setup_status hands you the link if it "
+            "isn't). Use this to point a specific repo at a tracker before "
+            "seeding."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "workspace_id": _WORKSPACE_ID_PROP,
+                "repo_id": {
+                    "type": "string",
+                    "description": "Activated-repo UUID.",
+                },
+                "kind": {
+                    "type": "string",
+                    "description": "Tracker kind, e.g. linear / github / jira.",
+                },
+            },
+            "required": ["repo_id", "kind"],
+        },
+    },
+    {
+        "name": "wizard_seed",
+        "description": (
+            "Open the seed PR that wires Ship into a repo — commits "
+            "`.ship/config.yml` + the agent-run workflow and pushes the "
+            "run secrets. This is the step that makes a repo Ship-ready; "
+            "once the operator merges the PR, Ship's bootstrap fires "
+            "automatically (assesses the repo, generates a DevOps epic, "
+            "dispatches the first ticket). Preconditions (check "
+            "repo_setup_status first): a default agent profile, a tracker "
+            "binding, and the GitHub App installed — you'll get a clear "
+            "error naming any that's missing. Set include_fsm=false to "
+            "refresh the bundle without rewriting an existing process "
+            "block."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "workspace_id": _WORKSPACE_ID_PROP,
+                "repo_id": {
+                    "type": "string",
+                    "description": "Activated-repo UUID.",
+                },
+                "include_fsm": {
+                    "type": "boolean",
+                    "description": (
+                        "Seed/overwrite the process block (default true). "
+                        "Pass false on an FSM-ready repo to bump the bundle "
+                        "without touching the operator's tailored process."
+                    ),
+                },
+            },
+            "required": ["repo_id"],
         },
     },
     {
@@ -592,6 +671,7 @@ async def _call_native(
     session: AsyncSession,
     auth: AuthContext,
     settings: Settings,
+    request: Request,
 ) -> str:
     import json
 
@@ -625,6 +705,76 @@ async def _call_native(
         ws_id = await _resolve_workspace_id(session, auth, arguments)
         return await _repo_setup_status(
             session, ws_id, repo_arg, settings=settings
+        )
+
+    if name == "tracker_bind":
+        from backend.app.api.v1.routes.tracker_binding import (
+            TrackerBindingIn,
+            set_tracker_binding,
+        )
+
+        repo_id = _native_repo_id(arguments)
+        ws_id = await _resolve_workspace_id(session, auth, arguments)
+        kind = str(arguments.get("kind") or "").strip()
+        try:
+            payload = TrackerBindingIn(kind=kind, config={})
+        except Exception as exc:  # noqa: BLE001 — validation → tool error
+            raise _McpToolError(f"invalid tracker kind: {exc}") from exc
+        out = await set_tracker_binding(
+            workspace_id=ws_id,
+            repo_id=repo_id,
+            payload=payload,
+            auth=auth,
+            session=session,
+        )
+        return json.dumps(
+            {"repo_id": str(repo_id), "kind": out.kind, "source": out.source}
+        )
+
+    if name == "wizard_seed":
+        from backend.app.api.v1.routes.repos import WizardSeedIn, wizard_seed
+
+        repo_id = _native_repo_id(arguments)
+        ws_id = await _resolve_workspace_id(session, auth, arguments)
+        include_fsm = arguments.get("include_fsm")
+        payload = WizardSeedIn(
+            include_fsm=True if include_fsm is None else bool(include_fsm),
+            rotate_run_token=False,
+        )
+        try:
+            out = await wizard_seed(
+                workspace_id=ws_id,
+                repo_id=repo_id,
+                request=request,
+                payload=payload,
+                auth=auth,
+                session=session,
+                settings=settings,
+            )
+        except HTTPException as exc:
+            # Surface the seed preconditions (412 etc.) as a readable tool
+            # error so the agent can route the operator to the fix.
+            detail = exc.detail
+            code = (
+                detail.get("code")
+                if isinstance(detail, dict)
+                else str(detail)
+            )
+            raise _McpToolError(
+                f"cannot seed yet ({code}). Run repo_setup_status for the "
+                "remaining steps."
+            ) from exc
+        return json.dumps(
+            {
+                "repo_id": str(repo_id),
+                "pr_url": out.pr_url,
+                "pr_number": out.pr_number,
+                "branch": out.branch,
+                "next": (
+                    "Ask the operator to review + merge the seed PR. On "
+                    "merge, Ship's bootstrap fires automatically."
+                ),
+            }
         )
 
     if name == "workspace_create":
@@ -709,10 +859,16 @@ async def _call_tool(
     session: AsyncSession,
     auth: AuthContext,
     settings: Settings,
+    request: Request,
 ) -> str:
     if name in _NATIVE_NAMES:
         return await _call_native(
-            name, arguments, session=session, auth=auth, settings=settings
+            name,
+            arguments,
+            session=session,
+            auth=auth,
+            settings=settings,
+            request=request,
         )
     if name not in MCP_TOOL_ALLOWLIST:
         raise _McpToolError(f"unknown tool: {name}")
@@ -822,7 +978,12 @@ async def mcp_endpoint(
         arguments = dict(arguments) if isinstance(arguments, dict) else {}
         try:
             text = await _call_tool(
-                name, arguments, session=session, auth=auth, settings=settings
+                name,
+                arguments,
+                session=session,
+                auth=auth,
+                settings=settings,
+                request=request,
             )
             await session.commit()
             return _rpc_result(
