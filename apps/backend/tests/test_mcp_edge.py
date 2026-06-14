@@ -89,6 +89,10 @@ async def test_initialize_instructs_work_by_ship_rules(
     instructions = res.json()["result"]["instructions"]
     assert "get_policies" in instructions
     assert "Ship's rules" in instructions
+    # Ticket-discipline is set at connect, not left to the agent's habits:
+    # every unit of work gets a tracker ticket before code.
+    assert "ticket_create" in instructions
+    assert "BEFORE you change code" in instructions
 
 
 @pytest.mark.asyncio
