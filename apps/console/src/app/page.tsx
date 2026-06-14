@@ -239,39 +239,32 @@ export default async function WorkspaceStatusPage({
           )}
         </section>
 
-        <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
-          <h2 className="text-[11px] font-bold uppercase tracking-widest text-white/55">
-            Where the work lives
-          </h2>
-          <ul className="mt-2 space-y-2 text-sm">
-            <li>
+        {/* Work lives in the tracker + GitHub — one line of handoff
+            links, not a panel (ELS-304). */}
+        <p className="px-1 text-xs text-white/45">
+          Work lives in{" "}
+          <a
+            href="https://linear.app"
+            target="_blank"
+            rel="noreferrer"
+            className="text-aqua hover:underline"
+          >
+            Linear
+          </a>
+          {repos.map((r) => (
+            <span key={r.id}>
+              {" · "}
               <a
-                href="https://linear.app"
+                href={r.html_url}
                 target="_blank"
                 rel="noreferrer"
                 className="text-aqua hover:underline"
               >
-                Linear →
-              </a>{" "}
-              <span className="text-white/45">
-                tickets, projects, agent comments
-              </span>
-            </li>
-            {repos.map((r) => (
-              <li key={r.id}>
-                <a
-                  href={r.html_url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-aqua hover:underline"
-                >
-                  {r.full_name} →
-                </a>{" "}
-                <span className="text-white/45">PRs, CI, agent branches</span>
-              </li>
-            ))}
-          </ul>
-        </section>
+                {r.full_name}
+              </a>
+            </span>
+          ))}
+        </p>
         {/* No Chat/Settings CTA row here — the left rail already carries
             both persistently; a second copy on the hub body was a
             duplicate (ELS-301). */}

@@ -149,20 +149,14 @@ export default async function ChatPage({
         title="Navigator"
         scopePill={scopePill}
         actions={
-          <div className="flex items-center gap-4">
+          hasArchivedChats ? (
             <Link
               href={withWorkspaceQuery("/chat/archived", workspace.id, multi)}
               className="text-xs font-semibold text-white/55 hover:text-white"
             >
               Archived chats
             </Link>
-            <Link
-              href={withWorkspaceQuery("/", workspace.id, multi)}
-              className="text-xs font-semibold text-white/65 hover:text-white"
-            >
-              ← Dashboard
-            </Link>
-          </div>
+          ) : undefined
         }
       />
       <PageBody>

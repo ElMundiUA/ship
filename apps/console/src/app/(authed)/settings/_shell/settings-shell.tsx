@@ -14,7 +14,6 @@ import { PageBody, PageHeader } from "@/components/app-shell";
 import { ApiUnavailable } from "@/components/api-unavailable";
 import { ConfigScopeCard } from "@/components/config-scope-card";
 import { RepoRoutingPanel } from "@/components/repo-routing-panel";
-import { SdlcReadinessCard } from "@/components/sdlc-readiness-card";
 import {
   IntegrationsWorkspaceBody,
   loadIntegrationsWorkspaceMode,
@@ -388,10 +387,6 @@ export async function SettingsShell({
                 workspaceId={workspace.id}
                 scope="agent.provider"
               />
-              <DispatchRoutineCard
-                workspace={workspace}
-                repos={activatedRepos}
-              />
               <AdvancedSurfacesCard workspaceId={workspace.id} multiWs={multiWs} />
             </div>
           )}
@@ -666,27 +661,6 @@ function RepositoriesPanel({
               ))}
             </tbody>
           </table>
-        </div>
-      )}
-      {repositories.length > 0 && (
-        <div className="mt-6">
-          <h4 className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-white/45">
-            SDLC readiness
-          </h4>
-          <p className="mb-3 text-[11px] text-white/45">
-            Check whether each repo is set up for its project type (tests,
-            Docker, deploy) and generate the DevOps tickets to close the gaps.
-          </p>
-          <div className="space-y-2">
-            {repositories.map((repo) => (
-              <SdlcReadinessCard
-                key={repo.id}
-                workspaceId={workspaceId}
-                repoId={repo.id}
-                repoFullName={repo.full_name}
-              />
-            ))}
-          </div>
         </div>
       )}
       <div className="mt-4 rounded-xl border border-aqua/20 bg-aqua/[0.04] px-3 py-2.5 text-[11px] leading-relaxed text-aqua/85">
@@ -973,89 +947,6 @@ function AdvancedSurfacesCard({
           </li>
         ))}
       </ul>
-    </Card>
-  );
-}
-
-function DispatchRoutineCard({
-  workspace,
-  repos,
-}: {
-  workspace: ApiWorkspace;
-  repos: ApiActivatedRepo[];
-}) {
-  const hasRepo = repos.length > 0;
-  const defaultRepoId = repos[0]?.id ?? "";
-  return (
-    <Card>
-      <CardHeader
-        title="Dispatch routine (debug)"
-        subtitle="Fire any FSM routine manually against the bound provider — the GHA workflow_dispatch runs shipctl run --routine X --debug, which streams a step-by-step log into the runner output. Admin-only; consumes agent quota."
-      />
-      {!hasRepo && (
-        <div className="mb-4 rounded-xl border border-sun/30 bg-sun/[0.06] px-3 py-2 text-xs text-sun/95">
-          No activated repos yet. Activate one before dispatching.
-        </div>
-      )}
-      <form
-        action="/api/settings/dispatch-routine"
-        method="POST"
-        className="grid gap-3 sm:grid-cols-[1fr,1fr,1fr,auto]"
-      >
-        <input type="hidden" name="ws" value={workspace.id} suppressHydrationWarning />
-        <label className="flex flex-col gap-1">
-          <span className="text-[10px] font-bold uppercase tracking-widest text-white/55">
-            Repo
-          </span>
-          <select
-            name="repo"
-            defaultValue={defaultRepoId}
-            required
-            disabled={!hasRepo}
-            className="rounded border border-white/10 bg-white/[0.04] px-2 py-2 text-sm text-white outline-none focus:border-aqua/40 disabled:opacity-50"
-          >
-            {repos.map((r) => (
-              <option key={r.id} value={r.id}>
-                {r.full_name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="flex flex-col gap-1">
-          <span className="text-[10px] font-bold uppercase tracking-widest text-white/55">
-            Routine id
-          </span>
-          <input
-            name="routine"
-            type="text"
-            placeholder="intake / dev_implementation / qa_manual …"
-            required
-            pattern="[A-Za-z0-9_-]{1,64}"
-            disabled={!hasRepo}
-            className="rounded border border-white/10 bg-white/[0.04] px-2 py-2 font-mono text-sm text-white outline-none focus:border-aqua/40 disabled:opacity-50"
-          />
-        </label>
-        <label className="flex flex-col gap-1">
-          <span className="text-[10px] font-bold uppercase tracking-widest text-white/55">
-            Pin ticket (optional)
-          </span>
-          <input
-            name="ticket"
-            type="text"
-            placeholder="ELS-15"
-            pattern="[A-Z0-9-]{1,32}"
-            disabled={!hasRepo}
-            className="rounded border border-white/10 bg-white/[0.04] px-2 py-2 font-mono text-sm text-white outline-none focus:border-aqua/40 disabled:opacity-50"
-          />
-        </label>
-        <button
-          type="submit"
-          disabled={!hasRepo}
-          className="h-10 self-end whitespace-nowrap rounded-full border border-aqua/30 bg-aqua/10 px-4 text-xs font-bold text-aqua transition hover:bg-aqua/15 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          Dispatch
-        </button>
-      </form>
     </Card>
   );
 }
