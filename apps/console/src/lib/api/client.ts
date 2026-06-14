@@ -3366,7 +3366,6 @@ export function oauthAuthorizeGrant(
     code_challenge_method: string;
     state?: string | null;
     scope?: string | null;
-    workspace_id: string;
   },
   token?: string,
 ): Promise<{ redirect_to: string }> {

@@ -16,10 +16,7 @@ import { redirect } from "next/navigation";
 
 import { PageBody, PageHeader } from "@/components/app-shell";
 import { ApiHttpError, describeOAuthClient } from "@/lib/api/client";
-import {
-  getCachedSessionToken,
-  getCachedWorkspaces,
-} from "@/lib/api/session-cache.server";
+import { getCachedSessionToken } from "@/lib/api/session-cache.server";
 
 export const dynamic = "force-dynamic";
 
@@ -77,9 +74,6 @@ export default async function OAuthAuthorizePage({
     return <ConsentError reason="The redirect URL does not match this client's registration." />;
   }
 
-  const workspaces = await getCachedWorkspaces();
-  if (workspaces.length === 0) redirect("/onboarding?step=github");
-
   const clientName = client.client_name?.trim() || "An MCP client";
 
   return (
@@ -97,10 +91,11 @@ export default async function OAuthAuthorizePage({
             </h2>
             <p className="mt-2 text-sm text-white/70">
               It will act as <b className="text-white/85">you</b> through the
-              MCP edge — planning, tickets, reviews, and approvals — scoped to
-              the workspace you pick below. Hard-destructive actions still
-              require a typed confirm in the console. You can revoke this any
-              time in Settings → Agents &amp; access.
+              MCP edge — planning, tickets, reviews, and approvals — across{" "}
+              <b className="text-white/85">all your workspaces</b>, including
+              creating new ones. Hard-destructive actions still require a typed
+              confirm in the console. You can revoke this any time in Settings →
+              Agents &amp; access.
             </p>
 
             <form action="/api/oauth/grant" method="POST" className="mt-5 space-y-4">
@@ -114,35 +109,6 @@ export default async function OAuthAuthorizePage({
               />
               <input type="hidden" name="state" value={state} />
               <input type="hidden" name="scope" value={scope} />
-
-              <fieldset>
-                <legend className="mb-2 text-[10px] font-bold uppercase tracking-widest text-white/55">
-                  Grant access to workspace
-                </legend>
-                <div className="space-y-1.5">
-                  {workspaces.map((w, i) => (
-                    <label
-                      key={w.id}
-                      className="flex cursor-pointer items-center gap-2.5 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm hover:border-aqua/30"
-                    >
-                      <input
-                        type="radio"
-                        name="workspace_id"
-                        value={w.id}
-                        defaultChecked={i === 0}
-                        required
-                        className="accent-aqua"
-                      />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-white/90">{w.name}</span>
-                        <span className="block truncate text-[10px] uppercase tracking-wider text-white/40">
-                          {w.slug}
-                        </span>
-                      </span>
-                    </label>
-                  ))}
-                </div>
-              </fieldset>
 
               <div className="flex items-center gap-3 pt-1">
                 <button

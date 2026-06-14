@@ -69,7 +69,6 @@ export async function POST(request: Request) {
         code_challenge_method: field(form, "code_challenge_method") || "S256",
         state: state || null,
         scope: field(form, "scope") || null,
-        workspace_id: field(form, "workspace_id"),
       },
       token,
     );

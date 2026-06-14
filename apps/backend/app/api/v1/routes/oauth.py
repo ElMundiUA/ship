@@ -4,7 +4,9 @@ Lets a business operator attach the MCP edge with *add → log in → grant
 → done* instead of pasting a PAT. Ship is the authorization server; the
 human login + consent is delegated to the console (which already owns
 the Auth0 session + workspace context). The issued access token is a
-short-lived workspace-scoped ``ship_pat_`` — so the existing
+short-lived **user-scoped** ``ship_pat_`` (``workspace_id = NULL``) —
+the operator's agent sees every workspace they belong to and can create
+new ones, exactly like their manual PAT — so the existing
 ``_resolve_pat`` path validates it unchanged.
 
 Surface split:
@@ -29,7 +31,6 @@ from __future__ import annotations
 import base64
 import hashlib
 import secrets
-import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlencode, urlsplit
@@ -42,7 +43,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.api.v1.deps import AuthContext, get_current_auth
 from backend.app.core.config import Settings, get_settings
 from backend.app.db.models import McpOAuthClient, McpOAuthCode
-from backend.app.db.models.tenancy import ApiToken, AuditLog, WorkspaceMember
+from backend.app.db.models.tenancy import ApiToken, AuditLog
 from backend.app.db.session import get_session
 from backend.app.security.tokens import PAT_PREFIX, generate_pat, hash_pat
 
@@ -233,8 +234,15 @@ async def authorize_grant(
     session). Validate the request, mint a single-use PKCE-bound code,
     and return the redirect URL the console should 302 the browser to.
 
+    The grant is **user-scoped, not workspace-scoped**: the operator's
+    own agent must see every workspace they belong to AND be able to
+    create new ones (``workspace_create`` is refused to workspace-pinned
+    tokens). So the issued access token mirrors the operator's manual
+    PAT — ``workspace_id = NULL`` — and the MCP edge infers / accepts a
+    per-tool ``workspace_id`` as it already does.
+
     Body: ``{client_id, redirect_uri, code_challenge,
-    code_challenge_method, state, scope, workspace_id}``.
+    code_challenge_method, state, scope}``.
     """
     try:
         body = await request.json()
@@ -246,7 +254,6 @@ async def authorize_grant(
     code_challenge = str(body.get("code_challenge") or "").strip()
     method = str(body.get("code_challenge_method") or "S256").strip()
     state = body.get("state")
-    workspace_raw = str(body.get("workspace_id") or "").strip()
 
     client = await session.get(McpOAuthClient, client_id)
     if client is None:
@@ -257,26 +264,6 @@ async def authorize_grant(
         # PKCE S256 is mandatory — refuse plain/missing challenges.
         raise HTTPException(status_code=400, detail="invalid_request")
 
-    # Resolve the workspace the token will be scoped to and assert
-    # membership. ``workspace_id`` is required — the token is always
-    # workspace-scoped so the operator's grant is explicit.
-    if not workspace_raw:
-        raise HTTPException(status_code=400, detail="workspace_required")
-    try:
-        workspace_id = uuid.UUID(workspace_raw)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="workspace_required")
-    member = (
-        await session.execute(
-            select(WorkspaceMember).where(
-                WorkspaceMember.workspace_id == workspace_id,
-                WorkspaceMember.user_id == auth.user.id,
-            )
-        )
-    ).scalar_one_or_none()
-    if member is None:
-        raise HTTPException(status_code=403, detail="not_a_member")
-
     raw_code = secrets.token_urlsafe(32)
     session.add(
         McpOAuthCode(
@@ -286,19 +273,19 @@ async def authorize_grant(
             code_challenge=code_challenge,
             code_challenge_method="S256",
             user_id=auth.user.id,
-            workspace_id=workspace_id,
+            workspace_id=None,  # user-scoped: all workspaces + create
             scopes=[MCP_SCOPE],
             expires_at=datetime.now(timezone.utc) + CODE_TTL,
         )
     )
     session.add(
         AuditLog(
-            workspace_id=workspace_id,
+            workspace_id=None,
             actor_user_id=auth.user.id,
             action="mcp_oauth.authorize.grant",
             target_kind="mcp_oauth_client",
             target_id=client_id,
-            payload={"redirect_uri": redirect_uri},
+            payload={"redirect_uri": redirect_uri, "scope": "user_all_workspaces"},
         )
     )
     await session.commit()

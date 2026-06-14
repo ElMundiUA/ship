@@ -6,9 +6,10 @@ Ship is the OAuth 2.1 authorization server for the MCP edge. Pins:
   /mcp 401 ``resource_metadata`` hint that bootstraps the client;
 - Dynamic Client Registration mints a public client;
 - the console grant endpoint (session-authed) issues a single-use
-  PKCE-bound code, asserting workspace membership;
-- /oauth/token exchanges code+verifier for a working ``ship_pat_``
-  access token, and refuses replay / wrong-verifier / wrong-redirect.
+  PKCE-bound code;
+- /oauth/token exchanges code+verifier for a working **user-scoped**
+  ``ship_pat_`` (all workspaces + workspace_create), and refuses
+  replay / wrong-verifier / wrong-redirect.
 """
 
 from __future__ import annotations
@@ -38,7 +39,7 @@ async def _register(client, redirect_uri="http://127.0.0.1:53682/callback") -> s
     return res.json()["client_id"]
 
 
-async def _grant(client, raw_pat, *, client_id, redirect_uri, challenge, workspace_id):
+async def _grant(client, raw_pat, *, client_id, redirect_uri, challenge):
     return await client.post(
         "/oauth/authorize/grant",
         headers={"Authorization": f"Bearer {raw_pat}"},
@@ -48,7 +49,6 @@ async def _grant(client, raw_pat, *, client_id, redirect_uri, challenge, workspa
             "code_challenge": challenge,
             "code_challenge_method": "S256",
             "state": "xyz",
-            "workspace_id": str(workspace_id),
         },
     )
 
@@ -112,10 +112,15 @@ async def test_dcr_register_and_validation(v1_client) -> None:
 
 
 @pytest.mark.asyncio
-async def test_full_code_flow_issues_working_token(
+async def test_full_code_flow_issues_user_scoped_token(
     db_session, v1_client, seed_workspace
 ) -> None:
-    _, raw, workspace = seed_workspace
+    """The grant is user-scoped (all workspaces + create), mirroring the
+    operator's manual PAT — NOT pinned to one workspace."""
+    from backend.app.db.models.tenancy import ApiToken
+    from sqlalchemy import select
+
+    _, raw, _ = seed_workspace
     verifier, challenge = _pkce()
     redirect_uri = "http://127.0.0.1:53682/callback"
     client_id = await _register(v1_client, redirect_uri)
@@ -126,7 +131,6 @@ async def test_full_code_flow_issues_working_token(
         client_id=client_id,
         redirect_uri=redirect_uri,
         challenge=challenge,
-        workspace_id=workspace.id,
     )
     assert granted.status_code == 200, granted.text
     code = _code_from_redirect(granted.json()["redirect_to"])
@@ -147,7 +151,17 @@ async def test_full_code_flow_issues_working_token(
     access = tok["access_token"]
     assert access.startswith("ship_pat_")
 
-    # The issued token works on the MCP edge.
+    # The minted token is user-scoped (workspace_id NULL) — the property
+    # that lets the operator's agent see every workspace and create new
+    # ones via workspace_create.
+    issued = (
+        await db_session.execute(
+            select(ApiToken).where(ApiToken.name == f"mcp-oauth:{client_id[:24]}")
+        )
+    ).scalar_one()
+    assert issued.workspace_id is None
+
+    # And it works on the MCP edge.
     mcp = await v1_client.post(
         "/mcp",
         headers={"Authorization": f"Bearer {access}"},
@@ -155,17 +169,35 @@ async def test_full_code_flow_issues_working_token(
             "jsonrpc": "2.0",
             "id": 1,
             "method": "tools/call",
-            "arguments": {},
             "params": {"name": "list_workspaces", "arguments": {}},
         },
     )
     assert mcp.status_code == 200
     assert mcp.json()["result"]["isError"] is False
 
+    # workspace_create is reachable (user-scoped tokens may create;
+    # workspace-pinned ones are refused) — proves the "create
+    # namespaces" grant.
+    created = await v1_client.post(
+        "/mcp",
+        headers={"Authorization": f"Bearer {access}"},
+        json={
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "workspace_create",
+                "arguments": {"name": "OAuth made me", "slug": "oauth-made-me"},
+            },
+        },
+    )
+    assert created.status_code == 200
+    assert created.json()["result"]["isError"] is False
+
 
 @pytest.mark.asyncio
 async def test_pkce_mismatch_refused(db_session, v1_client, seed_workspace) -> None:
-    _, raw, workspace = seed_workspace
+    _, raw, _ = seed_workspace
     _, challenge = _pkce()
     redirect_uri = "http://127.0.0.1:53682/callback"
     client_id = await _register(v1_client, redirect_uri)
@@ -175,7 +207,6 @@ async def test_pkce_mismatch_refused(db_session, v1_client, seed_workspace) -> N
         client_id=client_id,
         redirect_uri=redirect_uri,
         challenge=challenge,
-        workspace_id=workspace.id,
     )
     code = _code_from_redirect(granted.json()["redirect_to"])
 
@@ -195,7 +226,7 @@ async def test_pkce_mismatch_refused(db_session, v1_client, seed_workspace) -> N
 
 @pytest.mark.asyncio
 async def test_code_is_single_use(db_session, v1_client, seed_workspace) -> None:
-    _, raw, workspace = seed_workspace
+    _, raw, _ = seed_workspace
     verifier, challenge = _pkce()
     redirect_uri = "http://127.0.0.1:53682/callback"
     client_id = await _register(v1_client, redirect_uri)
@@ -205,7 +236,6 @@ async def test_code_is_single_use(db_session, v1_client, seed_workspace) -> None
         client_id=client_id,
         redirect_uri=redirect_uri,
         challenge=challenge,
-        workspace_id=workspace.id,
     )
     code = _code_from_redirect(granted.json()["redirect_to"])
     payload = {
@@ -226,7 +256,7 @@ async def test_code_is_single_use(db_session, v1_client, seed_workspace) -> None
 async def test_token_refuses_redirect_uri_mismatch(
     db_session, v1_client, seed_workspace
 ) -> None:
-    _, raw, workspace = seed_workspace
+    _, raw, _ = seed_workspace
     verifier, challenge = _pkce()
     redirect_uri = "http://127.0.0.1:53682/callback"
     client_id = await _register(v1_client, redirect_uri)
@@ -236,7 +266,6 @@ async def test_token_refuses_redirect_uri_mismatch(
         client_id=client_id,
         redirect_uri=redirect_uri,
         challenge=challenge,
-        workspace_id=workspace.id,
     )
     code = _code_from_redirect(granted.json()["redirect_to"])
     res = await v1_client.post(
@@ -255,7 +284,7 @@ async def test_token_refuses_redirect_uri_mismatch(
 
 @pytest.mark.asyncio
 async def test_grant_refuses_plain_pkce(db_session, v1_client, seed_workspace) -> None:
-    _, raw, workspace = seed_workspace
+    _, raw, _ = seed_workspace
     redirect_uri = "http://127.0.0.1:53682/callback"
     client_id = await _register(v1_client, redirect_uri)
     res = await v1_client.post(
@@ -267,7 +296,6 @@ async def test_grant_refuses_plain_pkce(db_session, v1_client, seed_workspace) -
             "code_challenge": "",
             "code_challenge_method": "plain",
             "state": "xyz",
-            "workspace_id": str(workspace.id),
         },
     )
     assert res.status_code == 400
@@ -277,7 +305,7 @@ async def test_grant_refuses_plain_pkce(db_session, v1_client, seed_workspace) -
 async def test_grant_refuses_unregistered_redirect(
     db_session, v1_client, seed_workspace
 ) -> None:
-    _, raw, workspace = seed_workspace
+    _, raw, _ = seed_workspace
     _, challenge = _pkce()
     client_id = await _register(v1_client, "http://127.0.0.1:53682/callback")
     res = await _grant(
@@ -286,7 +314,6 @@ async def test_grant_refuses_unregistered_redirect(
         client_id=client_id,
         redirect_uri="https://evil.example.com/cb",
         challenge=challenge,
-        workspace_id=workspace.id,
     )
     assert res.status_code == 400
     assert res.json()["detail"] == "invalid_redirect_uri"
