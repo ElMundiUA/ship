@@ -10,7 +10,7 @@ Three admin-gated, audited tools:
   between Active / Drafts (``planning`` enum) / Parked. Creates a
   priorities row at MAX+1 ordinal if none exists yet.
 - ``decomposition_start(project_native_id)`` — walk a Drafts-bucket
-  project's planning anchor into ``stage:wbs`` to kick off the
+  project's planning anchor into ``stage:decomposition`` to kick off the
   decomposition pipeline. Refuses if project is not in Drafts or
   has no anchor.
 
@@ -292,7 +292,7 @@ async def test_set_priority_state_validates_enum(toolbox) -> None:
 
 
 @pytest.mark.asyncio
-async def test_start_decomposition_transitions_anchor_to_wbs(
+async def test_start_decomposition_transitions_anchor_to_decomposition(
     toolbox, monkeypatch, db_session, seed_workspace
 ) -> None:
     from sqlalchemy import select
@@ -323,7 +323,7 @@ async def test_start_decomposition_transitions_anchor_to_wbs(
     )
     _patch_tracker(toolbox, monkeypatch, stub)
 
-    raw = await toolbox._tool_start_decomposition(
+    raw = await toolbox._tool_decomposition_start(
         {"project_native_id": "proj-drafted"}
     )
     payload = json.loads(raw)
@@ -331,17 +331,17 @@ async def test_start_decomposition_transitions_anchor_to_wbs(
     assert payload["anchor_identifier"] == "ELS-101"
     assert payload["process"] == "decomposition"
 
-    # Anchor probed; transition fired with stage:wbs.
+    # Anchor probed; transition fired with stage:decomposition (E16/ELS-123 single-stage entry; ELS-308).
     assert stub.anchor_calls == ["proj-drafted"]
     assert len(stub.transition_calls) == 1
-    assert stub.transition_calls[0]["to_state"] == "wbs"
+    assert stub.transition_calls[0]["to_state"] == "decomposition"
     assert stub.transition_calls[0]["ref_id"] == "anchor-uuid"
 
     audit = (
         await db_session.execute(
             select(AuditLog).where(
                 AuditLog.workspace_id == workspace.id,
-                AuditLog.action == "navigator.decomposition_start",
+                AuditLog.action == "navigator.start_decomposition",
             )
         )
     ).scalars().all()
@@ -374,7 +374,7 @@ async def test_start_decomposition_rejects_non_drafts(
     _patch_tracker(toolbox, monkeypatch, _StubTracker())
 
     with pytest.raises(ToolInvocationError, match="only Drafts"):
-        await toolbox._tool_start_decomposition(
+        await toolbox._tool_decomposition_start(
             {"project_native_id": "proj-active"}
         )
 
@@ -387,7 +387,7 @@ async def test_start_decomposition_404s_when_not_on_priorities(
 
     _patch_tracker(toolbox, monkeypatch, _StubTracker())
     with pytest.raises(ToolInvocationError, match="not on the dashboard"):
-        await toolbox._tool_start_decomposition(
+        await toolbox._tool_decomposition_start(
             {"project_native_id": "proj-missing"}
         )
 
@@ -416,6 +416,6 @@ async def test_start_decomposition_404s_when_anchor_missing(
     _patch_tracker(toolbox, monkeypatch, _StubTracker(anchor=None))
 
     with pytest.raises(ToolInvocationError, match="no planning anchor"):
-        await toolbox._tool_start_decomposition(
+        await toolbox._tool_decomposition_start(
             {"project_native_id": "proj-no-anchor"}
         )

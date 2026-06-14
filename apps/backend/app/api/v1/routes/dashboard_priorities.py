@@ -635,11 +635,11 @@ async def start_decomposition(
     The PO drafted the brief in Navigator (PR2); ``create_project``
     landed an anchor issue tagged ``planning:anchor`` and a priorities
     row in ``state='planning'`` (PR1). This endpoint walks the anchor
-    into the first decomposition stage (``stage:wbs``) — the per-tick
-    shipctl scheduler then picks up BA, who emits the WBS section,
-    transitions to ``stage:architecture``, and so on through to
-    ``stage:planning_done`` (the finish hook flips Drafts → Parked (the PO promotes Parked → Active manually; ELS-81)
-    when that lands).
+    into the decomposition stage (``stage:decomposition``) — the
+    per-tick dispatcher then fires the decomposition bundle, which (post
+    E16/ELS-123) emits every project section + child tickets in one run
+    and transitions to ``stage:planning_done`` (the finish hook flips
+    Drafts → Parked; the PO promotes Parked → Active manually; ELS-81).
 
     Idempotent on the anchor: re-running when the anchor already
     carries a non-entry decomposition stage label is a no-op (we
@@ -722,11 +722,15 @@ async def start_decomposition(
             detail={"code": "anchor_missing"},
         )
 
-    # Move the anchor into ``stage:wbs``. The Linear adapter's
+    # Move the anchor into ``stage:decomposition`` — the single E16
+    # bundle-stage entry (ELS-123). The pre-E16 ``wbs`` label is dead:
+    # the post-cutover ``resolve_fsm_stage_from_labels`` doesn't list
+    # it, so the anchor would go In Progress but dispatch as
+    # ``no_routine`` and never run (ELS-308). The Linear adapter's
     # ``transition`` handles the label swap (drops other stage labels,
-    # adds this one) and the workflow-state move per
-    # FSM_TO_LINEAR_STATE. Idempotent on Linear's side because
-    # ``transition`` is a label set + state set, not an append.
+    # adds this one) and the workflow-state move per FSM_TO_LINEAR_STATE.
+    # Idempotent on Linear's side because ``transition`` is a label set
+    # + state set, not an append.
     from backend.app.integrations.gateway.tracker import (
         TicketRef as _TicketRef,
     )
@@ -737,10 +741,10 @@ async def start_decomposition(
         id=str(anchor["id"]),
     )
     try:
-        await tracker.gateway.transition(anchor_ref, to_state="wbs")
+        await tracker.gateway.transition(anchor_ref, to_state="decomposition")
     except Exception as exc:  # noqa: BLE001
         logger.warning(
-            "start_decomposition: transition to wbs failed workspace=%s anchor=%s err=%s",
+            "start_decomposition: transition to decomposition failed workspace=%s anchor=%s err=%s",
             workspace_id,
             anchor.get("identifier"),
             exc,
