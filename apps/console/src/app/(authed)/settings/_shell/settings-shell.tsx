@@ -109,23 +109,40 @@ function errorMessage(code: string): string {
   }
 }
 
+// MCP-first console (ELS-304): five tabs, down from ten. Config folds
+// into General; Connected code + Registries + Integrations merge into
+// Connections; Agent roles folds into Agents & access; Workspaces +
+// Danger merge into Workspace. Legacy tab ids alias to their new parent
+// below so deep-links + the per-tab route files keep resolving.
 const TABS = [
   { id: "general", label: "General" },
-  { id: "workspaces", label: "Workspaces" },
-  { id: "config", label: "Config" },
-  { id: "repositories", label: "Connected code" },
-  { id: "registries", label: "Registries" },
+  { id: "connections", label: "Connections" },
   { id: "members", label: "Members" },
-  { id: "integrations", label: "Integrations" },
-  { id: "agent-roles", label: "Agent roles" },
   { id: "api-keys", label: "Agents & access" },
-  { id: "danger", label: "Danger zone" },
+  { id: "workspace", label: "Workspace" },
 ] as const;
 type TabId = (typeof TABS)[number]["id"];
 const TAB_IDS = TABS.map((t) => t.id);
 
-function isTabId(value: string): value is TabId {
-  return (TAB_IDS as readonly string[]).includes(value);
+// Old tab id → new parent. Keeps ``?tab=`` deep-links and the per-tab
+// route files (settings/{old}/page.tsx) landing on the right merged tab.
+const TAB_ALIASES: Record<string, TabId> = {
+  tokens: "api-keys",
+  repos: "connections",
+  catalog: "general",
+  config: "general",
+  workspaces: "workspace",
+  danger: "workspace",
+  repositories: "connections",
+  registries: "connections",
+  integrations: "connections",
+  "agent-roles": "api-keys",
+};
+
+function resolveTabId(value: string | null | undefined): TabId | null {
+  if (!value) return null;
+  if ((TAB_IDS as readonly string[]).includes(value)) return value as TabId;
+  return TAB_ALIASES[value] ?? null;
 }
 
 async function load(
@@ -266,7 +283,9 @@ export async function SettingsShell({
   activeTab: activeTabFromRoute,
   searchParams,
 }: {
-  activeTab?: TabId;
+  // Accept any string (route files pin legacy ids like "config" /
+  // "registries"); resolveTabId folds them into the 5 parents.
+  activeTab?: string;
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const params = ((await (searchParams ?? Promise.resolve({}))) ?? {}) as Record<
@@ -276,13 +295,9 @@ export async function SettingsShell({
   const data = await load(params);
   const errorCode = typeof params.error === "string" ? params.error : null;
   const renamedFlag = params.renamed === "1";
-  let requestedTab = typeof params.tab === "string" ? params.tab : null;
-  if (requestedTab === "tokens") requestedTab = "api-keys";
-  if (requestedTab === "repos") requestedTab = "registries";
-  if (requestedTab === "catalog") requestedTab = "general";
+  const requestedTab = typeof params.tab === "string" ? params.tab : null;
   const activeTab: TabId =
-    activeTabFromRoute ??
-    (requestedTab && isTabId(requestedTab) ? requestedTab : "general");
+    resolveTabId(activeTabFromRoute) ?? resolveTabId(requestedTab) ?? "general";
   const justMintedFlag =
     typeof params.just_minted === "string" && params.just_minted === "1";
 
@@ -388,22 +403,22 @@ export async function SettingsShell({
                 scope="agent.provider"
               />
               <AdvancedSurfacesCard workspaceId={workspace.id} multiWs={multiWs} />
+              <ConfigPanel workspaceId={workspace.id} />
             </div>
           )}
 
-          {activeTab === "workspaces" && (
-            <WorkspacesPanel
-              current={workspace}
-              memberships={allWorkspaces}
-            />
+          {activeTab === "workspace" && (
+            <div className="space-y-6">
+              <WorkspacesPanel
+                current={workspace}
+                memberships={allWorkspaces}
+              />
+              <DangerZone workspace={workspace} />
+            </div>
           )}
 
-          {activeTab === "config" && (
-            <ConfigPanel workspaceId={workspace.id} />
-          )}
-
-          {activeTab === "repositories" && (
-            <>
+          {activeTab === "connections" && (
+            <div className="space-y-6">
               <RepositoriesPanel
                 workspaceId={workspace.id}
                 repositories={activatedRepos}
@@ -413,11 +428,8 @@ export async function SettingsShell({
                 workspaceId={workspace.id}
                 repositories={activatedRepos}
               />
-            </>
-          )}
-
-          {activeTab === "registries" && (
-            <Card>
+              <SettingsIntegrationsTab searchParams={params} />
+              <Card>
               <CardHeader
                 title="Registries"
                 subtitle="Package and artifact sources Ship merges for this workspace. File paths work offline; git URLs sync in the background."
@@ -449,42 +461,34 @@ export async function SettingsShell({
               )}
               <AddRepoForm workspaceId={workspace.id} />
             </Card>
+            </div>
           )}
 
           {activeTab === "api-keys" && (
-            <TokensPanel
-              workspaceId={workspace.id}
-              tokens={tokens}
-              freshSecret={freshSecret}
-            />
+            <div className="space-y-6">
+              <TokensPanel
+                workspaceId={workspace.id}
+                tokens={tokens}
+                freshSecret={freshSecret}
+              />
+              <Card>
+                <CardHeader
+                  title="Agent roles"
+                  subtitle="Specialist prompts agents load when a routine fires. Ship ships read-only defaults; override one for this workspace, or clone a default into a custom slug. Most teams never touch this — defaults work."
+                />
+                <div className="mt-4">
+                  <AgentRolesList
+                    workspaceId={workspace.id}
+                    defaults={agentRoleDefaults}
+                    customs={agentRoleCustoms}
+                  />
+                </div>
+              </Card>
+            </div>
           )}
 
           {activeTab === "members" && (
             <WorkspaceMembersPanelLoader searchParams={searchParams} />
-          )}
-
-          {activeTab === "integrations" && (
-            <SettingsIntegrationsTab searchParams={params} />
-          )}
-
-          {activeTab === "agent-roles" && (
-            <Card>
-              <CardHeader
-                title="Agent roles"
-                subtitle="Specialist prompts agents load when a routine fires. Ship ships read-only defaults; override one for this workspace, or clone a default into a custom slug. Most teams never touch this — defaults work."
-              />
-              <div className="mt-4">
-                <AgentRolesList
-                  workspaceId={workspace.id}
-                  defaults={agentRoleDefaults}
-                  customs={agentRoleCustoms}
-                />
-              </div>
-            </Card>
-          )}
-
-          {activeTab === "danger" && (
-            <DangerZone workspace={workspace} />
           )}
         </div>
         </div>

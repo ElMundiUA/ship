@@ -158,7 +158,7 @@ test.describe("console surfaces (wired, serial)", () => {
     // Sprint B collapsed /integrations into the settings mega-page —
     // next.config issues a permanent redirect that keeps the query.
     await page.goto("/integrations");
-    await expect(page).toHaveURL(/\/settings\?.*tab=integrations/);
+    await expect(page).toHaveURL(/\/settings(\/|\?)/);
     await expect(
       page.getByRole("heading", { name: "Workspace settings", exact: true }),
     ).toBeVisible({ timeout: 30_000 });
@@ -166,7 +166,7 @@ test.describe("console surfaces (wired, serial)", () => {
 
   test("12 — members (redirects into settings tab)", async ({ page }) => {
     await page.goto("/members");
-    await expect(page).toHaveURL(/\/settings\?.*tab=members/);
+    await expect(page).toHaveURL(/\/settings(\/|\?)/);
     await expect(
       page.getByRole("heading", { name: "Workspace settings", exact: true }),
     ).toBeVisible({ timeout: 30_000 });

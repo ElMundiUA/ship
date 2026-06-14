@@ -22,22 +22,28 @@ export default async function SettingsIndex({
   >;
   const requestedRaw = typeof params.tab === "string" ? params.tab : null;
   const aliased =
-    requestedRaw === "tokens"
-      ? "api-keys"
-      : requestedRaw === "repos"
-        ? "registries"
-        : requestedRaw === "catalog"
-          ? "general"
-          : requestedRaw;
+    requestedRaw
+      ? ({
+          tokens: "api-keys",
+          repos: "connections",
+          catalog: "general",
+          config: "general",
+          workspaces: "workspace",
+          danger: "workspace",
+          repositories: "connections",
+          registries: "connections",
+          integrations: "connections",
+          "agent-roles": "api-keys",
+        }[requestedRaw] ?? requestedRaw)
+      : requestedRaw;
+  // Five MCP-first parents (ELS-304). Old per-section routes still
+  // resolve (resolveTabId folds them), but new nav lands on parents.
   const allowed = new Set([
     "general",
-    "repositories",
-    "registries",
+    "connections",
     "members",
-    "integrations",
-    "agent-roles",
     "api-keys",
-    "danger",
+    "workspace",
   ]);
   const tab = aliased && allowed.has(aliased) ? aliased : "general";
 
