@@ -272,21 +272,9 @@ export default async function WorkspaceStatusPage({
             ))}
           </ul>
         </section>
-
-        <section className="flex gap-3 text-sm">
-          <Link
-            href="/chat"
-            className="rounded-full border border-aqua/30 bg-aqua/10 px-4 py-2 font-bold text-aqua hover:bg-aqua/15"
-          >
-            Chat
-          </Link>
-          <Link
-            href="/settings"
-            className="rounded-full border border-white/15 px-4 py-2 font-bold text-white/70 hover:text-white"
-          >
-            Settings
-          </Link>
-        </section>
+        {/* No Chat/Settings CTA row here — the left rail already carries
+            both persistently; a second copy on the hub body was a
+            duplicate (ELS-301). */}
       </div>
     </AppShellChrome>
   );
