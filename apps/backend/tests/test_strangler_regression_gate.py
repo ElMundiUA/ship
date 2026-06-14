@@ -13,7 +13,11 @@ from __future__ import annotations
 def _route_paths() -> set[str]:
     from backend.app.main import app
 
-    return {r.path for r in app.routes}
+    # Some FastAPI/Starlette versions leave a path-less ``_IncludedRouter``
+    # proxy in ``app.routes`` per ``include_router`` call (seen in CI once
+    # the MCP edge + OAuth broker routers were mounted). Those carry no
+    # path to gate on — skip anything without a ``.path``.
+    return {r.path for r in app.routes if hasattr(r, "path")}
 
 
 def test_deleted_render_routes_are_gone() -> None:
