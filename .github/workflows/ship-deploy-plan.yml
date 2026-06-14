@@ -1,0 +1,407 @@
+name: Ship · Deploy plan
+
+on:
+  workflow_dispatch:
+    inputs:
+      ship_deployment_id:
+        description: "Ship deployment row id"
+        required: true
+        type: string
+      ship_callback_url:
+        description: "Ship deploy-plan callback URL"
+        required: true
+        type: string
+      ship_deploy_token:
+        description: "One-time callback token"
+        required: true
+        type: string
+      repo_private:
+        description: "Whether the repo is private"
+        required: false
+        default: "false"
+        type: string
+      default_branch:
+        description: "Default branch"
+        required: false
+        default: "main"
+        type: string
+      planner_provider:
+        description: "Preferred LLM provider: openai, anthropic, gemini, mistral"
+        required: false
+        default: ""
+        type: string
+      planner_model:
+        description: "Optional model override"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ship-deploy-plan-${{ inputs.ship_deployment_id }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # NOTE: this planner MIRRORS the backend planner
+      # (apps/backend/app/services/deploy/planner.py) so the no-manual-key
+      # (Actions) path produces the SAME quality plan as the manual path:
+      # same system prompt, same repo context (full file tree + manifest
+      # layout + directory-diverse key files), same max_tokens (8192), same
+      # deterministic verify-guard + corrective retry. Keep them in sync; if
+      # you change planner.py, change this, bump seed_bundle BUNDLE_VERSION,
+      # and re-seed repos. Route-prefix normalization, HOST=0.0.0.0 injection,
+      # root-relative dockerfile_path and commit-pinning are applied by the
+      # backend on the returned plan (shared by both paths).
+      - name: Build deploy plan
+        env:
+          SHIP_DEPLOYMENT_ID: ${{ inputs.ship_deployment_id }}
+          SHIP_CALLBACK_URL: ${{ inputs.ship_callback_url }}
+          SHIP_DEPLOY_TOKEN: ${{ inputs.ship_deploy_token }}
+          REPO_PRIVATE: ${{ inputs.repo_private }}
+          DEFAULT_BRANCH: ${{ inputs.default_branch }}
+          PLANNER_PROVIDER: ${{ inputs.planner_provider }}
+          PLANNER_MODEL: ${{ inputs.planner_model }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+        run: |
+          node <<'NODE'
+          const fs = require("node:fs");
+          const path = require("node:path");
+
+          // ---- mirrors planner._KEY_FILE_BASENAMES ----------------------
+          const keyFiles = new Set([
+            // Python
+            "requirements.txt", "pyproject.toml", "pipfile", "setup.py", "runtime.txt", ".python-version",
+            "streamlit_app.py", "app.py", "main.py", "wsgi.py", "asgi.py",
+            // Node / JS
+            "package.json", "next.config.js", "next.config.mjs", "next.config.ts", "vite.config.js",
+            "vite.config.ts", "nuxt.config.ts", "svelte.config.js", "angular.json", "server.js", "index.js", ".nvmrc",
+            // Frontend entry sources — where a SPA references the backend
+            "app.jsx", "app.tsx", "main.jsx", "main.tsx", "index.jsx", "index.tsx",
+            // Generic / infra
+            "dockerfile", "docker-compose.yml", "docker-compose.yaml", "procfile", "app.yaml",
+            // env declarations, run docs, runtime pins, host configs
+            ".env.example", ".env.sample", ".env.template", "readme.md", "readme", "makefile",
+            ".tool-versions", "nginx.conf", "netlify.toml", "vercel.json", "go.mod", "cargo.toml",
+            "composer.json", "gemfile", "pom.xml", "build.gradle", "build.gradle.kts", "pubspec.yaml", "deno.json",
+          ]);
+          // mirrors planner._DEPLOY_MANIFESTS
+          const manifests = new Set([
+            "package.json", "requirements.txt", "pyproject.toml", "pipfile", "setup.py", "go.mod",
+            "cargo.toml", "composer.json", "gemfile", "pom.xml", "build.gradle", "build.gradle.kts",
+            "pubspec.yaml", "deno.json", "procfile", "app.yaml",
+          ]);
+          // mirrors planner._WORKSPACE_MARKERS
+          const workspaceMarkers = new Set([
+            "pnpm-workspace.yaml", "lerna.json", "turbo.json", "nx.json", "rush.json", "go.work",
+          ]);
+          const MAX_FILES = 24, MAX_FILE_CHARS = 3000, MAX_TOTAL_CHARS = 48000, MAX_TREE_PATHS = 600;
+
+          const isDockerfile = (b) => b === "dockerfile" || b.startsWith("dockerfile.");
+          const isManifest = (b) => manifests.has(b) || isDockerfile(b);
+          const isWanted = (b) => keyFiles.has(b) || isManifest(b) || workspaceMarkers.has(b);
+          const dirOf = (p) => (p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "/");
+          const baseOf = (p) => p.slice(p.lastIndexOf("/") + 1).toLowerCase();
+
+          // ---- schema (mirrors DeployPlan.llm_json_schema) --------------
+          const schema = {
+            type: "object", additionalProperties: false,
+            required: ["summary", "app_name", "components", "needs_managed_db", "confidence", "warnings"],
+            properties: {
+              summary: { type: "string" }, app_name: { type: "string" },
+              components: { type: "array", items: { type: "object", additionalProperties: false,
+                required: ["name", "kind", "runtime", "source_dir", "dockerfile_path", "build_command", "run_command", "output_dir", "http_port", "routes", "health_check_path", "env", "instance_size"],
+                properties: {
+                  name: { type: "string" }, kind: { enum: ["service", "static_site", "worker", "job"] },
+                  runtime: { enum: ["python", "node-js", "go", "ruby", "php", "static", "docker"] },
+                  source_dir: { type: "string" },
+                  dockerfile_path: { anyOf: [{ type: "string" }, { type: "null" }] },
+                  build_command: { anyOf: [{ type: "string" }, { type: "null" }] },
+                  run_command: { anyOf: [{ type: "string" }, { type: "null" }] },
+                  output_dir: { anyOf: [{ type: "string" }, { type: "null" }] },
+                  http_port: { anyOf: [{ type: "integer" }, { type: "null" }] },
+                  routes: { type: "array", items: { type: "string" } },
+                  health_check_path: { anyOf: [{ type: "string" }, { type: "null" }] },
+                  env: { type: "array", items: { type: "object", additionalProperties: false,
+                    required: ["key", "required", "secret", "note"],
+                    properties: { key: { type: "string" }, required: { type: "boolean" }, secret: { type: "boolean" },
+                      value: { anyOf: [{ type: "string" }, { type: "null" }] }, note: { anyOf: [{ type: "string" }, { type: "null" }] } } } },
+                  instance_size: { type: "string" },
+                } } },
+              connections: { type: "array", items: { type: "object", additionalProperties: false,
+                required: ["from_component", "to_component", "env_key", "public_base_path", "value", "preserve_path_prefix"],
+                properties: { from_component: { type: "string" }, to_component: { type: "string" },
+                  env_key: { anyOf: [{ type: "string" }, { type: "null" }] }, public_base_path: { type: "string" },
+                  value: { anyOf: [{ type: "string" }, { type: "null" }] }, preserve_path_prefix: { type: "boolean" } } } },
+              needs_managed_db: { anyOf: [{ type: "string" }, { type: "null" }] },
+              confidence: { enum: ["high", "medium", "low"] },
+              warnings: { type: "array", items: { type: "string" } },
+            },
+          };
+
+          function walk(dir, out = []) {
+            for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+              if ([".git", "node_modules", ".next", "dist", "build", ".venv", "vendor"].includes(ent.name)) continue;
+              const p = path.join(dir, ent.name);
+              if (ent.isDirectory()) walk(p, out);
+              else out.push(path.relative(process.cwd(), p).split(path.sep).join("/"));
+              if (out.length > 5000) break;
+            }
+            return out;
+          }
+
+          const allPaths = walk(process.cwd());
+          const pathSet = new Set(allPaths);
+
+          // layout: directory -> [manifest/workspace-marker names] (uncapped)
+          const layout = {};
+          for (const p of allPaths) {
+            const b = baseOf(p);
+            if (isManifest(b) || workspaceMarkers.has(b)) {
+              const d = dirOf(p);
+              const name = p.slice(p.lastIndexOf("/") + 1);
+              (layout[d] ||= []);
+              if (!layout[d].includes(name)) layout[d].push(name);
+            }
+          }
+
+          // directory-diverse round-robin selection (mirrors _collect_key_files)
+          function collect() {
+            const candidates = allPaths.filter((p) => isWanted(baseOf(p)));
+            const byDir = {};
+            for (const p of candidates) (byDir[dirOf(p)] ||= []).push(p);
+            const prio = (p) => [isManifest(baseOf(p)) ? 0 : 1, p.length];
+            for (const d of Object.keys(byDir))
+              byDir[d].sort((a, b) => { const pa = prio(a), pb = prio(b); return pa[0] - pb[0] || pa[1] - pb[1]; });
+            const dirs = Object.keys(byDir).sort((a, b) => (a.split("/").length - b.split("/").length) || (a < b ? -1 : 1));
+            const ordered = [];
+            for (let round = 0; ordered.length < MAX_FILES; round++) {
+              let added = false;
+              for (const d of dirs) { if (round < byDir[d].length) { ordered.push(byDir[d][round]); added = true; if (ordered.length >= MAX_FILES) break; } }
+              if (!added) break;
+            }
+            const bodies = {}; let total = 0;
+            for (const p of ordered.slice(0, MAX_FILES)) {
+              let body;
+              try { body = fs.readFileSync(p, "utf8"); } catch { continue; }
+              const snip = body.slice(0, MAX_FILE_CHARS);
+              if (total + snip.length > MAX_TOTAL_CHARS) break;
+              bodies[p] = snip; total += snip.length;
+            }
+            return bodies;
+          }
+          const fileBodies = collect();
+
+          function renderTree() {
+            if (!allPaths.length) return "(file list unavailable)";
+            const shown = [...allPaths].sort().slice(0, MAX_TREE_PATHS);
+            const extra = allPaths.length > MAX_TREE_PATHS ? `\n… (+${allPaths.length - MAX_TREE_PATHS} more files)` : "";
+            return shown.join("\n") + extra;
+          }
+          function renderLayout() {
+            const dirs = Object.keys(layout);
+            if (!dirs.length) return "(no build/deploy manifests detected)";
+            return dirs.sort((a, b) => (a.split("/").length - b.split("/").length) || (a < b ? -1 : 1))
+              .map((d) => `- ${d === "/" ? "/ (repo root)" : d}: ${layout[d].slice().sort().join(", ")}`).join("\n");
+          }
+          const fileBlocks = Object.entries(fileBodies).map(([p, b]) => `### FILE: ${p}\n\`\`\`\n${b}\n\`\`\``).join("\n\n") || "(no key files could be read)";
+          const multi = Object.keys(layout).length > 1;
+
+          // ---- system prompt: VERBATIM from planner._SYSTEM_PROMPT ------
+          const system =
+            "You are a senior release engineer. Produce a deployment plan as a " +
+            "single JSON object matching the provided schema. Reason through these " +
+            "steps internally, then output ONLY the JSON:\n" +
+            "1. Read the repository layout and key files. Identify the runtime(s), " +
+            "framework(s), and build tooling in use.\n" +
+            "2. Decide the topology. Is this ONE project, or a MONOREPO with " +
+            "several independently-deployable projects? It's a monorepo when " +
+            "manifests live in multiple directories (e.g. frontend/ + backend/) or " +
+            "a workspace marker is present (pnpm-workspace.yaml, turbo.json, " +
+            "lerna.json, nx.json, go.work).\n" +
+            "3. For EACH deployable project emit one component and classify it: " +
+            "'service' (long-running HTTP), 'static_site' (built frontend served " +
+            "as static assets), 'worker' (no HTTP), or 'job' (run-to-completion). " +
+            "Set its 'source_dir' to that project's directory (use '/' or omit for " +
+            "a single root project).\n" +
+            "4. For each component infer: 'runtime' (a buildpack like 'python' / " +
+            "'node-js' / 'go'). Use 'docker' ONLY when a Dockerfile actually " +
+            "exists in that component's directory — verify it against the file " +
+            "tree; never assume a Dockerfile. With 'docker', set 'dockerfile_path' " +
+            "to the real path relative to 'source_dir'. Also set " +
+            "'build_command', 'run_command', 'output_dir' (static sites), " +
+            "'http_port' (prefer 8080), 'routes', and a real 'health_check_path' " +
+            "for services. Declare required env var NAMES only — never invent " +
+            "secret values.\n" +
+            "5. CONNECTIVITY. Reason about how the deployed app wires together:\n" +
+            "   a. ENV CONTRACT — derive it from the SOURCE CODE (process.env.*, " +
+            "import.meta.env.*), do NOT rely on a .env file existing; repos usually " +
+            "will not contain one. A .env.example may hint at names, but source code " +
+            "is authoritative. Declare every env var the code reads. Set a 'value' " +
+            "ONLY for non-secret deploy config you can infer; leave secrets' value " +
+            "null for the operator.\n" +
+            "   b. BIND — a container must listen on 0.0.0.0, not localhost. If the " +
+            "service reads its host from env (HOST/HOSTNAME/BIND_ADDR/ADDRESS), set " +
+            "that env value '0.0.0.0'; set the bind port env to http_port. If the " +
+            "code hard-codes 127.0.0.1/localhost with no env override, add a " +
+            "'warnings' entry (env can't fix it).\n" +
+            "   c. FRONTEND->BACKEND — identify by MEANING, not by a fixed name, " +
+            "how the browser frontend addresses the backend: ANY env var or " +
+            "hardcoded URL used as the API/backend base, whatever it is called " +
+            "(VITE_API_URL, BACKEND_URL, API_BASE, SERVER_URL — and even misspelled " +
+            "variants). Read the frontend source to find it. Point that env's value " +
+            "at the special token '$APP_URL' plus the backend's PUBLIC route prefix " +
+            "so the browser hits the same domain and the backend route. Example: if " +
+            "the backend component is routed at '/api', set the frontend API-base env " +
+            "to '$APP_URL/api'; if the backend route is '/', use '$APP_URL'. A frontend " +
+            "must NEVER ship pointing at localhost/127.0.0.1 " +
+            "— if it hardcodes a loopback URL with no env override, add a 'warnings' " +
+            "entry.\n" +
+            "   d. CONNECTIONS — also write the same relationship into top-level " +
+            "'connections': from_component=<frontend>, to_component=<backend>, " +
+            "env_key=<the frontend env var if one exists>, public_base_path=<backend " +
+            "public route such as '/api'>, value='$APP_URL' plus that path, and " +
+            "preserve_path_prefix=false unless the backend source itself mounts that " +
+            "public prefix.\n" +
+            "6. If a signal is missing or ambiguous, lower 'confidence' and add a " +
+            "'warnings' entry explaining what you assumed. Never set 'value' for " +
+            "secret env vars.\n" +
+            "Output one JSON object only — no prose, no markdown fences.";
+
+          // ---- user prompt: mirrors _render_user_prompt (no backend intel) --
+          const baseUser =
+            "Detected repository signals (JSON):\n" +
+            JSON.stringify({ repo: process.env.GITHUB_REPOSITORY, host: "github", private: process.env.REPO_PRIVATE === "true", default_branch: process.env.DEFAULT_BRANCH }, null, 2) + "\n\n" +
+            "Repository file tree (all paths, names only):\n" + renderTree() + "\n\n" +
+            "Repository layout — directories containing build/deploy manifests " +
+            "(each is a candidate deployable component; its directory is the component 'source_dir'):\n" + renderLayout() + "\n\n" +
+            (multi ? "This repo has manifests in multiple directories — treat it as a MONOREPO and emit one component per directory above, each with its 'source_dir' set to that directory.\n\n" : "") +
+            "Key file contents:\n" + fileBlocks + "\n\n" +
+            "Target platform notes:\n" +
+            "- The deploy target builds each service from source; pick a buildpack runtime ('python', 'node-js', ...) or 'docker' when a Dockerfile is the right driver.\n" +
+            "- Set each component's 'source_dir' to the directory of its manifest (omit or '/' for a single root project).\n" +
+            "- Streamlit apps are a single 'service' with run_command 'streamlit run <entry>.py --server.port 8080 --server.address 0.0.0.0' and health_check_path '/_stcore/health'.\n" +
+            "- If the repo is private, add a warning that the deploy target must be authorized to access the repository.\n\n" +
+            "Return ONLY a JSON object matching this JSON schema:\n" + JSON.stringify(schema);
+
+          // ---- deterministic verify-guard (mirrors planner._verify_plan) ----
+          const LOOPBACK = /https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?/i;
+          const appUrlHasRoute = (value, route) => {
+            const r = "/" + String(route).replace(/^\/+|\/+$/g, "");
+            const expected = "$APP_URL" + r;
+            const v = String(value).trim().replace(/\/+$/, "");
+            return v === expected || v.startsWith(expected + "/");
+          };
+          function verifyPlan(plan) {
+            const issues = [];
+            const comps = Array.isArray(plan.components) ? plan.components : [];
+            for (const c of comps) {
+              const sd = String(c.source_dir || "").replace(/^\/+|\/+$/g, "");
+              if (c.runtime === "docker" || c.dockerfile_path) {
+                const df = String(c.dockerfile_path || "Dockerfile").replace(/^\/+|\/+$/g, "");
+                const full = (!sd || df === sd || df.startsWith(sd + "/")) ? df : `${sd}/${df}`;
+                if (!pathSet.has(full))
+                  issues.push(`component '${c.name}' uses Dockerfile '${full}' which is not in the repo — use a buildpack runtime (node-js/python/...) with build_command/run_command, or set the correct existing dockerfile path`);
+              }
+              if (sd && !allPaths.some((p) => p === sd || p.startsWith(sd + "/")))
+                issues.push(`component '${c.name}' has source_dir '${sd}' but no files exist under it — set source_dir to a real directory`);
+            }
+            const loopbackFiles = Object.keys(fileBodies).filter((p) => LOOPBACK.test(fileBodies[p]));
+            if (loopbackFiles.length) {
+              const wired = comps.some((c) => (c.env || []).some((ev) => String(ev.value || "").includes("$APP_URL")));
+              const warned = (plan.warnings || []).some((w) => /localhost|127\.0\.0\.1/i.test(String(w)));
+              if (!wired && !warned)
+                issues.push(`the frontend source (${loopbackFiles[0]}) addresses the backend via a localhost URL. A deployed frontend must not point at localhost. Set the frontend's API-base env value to the token '$APP_URL' (or, if it's hardcoded with no env, add a 'warnings' entry)`);
+            }
+            const serviceRoutes = comps.filter((c) => c.kind === "service").flatMap((c) => (c.routes || []).filter((r) => r && r !== "/"));
+            const appUrlValues = comps.filter((c) => c.kind === "static_site").flatMap((c) => (c.env || []).map((ev) => String(ev.value || "")).filter((v) => v.includes("$APP_URL")));
+            if (appUrlValues.length && serviceRoutes.length && !appUrlValues.some((v) => serviceRoutes.some((r) => appUrlHasRoute(v, r)))) {
+              const route = serviceRoutes[0];
+              const src = loopbackFiles.length ? `frontend source (${loopbackFiles[0]})` : "frontend env";
+              issues.push(`the ${src} addresses a backend routed at '${route}', but the plan wires the frontend to '$APP_URL' without the route prefix. Set the frontend API-base env value to '$APP_URL${route}' so the browser calls the backend instead of the root static site`);
+            }
+            return issues;
+          }
+
+          function jsonFromText(raw) {
+            const text = String(raw || "").trim().replace(/^```json\s*/i, "").replace(/```$/i, "");
+            try { return JSON.parse(text); } catch {}
+            const s = text.indexOf("{"), e = text.lastIndexOf("}");
+            if (s >= 0 && e > s) return JSON.parse(text.slice(s, e + 1));
+            throw new Error("model returned no JSON object");
+          }
+
+          async function callLLM(user) {
+            const requested = (process.env.PLANNER_PROVIDER || "").toLowerCase();
+            const has = { openai: !!process.env.OPENAI_API_KEY, anthropic: !!process.env.ANTHROPIC_API_KEY, gemini: !!process.env.GEMINI_API_KEY, mistral: !!process.env.MISTRAL_API_KEY };
+            if (requested && !has[requested]) throw new Error(`Selected planner provider '${requested}' has no matching GitHub secret.`);
+            const pick = requested || (has.openai ? "openai" : has.anthropic ? "anthropic" : has.gemini ? "gemini" : has.mistral ? "mistral" : "");
+            const MAX = 8192;
+            if (pick === "openai") {
+              const r = await fetch("https://api.openai.com/v1/chat/completions", { method: "POST", headers: { authorization: `Bearer ${process.env.OPENAI_API_KEY}`, "content-type": "application/json" }, body: JSON.stringify({ model: process.env.PLANNER_MODEL || "gpt-4o", temperature: 0, max_tokens: MAX, response_format: { type: "json_object" }, messages: [{ role: "system", content: system }, { role: "user", content: user }] }) });
+              if (!r.ok) throw new Error(`OpenAI ${r.status}: ${await r.text()}`);
+              return jsonFromText((await r.json()).choices?.[0]?.message?.content);
+            }
+            if (pick === "anthropic") {
+              const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": process.env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" }, body: JSON.stringify({ model: process.env.PLANNER_MODEL || "claude-sonnet-4-6", max_tokens: MAX, temperature: 0, system, messages: [{ role: "user", content: user }] }) });
+              if (!r.ok) throw new Error(`Anthropic ${r.status}: ${await r.text()}`);
+              return jsonFromText((await r.json()).content?.map((p) => p.text || "").join("\n"));
+            }
+            if (pick === "gemini") {
+              const model = process.env.PLANNER_MODEL || "gemini-flash-latest";
+              const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(process.env.GEMINI_API_KEY)}`;
+              const r = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: `${system}\n\n${user}` }] }], generationConfig: { temperature: 0, maxOutputTokens: MAX, responseMimeType: "application/json" } }) });
+              if (!r.ok) throw new Error(`Gemini ${r.status}: ${await r.text()}`);
+              return jsonFromText((await r.json()).candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("\n"));
+            }
+            if (pick === "mistral") {
+              const r = await fetch("https://api.mistral.ai/v1/chat/completions", { method: "POST", headers: { authorization: `Bearer ${process.env.MISTRAL_API_KEY}`, "content-type": "application/json" }, body: JSON.stringify({ model: process.env.PLANNER_MODEL || "mistral-small-latest", temperature: 0, max_tokens: MAX, response_format: { type: "json_object" }, messages: [{ role: "system", content: system }, { role: "user", content: user }] }) });
+              if (!r.ok) throw new Error(`Mistral ${r.status}: ${await r.text()}`);
+              return jsonFromText((await r.json()).choices?.[0]?.message?.content);
+            }
+            throw new Error("No LLM GitHub secret found. Set OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, or MISTRAL_API_KEY.");
+          }
+
+          async function post(body) {
+            const res = await fetch(process.env.SHIP_CALLBACK_URL, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${process.env.SHIP_DEPLOY_TOKEN}` }, body: JSON.stringify(body) });
+            if (!res.ok) throw new Error(`Ship callback failed ${res.status}: ${await res.text()}`);
+          }
+
+          // ---- plan loop: 3 attempts, corrective retry (mirrors plan_deployment) ----
+          (async () => {
+            const MAX_ATTEMPTS = 3;
+            const JSON_HINT = "\n\nIMPORTANT: your previous reply could not be parsed as the required JSON. Return ONLY one valid JSON object matching the schema — no prose, no comments, no markdown fences, no trailing commas, every string quoted and every property comma-separated.";
+            let correction = "", lastErr = null;
+            for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+              let plan;
+              try {
+                plan = await callLLM(baseUser + correction);
+              } catch (err) {
+                lastErr = err; correction = JSON_HINT; continue;
+              }
+              if (!plan || typeof plan !== "object" || !Array.isArray(plan.components)) {
+                lastErr = new Error("plan missing components[]"); correction = JSON_HINT; continue;
+              }
+              const issues = verifyPlan(plan);
+              if (!issues.length) { await post({ status: "succeeded", plan }); return; }
+              lastErr = new Error(issues.join("; "));
+              correction = "\n\nYour previous plan had these problems — FIX them and return the corrected JSON:\n- " + issues.join("\n- ");
+            }
+            await post({ status: "failed", error: lastErr instanceof Error ? lastErr.message : String(lastErr) });
+            process.exit(1);
+          })();
+          NODE
