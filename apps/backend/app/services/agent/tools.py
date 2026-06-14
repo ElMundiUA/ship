@@ -5829,10 +5829,14 @@ class ToolBox:
 
         ref = ticket_ref_from(_tracker_kind_of(tracker), anchor_id)
         try:
-            await tracker.transition(ref, to_state="wbs")
+            # E16/ELS-123 collapsed decomposition into one bundle stage.
+            # The entry is ``stage:decomposition`` — NOT the pre-E16
+            # ``wbs`` (which the post-cutover label resolver no longer
+            # recognizes, so the anchor would park unroutable; ELS-308).
+            await tracker.transition(ref, to_state="decomposition")
         except Exception as exc:  # noqa: BLE001
             raise ToolInvocationError(
-                f"tracker rejected transition to stage:wbs: {exc}"
+                f"tracker rejected transition to stage:decomposition: {exc}"
             ) from exc
 
         self._session.add(
