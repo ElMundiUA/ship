@@ -42,9 +42,9 @@ from sqlalchemy import select
 # ---------------------------------------------------------------------------
 
 
-def test_loads_three_shipped_blueprints() -> None:
+def test_loads_shipped_blueprints() -> None:
     blueprints = load_all_blueprints()
-    assert set(blueprints) >= {"web", "mobile", "desktop"}
+    assert set(blueprints) >= {"web", "mobile", "desktop", "backend"}
 
 
 def test_web_blueprint_shape() -> None:
@@ -68,7 +68,7 @@ def test_all_required_capabilities_are_declared() -> None:
 
 
 def test_unknown_project_type_returns_none() -> None:
-    assert load_blueprint("backend") is None
+    assert load_blueprint("embedded") is None
     assert load_blueprint(None) is None
     assert load_blueprint("library") is None
 
@@ -379,10 +379,10 @@ async def test_build_readiness_no_blueprint_for_type(
     db_session, seed_repo
 ) -> None:
     workspace, repo, _ = seed_repo
-    await _seed_intel(db_session, workspace, repo, project_type="backend")
+    await _seed_intel(db_session, workspace, repo, project_type="embedded")
     result = await build_readiness(session=db_session, repo=repo)
     assert result.has_blueprint is False
-    assert result.project_type == "backend"
+    assert result.project_type == "embedded"
     assert "blueprint" in (result.detail or "").lower()
 
 
@@ -557,7 +557,7 @@ async def test_no_letter_when_ready(db_session, seed_repo) -> None:
 @pytest.mark.asyncio
 async def test_no_letter_without_blueprint(db_session, seed_repo) -> None:
     workspace, repo, _ = seed_repo
-    await _seed_intel(db_session, workspace, repo, project_type="backend")
+    await _seed_intel(db_session, workspace, repo, project_type="embedded")
     item = await file_bootstrap_recommendation(
         session=db_session, repo=repo, gateway=_FakeGateway([])
     )
