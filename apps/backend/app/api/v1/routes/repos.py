@@ -146,6 +146,24 @@ async def _resolve_installation(
     )
     install = (await session.execute(stmt)).scalars().first()
     if install is None:
+        # Sibling-attached install (migration 0076 — multi-workspace per
+        # install): the workspace activated repos under ANOTHER
+        # workspace's install via the headless attach path, so no
+        # install row is owned by this workspace. Resolve it through the
+        # workspace's activated repos' installation_id FK. Additive —
+        # only runs when the direct lookup found nothing, so normal
+        # single-workspace installs are unaffected.
+        sibling_stmt = (
+            select(GitHubInstallation)
+            .join(
+                WorkspaceRepo,
+                WorkspaceRepo.installation_id == GitHubInstallation.id,
+            )
+            .where(WorkspaceRepo.workspace_id == workspace_id)
+            .where(GitHubInstallation.suspended_at.is_(None))
+        )
+        install = (await session.execute(sibling_stmt)).scalars().first()
+    if install is None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
