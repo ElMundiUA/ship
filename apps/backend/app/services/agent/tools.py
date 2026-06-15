@@ -5856,12 +5856,40 @@ class ToolBox:
         )
         await self._session.flush()
 
+        # Auto-start the decomposition routine inline instead of waiting
+        # for the diff-based poller to notice the new stage (ELS-320).
+        # The poller only fires on a NET observed state change, so the
+        # anchor used to park at stage:decomposition until a manual
+        # maybe_dispatch kick. Fire it here. Best-effort: the anchor is
+        # already transitioned, so a dispatch hiccup (shadow / cap / lock
+        # / transient) just falls back to the poller — never fail the
+        # handoff. All gates still apply inside maybe_dispatch.
+        dispatched = False
+        try:
+            from backend.app.services.dispatcher import maybe_dispatch
+
+            result = await maybe_dispatch(
+                self._session,
+                workspace_id=self._workspace_id,
+                ticket_ref=anchor_identifier,
+                trigger_kind="decomposition_start",
+                fsm_stage="decomposition",
+            )
+            dispatched = bool(getattr(result, "fired", False))
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "decomposition_start: inline dispatch failed ws=%s anchor=%s",
+                self._workspace_id,
+                anchor_identifier,
+            )
+
         return _json_result(
             {
                 "project_native_id": project_native_id,
                 "anchor_issue_id": anchor_id,
                 "anchor_identifier": anchor_identifier,
                 "process": "decomposition",
+                "dispatched": dispatched,
             }
         )
 

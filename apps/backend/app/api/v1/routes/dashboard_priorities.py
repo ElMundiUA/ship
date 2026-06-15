@@ -771,10 +771,34 @@ async def start_decomposition(
     )
     await session.flush()
 
+    # Auto-start the decomposition routine inline (ELS-320) — the diff
+    # poller only fires on a net observed state change, so without this
+    # the anchor parks at stage:decomposition until a manual kick.
+    # Best-effort: the anchor is already transitioned; a dispatch hiccup
+    # falls back to the poller. Gates inside maybe_dispatch still apply.
+    anchor_ident = str(anchor.get("identifier") or "")
+    try:
+        from backend.app.services.dispatcher import maybe_dispatch
+
+        await maybe_dispatch(
+            session,
+            workspace_id=workspace_id,
+            ticket_ref=anchor_ident,
+            trigger_kind="decomposition_start",
+            fsm_stage="decomposition",
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "start_decomposition: inline dispatch failed workspace=%s anchor=%s err=%s",
+            workspace_id,
+            anchor_ident,
+            exc,
+        )
+
     return StartDecompositionOut(
         project_native_id=project_native_id,
         anchor_issue_id=str(anchor["id"]),
-        anchor_identifier=str(anchor.get("identifier") or ""),
+        anchor_identifier=anchor_ident,
     )
 
 
