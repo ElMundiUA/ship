@@ -1544,7 +1544,10 @@ export function SingleWindowChat({
         <div ref={scrollerRef} className="flex-1 overflow-y-auto py-4">
           <ChoiceProvider onChoose={(label) => void send(label)}>
             {segments.length === 0 ? (
-              <EmptyHint hasArchivedChats={hasArchivedChats} />
+              <EmptyHint
+                hasArchivedChats={hasArchivedChats}
+                onPick={(p) => void send(p)}
+              />
             ) : (
               <div className="space-y-6">
                 {/* Single ordered timeline. Tool segments are NOT
@@ -1763,28 +1766,93 @@ export function SingleWindowChat({
   );
 }
 
-function EmptyHint({ hasArchivedChats }: { hasArchivedChats: boolean }) {
+/** Quick standard actions for the empty Navigator (ELS-319). Each fires
+ * as a ready-to-run first message via ``send`` — same one-click→send
+ * contract as ChoiceProvider. */
+const QUICK_ACTIONS: { title: string; sub: string; prompt: string }[] = [
+  {
+    title: "Plan a project",
+    sub: "Brief + auto-decompose into tickets",
+    prompt:
+      "Plan a new project: add CSV export to the billing page. Draft a short brief, then break it into tickets.",
+  },
+  {
+    title: "What's in flight",
+    sub: "Active runs, PRs, in-progress tickets",
+    prompt:
+      "What's in flight right now? Summarize active runs, open PRs, and tickets in progress.",
+  },
+  {
+    title: "Review a PR",
+    sub: "Run pr-review on a pull request",
+    prompt:
+      "Review PR #142 in elmundi/ship and tell me whether it's ready to merge.",
+  },
+  {
+    title: "Pending approvals",
+    sub: "What's waiting on your sign-off",
+    prompt:
+      "Show me everything waiting on my approval and walk me through each item.",
+  },
+  {
+    title: "Set up a repo",
+    sub: "Activate + open the seed PR",
+    prompt:
+      "Set up Ship in elmundi/ship — activate the repo and open the seed PR.",
+  },
+  {
+    title: "Workspace status",
+    sub: "Engine health and what's stalled",
+    prompt:
+      "Give me a status check on this workspace — engine health, anything stalled, and what needs my attention.",
+  },
+];
+
+function EmptyHint({
+  hasArchivedChats,
+  onPick,
+}: {
+  hasArchivedChats: boolean;
+  onPick: (prompt: string) => void;
+}) {
   return (
-    <div className="flex h-full items-center justify-center text-center text-[12px] text-white/35">
-      <div>
-        <p className="font-semibold text-white/60">Ask Ship anything about this workspace.</p>
-        <p className="mt-1 max-w-sm">
-          It can pull up Inbox items, walk you through a Play, kick off a
-          Run, or surface what your repos look like under the hood. Try
-          asking <em className="not-italic text-white/55">&ldquo;what&rsquo;s in my inbox?&rdquo;</em>{" "}
-          or <em className="not-italic text-white/55">&ldquo;list active automations&rdquo;</em>.
+    <div className="mx-auto flex h-full max-w-2xl flex-col justify-center px-4">
+      <div className="text-center">
+        <p className="font-display text-lg font-bold text-white">
+          Ask Ship anything about this workspace.
         </p>
-        {hasArchivedChats ? (
-          <p className="mt-3">
-            <Link
-              href="/chat/archived"
-              className="text-white/45 hover:text-white"
-            >
-              Looking for an older thread? View archived chats →
-            </Link>
-          </p>
-        ) : null}
+        <p className="mx-auto mt-1.5 max-w-md text-[12px] leading-relaxed text-white/45">
+          Drive planning, reviews, runs and approvals in plain language — or
+          start with one of these:
+        </p>
       </div>
+
+      <div className="mt-5 grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
+        {QUICK_ACTIONS.map((a) => (
+          <button
+            key={a.title}
+            type="button"
+            onClick={() => onPick(a.prompt)}
+            className="quick-action group"
+            data-testid="chat-quick-action"
+          >
+            <div className="text-sm font-semibold text-white group-hover:text-aqua">
+              {a.title}
+            </div>
+            <div className="mt-0.5 text-[11px] leading-relaxed text-white/55">
+              {a.sub}
+            </div>
+          </button>
+        ))}
+      </div>
+
+      {hasArchivedChats ? (
+        <p className="mt-5 text-center text-[12px] text-white/35">
+          <Link href="/chat/archived" className="text-white/45 hover:text-white">
+            Looking for an older thread? View archived chats →
+          </Link>
+        </p>
+      ) : null}
     </div>
   );
 }
