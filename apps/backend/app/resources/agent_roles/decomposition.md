@@ -104,11 +104,28 @@ ticket in the finish payload's top-level `child_tickets` array:
   acceptance criteria, test plans, or implementation notes —
   SDLC's planning bundle (intake + BA + tech + qa-arch in one run)
   refines those when the child enters its first stage.
+- **depends_on**: a list of 0-based indices into THIS `child_tickets`
+  array naming the slices that must ship (be **Done**) before this
+  one can start. Set it whenever your WBS ordering is real — e.g. a
+  phased migration / re-skin where "each ships as its own PR before
+  the next starts", a foundation slice every later slice builds on,
+  or a slice that needs a prior one's reviewed output. The server
+  turns each edge into a tracker `blocks` relation that the
+  dispatcher enforces, so the blocked slices won't dispatch until
+  their blocker is Done. **Don't** invent dependencies between
+  genuinely independent slices (that needlessly serialises work) —
+  but DO encode true sequencing instead of leaving it as prose, or
+  every child becomes eligible at once when the project is activated.
+  Typical phased epic: child 0 has `depends_on: []`, child 1 has
+  `[0]`, child 2 has `[1]`, … (a chain); a fan-out where slices 1-3
+  all build on the foundation slice 0 is `[0]` on each of 1, 2, 3.
 
 The server creates each child under the anchor's project, then
 auto-renders a `## Tasks` section listing the freshly-created
 identifiers — you don't ship a `project_sections` entry for Tasks,
-and you can't guess identifiers that don't exist yet.
+and you can't guess identifiers that don't exist yet. Likewise you
+reference dependencies by array index, never by identifier (they
+don't exist until the server creates them).
 
 ## Finish
 
@@ -126,7 +143,8 @@ Wire shape — all five phases land in one finish call:
     { "section": "Test architecture","body": "<your Phase 4 markdown>" }
   ],
   "child_tickets": [
-    { "title": "<WBS line>", "body": "<3-5 line scope>" },
+    { "title": "<WBS line 1>", "body": "<3-5 line scope>", "depends_on": [] },
+    { "title": "<WBS line 2>", "body": "<3-5 line scope>", "depends_on": [0] },
     ...
   ],
   "comment": "<one paragraph audit narration> [Ship decomposition:role-decomposition]",

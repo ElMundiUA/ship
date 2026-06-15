@@ -259,12 +259,23 @@ class ChildTicketCreate(BaseModel):
     ``project_id`` is derived server-side from the anchor ticket;
     the agent only declares title/body for each slice. Labels and
     priority are optional pass-throughs to the tracker adapter.
+
+    ``depends_on`` (ELS-315) lets the agent declare sequencing between
+    slices: a list of 0-based indices into the *same* ``child_tickets``
+    array naming the slices that must be **Done** before this one can
+    start. The server resolves each index to its freshly-created
+    identifier and writes a Linear ``blocks`` edge (blocker = the
+    depended-on slice, blocked = this one), which the dispatcher's
+    dependency gate then honours (``reason='blocked_by_dependency'``).
+    Out-of-range / self indices are dropped server-side. Leave empty
+    for independent slices.
     """
 
     title: str = Field(min_length=1, max_length=300)
     body: str = Field(min_length=1, max_length=32_000)
     labels: list[str] = Field(default_factory=list, max_length=20)
     priority: int | None = Field(default=None, ge=0, le=4)
+    depends_on: list[int] = Field(default_factory=list, max_length=20)
 
 
 class ProjectSectionPatch(BaseModel):
@@ -429,6 +440,60 @@ async def _try_ticket_snapshot(gateway: Any, ref: TicketRef) -> dict[str, Any] |
         return await fn(ref)
     except Exception:
         return None
+
+
+async def _wire_child_dependencies(
+    *,
+    gateway: Any,
+    children: list[ChildTicketCreate],
+    created_refs: list[Any],
+    actions: list[str],
+    workspace_id: Any,
+) -> None:
+    """Translate decomposition ``child_tickets[].depends_on`` into Linear
+    ``blocks`` edges so the dispatcher's dependency gate enforces the
+    sequencing the planner declared (ELS-315).
+
+    ``depends_on`` holds 0-based indices into ``children``; for each
+    ``children[i].depends_on = [j, …]`` we create ``blocks`` with
+    ``blocker = created_refs[j]`` and ``blocked = created_refs[i]`` (j
+    must be Done before i can start). Indices that are out of range,
+    self-referential, or point at a slice whose create failed are
+    dropped. Best-effort — a relation failure is logged + audited but
+    never raised; the children already exist.
+    """
+    relate = getattr(gateway, "relate_tickets", None)
+    if relate is None:
+        return
+    n = len(children)
+    for i, child in enumerate(children):
+        deps = getattr(child, "depends_on", None) or []
+        if created_refs[i] is None:
+            continue
+        for j in deps:
+            if not isinstance(j, int) or j < 0 or j >= n or j == i:
+                logger.warning(
+                    "agent_run.finish: dropping invalid depends_on idx=%r "
+                    "on child %d (n=%d) ws=%s",
+                    j, i, n, workspace_id,
+                )
+                continue
+            if created_refs[j] is None:
+                continue
+            try:
+                await relate(
+                    blocker=created_refs[j],
+                    blocked=created_refs[i],
+                    kind="blocks",
+                )
+                actions.append("tracker:child_dependency_linked")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "agent_run.finish: relate_tickets failed "
+                    "blocker_idx=%d blocked_idx=%d ws=%s err=%s",
+                    j, i, workspace_id, exc,
+                )
+                actions.append("tracker:child_dependency_failed")
 
 
 def _ticket_ref_from(vendor_kind: str, raw: str) -> TicketRef:
@@ -4349,7 +4414,14 @@ async def finish_agent_run(
                 )
                 if project_id and create_fn is not None:
                     created_rows: list[tuple[str, str]] = []
-                    for child in payload.child_tickets:
+                    # Index-aligned with payload.child_tickets so
+                    # ``depends_on`` (0-based array indices) can resolve
+                    # to the freshly-created refs after the loop. None =
+                    # that slice's create failed (ELS-315).
+                    created_refs: list[Any] = [None] * len(
+                        payload.child_tickets
+                    )
+                    for idx, child in enumerate(payload.child_tickets):
                         try:
                             created = await create_fn(
                                 title=child.title,
@@ -4373,9 +4445,21 @@ async def finish_agent_run(
                             continue
                         identifier = created.display_id or str(created.ref.id)
                         created_rows.append((identifier, child.title))
+                        created_refs[idx] = created.ref
                         actions.append(
                             f"tracker:ticket_created:{identifier}"
                         )
+                    # Wire declared sequencing into Linear ``blocks`` edges
+                    # so the dispatcher's dependency gate enforces it
+                    # (ELS-315). Best-effort: a relation failure never
+                    # fails finish — the children already exist.
+                    await _wire_child_dependencies(
+                        gateway=resolved.gateway,
+                        children=payload.child_tickets,
+                        created_refs=created_refs,
+                        actions=actions,
+                        workspace_id=workspace_id,
+                    )
                     if created_rows and upsert is not None:
                         rendered = "\n".join(
                             f"- **{ident}** — {title}"

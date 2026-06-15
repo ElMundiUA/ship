@@ -242,3 +242,108 @@ def test_child_ticket_priority_bounded() -> None:
         ChildTicketCreate(title="t", body="b", priority=-1)
     with pytest.raises(ValidationError):
         ChildTicketCreate(title="t", body="b", priority=5)
+
+
+# ---- ChildTicketCreate.depends_on → Linear blocks wiring (ELS-315) ----
+
+
+def test_child_ticket_depends_on_defaults_empty() -> None:
+    assert ChildTicketCreate(title="t", body="b").depends_on == []
+
+
+def test_child_ticket_depends_on_accepts_indices() -> None:
+    finish = FinishIn(
+        run_id="r1",
+        outcome="ready_next_step",
+        ticket_ref="PAC-9",
+        stage_next="planning_done",
+        process="decomposition",
+        child_tickets=[
+            {"title": "Foundation", "body": "b", "depends_on": []},
+            {"title": "Settings", "body": "b", "depends_on": [0]},
+            {"title": "Cleanup", "body": "b", "depends_on": [1]},
+        ],
+    )
+    assert [c.depends_on for c in finish.child_tickets] == [[], [0], [1]]
+
+
+class _RelStub:
+    """Records relate_tickets calls; create_ticket not exercised here."""
+
+    def __init__(self) -> None:
+        self.edges: list[tuple[object, object, str]] = []
+
+    async def relate_tickets(self, *, blocker, blocked, kind="blocks") -> None:
+        self.edges.append((blocker, blocked, kind))
+
+
+@pytest.mark.asyncio
+async def test_wire_child_dependencies_chain() -> None:
+    """A 0→1→2 chain produces two blocks edges with blocker=prior."""
+    from backend.app.api.v1.routes.agent_runs import _wire_child_dependencies
+
+    children = [
+        ChildTicketCreate(title="a", body="b", depends_on=[]),
+        ChildTicketCreate(title="b", body="b", depends_on=[0]),
+        ChildTicketCreate(title="c", body="b", depends_on=[1]),
+    ]
+    refs = ["REF0", "REF1", "REF2"]
+    gw = _RelStub()
+    actions: list[str] = []
+    await _wire_child_dependencies(
+        gateway=gw,
+        children=children,
+        created_refs=refs,
+        actions=actions,
+        workspace_id="ws",
+    )
+    assert gw.edges == [
+        ("REF0", "REF1", "blocks"),  # 0 blocks 1
+        ("REF1", "REF2", "blocks"),  # 1 blocks 2
+    ]
+    assert actions.count("tracker:child_dependency_linked") == 2
+
+
+@pytest.mark.asyncio
+async def test_wire_child_dependencies_drops_invalid_and_failed() -> None:
+    """Out-of-range / self idx are dropped; a dep on a slice whose
+    create failed (ref=None) is skipped silently."""
+    from backend.app.api.v1.routes.agent_runs import _wire_child_dependencies
+
+    children = [
+        ChildTicketCreate(title="a", body="b", depends_on=[5]),    # OOR
+        ChildTicketCreate(title="b", body="b", depends_on=[1]),    # self
+        ChildTicketCreate(title="c", body="b", depends_on=[0]),    # dep on failed
+    ]
+    refs = [None, "REF1", "REF2"]  # slice 0's create failed
+    gw = _RelStub()
+    actions: list[str] = []
+    await _wire_child_dependencies(
+        gateway=gw,
+        children=children,
+        created_refs=refs,
+        actions=actions,
+        workspace_id="ws",
+    )
+    # child 0 has no ref → skipped entirely; child 1 self-ref dropped;
+    # child 2 depends on failed slice 0 (ref None) → skipped. No edges.
+    assert gw.edges == []
+
+
+@pytest.mark.asyncio
+async def test_wire_child_dependencies_noop_without_adapter() -> None:
+    """A tracker without relate_tickets is a clean no-op."""
+    from backend.app.api.v1.routes.agent_runs import _wire_child_dependencies
+
+    class _Bare:
+        pass
+
+    actions: list[str] = []
+    await _wire_child_dependencies(
+        gateway=_Bare(),
+        children=[ChildTicketCreate(title="a", body="b", depends_on=[0])],
+        created_refs=["REF0"],
+        actions=actions,
+        workspace_id="ws",
+    )
+    assert actions == []
