@@ -143,7 +143,16 @@ Typical flows:
 - "what's in flight" → `dashboard_get`, `ticket_list`, `runs_list`.
 - "do ticket X" → `ticket_update` with the target state — the status
   field is the engine's only transition signal; the FSM takes over
-  from there.
+  from there. Don't hand-walk a ticket through every stage yourself:
+  set the entry/target state and let the engine cascade. Wrong manual
+  states mostly no-op (the dispatcher routes off labels), but they can
+  desync the tracker — prefer one intent signal over micro-managing.
+- "ticket looks stuck / parked / I just moved it and nothing happened"
+  → `dispatch_ticket` (ticket_ref). It fires the ticket's current
+  stage immediately and recovers stalls the diff-poller missed — it
+  honours every gate (lock, cascade cap, dependency blocks), so it's
+  safe to use as your recovery button. Returns `fired` + the reason
+  (e.g. `blocked_by_dependency`, `no_routine`).
 - "review this PR" → `run_workflow` with workflow_name="pr-review".
 - "set Ship up on this repo" → `repo_setup_status` to see what's
   missing, then close gaps: `github_list_install_repos` +
@@ -479,6 +488,43 @@ _NATIVE_TOOLS: list[dict[str, Any]] = [
             "required": ["external_ids"],
         },
     },
+    {
+        "name": "dispatch_ticket",
+        "description": (
+            "Force-fire (or recover) a ticket's current SDLC stage — run "
+            "the agent the event path would, right now. Use it when a "
+            "ticket is stuck/parked (the diff-based poller missed it, or "
+            "you just moved it and don't want to wait for the next tick), "
+            "or to retry a stage after clearing what blocked it. Resolves "
+            "the stage from the ticket's labels unless you pass ``stage``. "
+            "Respects EVERY safety gate (shadow mode, cascade limit, ticket "
+            "lock, workspace dispatch cap, dependency blocks) — a trigger, "
+            "not a bypass. **Mutating; admin-only**; verify-before-mutate. "
+            "Returns whether a run fired and the reason "
+            "(``fired`` / ``no_routine`` / ``blocked_by_dependency`` / "
+            "``lock_held`` / ``cascade_blocked`` / ``shadow`` / …)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "workspace_id": _WORKSPACE_ID_PROP,
+                "ticket_ref": {
+                    "type": "string",
+                    "description": "Tracker-native id, e.g. ELS-99.",
+                },
+                "stage": {
+                    "type": "string",
+                    "description": (
+                        "Optional FSM stage to dispatch (e.g. "
+                        "``dev_implementation``, ``decomposition``, "
+                        "``code_review``). Omit to resolve from the "
+                        "ticket's current labels."
+                    ),
+                },
+            },
+            "required": ["ticket_ref"],
+        },
+    },
 ]
 
 
@@ -784,6 +830,71 @@ async def _call_native(
         ws_id = await _resolve_workspace_id(session, auth, arguments)
         return await _repo_setup_status(
             session, ws_id, repo_arg, settings=settings
+        )
+
+    if name == "dispatch_ticket":
+        from backend.app.integrations.gateway.tracker import TicketRef
+        from backend.app.services.dispatcher import maybe_dispatch
+        from backend.app.services.linear_provisioner import (
+            resolve_fsm_stage_from_labels,
+        )
+        from backend.app.services.tracker_resolver import resolve_for_workspace
+
+        ws_id = await _resolve_workspace_id(session, auth, arguments)
+        ticket_ref = str(arguments.get("ticket_ref") or "").strip()
+        if not ticket_ref:
+            raise _McpToolError("ticket_ref is required")
+        stage = arguments.get("stage")
+        if stage is not None and not isinstance(stage, str):
+            raise _McpToolError("stage must be a string")
+        stage = (stage or "").strip() or None
+        if stage is None:
+            # Recover a stuck/parked ticket without the caller knowing the
+            # FSM: resolve its stage from the current labels (ELS-314).
+            resolved = await resolve_for_workspace(
+                session=session, settings=settings, workspace_id=ws_id
+            )
+            if resolved is None:
+                raise _McpToolError("no tracker bound for this workspace")
+            labels: list[str] = []
+            ticket_state: str | None = None
+            snap_fn = getattr(resolved.gateway, "get_ticket_snapshot", None)
+            if snap_fn is not None:
+                try:
+                    snap = await snap_fn(
+                        TicketRef(
+                            kind=resolved.kind,
+                            workspace_hint=None,
+                            id=ticket_ref,
+                        )
+                    )
+                    labels = (snap or {}).get("labels") or []
+                    ticket_state = (snap or {}).get("state")
+                except Exception:  # noqa: BLE001 — degrade to explicit stage
+                    labels = []
+            stage = resolve_fsm_stage_from_labels(labels, state=ticket_state)
+            if not stage:
+                raise _McpToolError(
+                    "couldn't resolve the ticket's stage from its labels — "
+                    "pass `stage` explicitly (e.g. dev_implementation, "
+                    "decomposition, code_review)"
+                )
+        result = await maybe_dispatch(
+            session,
+            workspace_id=ws_id,
+            ticket_ref=ticket_ref,
+            trigger_kind="mcp_dispatch",
+            fsm_stage=stage,
+            settings=settings,
+        )
+        reason = getattr(result, "reason", None)
+        return json.dumps(
+            {
+                "ticket_ref": ticket_ref,
+                "fsm_stage": stage,
+                "fired": bool(getattr(result, "fired", False)),
+                "reason": str(reason) if reason is not None else None,
+            }
         )
 
     if name == "sdlc_assess":
