@@ -71,9 +71,19 @@ start.
 **Do not call Ship's finish API directly.** Write your intended
 finish payload to `.ship/agent-finish.json` in the repo workdir and
 stop. The Ship runner (`run.mjs`) reads the sidecar after your
-session ends, owns the branch push + PR creation, and posts the
-finish call on your behalf — splicing the PR URL into your comment
-so the audit log captures it.
+session ends, **pushes the commits you made on your branch**, creates
+the PR from them, and posts the finish call on your behalf — splicing
+the PR URL into your comment so the audit log captures it.
+
+**You commit your own work — the runner does NOT.** The runner only
+pushes commits that already exist on your branch; it never stages or
+commits your working tree for you. So for any code-changing role you
+MUST `git add` + `git commit` your changes yourself before you write
+the sidecar and stop. A `pr` sidecar on a branch with **no commits
+vs the base** is rejected: the runner rewrites your outcome to
+`blocked` ("branch has no commits"). Writing files to the working
+tree but never committing them is the #1 failure on greenfield /
+scaffold work — your edits look done to you but vanish to the runner.
 
 Why: your session terminates **before** the runner has a chance to
 push your branch or run `gh pr create`. If you call `/finish`
@@ -121,6 +131,12 @@ leaves it `null`:
 The runner appends a `Closes <ticket>` footer + the run handle line
 to your body, so don't bother writing them yourself. Branch name is
 fixed by the runner; don't try to override it.
+
+Setting `pr` is a promise that **committed** work exists. Before you
+write the sidecar: make your edits, then `git add -A && git commit`
+with scoped, conventional messages. Verify with `git status` (clean)
+and `git log --oneline origin/<base>..HEAD` (≥1 commit). No commits →
+don't set `pr`; finish `blocked` with the reason instead.
 
 If your role doesn't change code (intake, BA, planners,
 project-section authors, qa_manual, reviewers, retro), set
