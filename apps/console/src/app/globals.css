@@ -2,8 +2,31 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  color-scheme: dark;
+/* Ship brand → shadcn semantic tokens (canonical values: apps/landing/src/app/globals.css) */
+@layer base {
+  :root {
+    --background: 222 47% 6%;
+    --foreground: 204 100% 95%;
+    --card: 222 47% 8%;
+    --card-foreground: 204 100% 95%;
+    --popover: 222 47% 8%;
+    --popover-foreground: 204 100% 95%;
+    --primary: 38 47% 61%;
+    --primary-foreground: 222 47% 6%;
+    --secondary: 0 0% 100%;
+    --secondary-foreground: 204 100% 95%;
+    --muted: 222 20% 14%;
+    --muted-foreground: 0 0% 70%;
+    --accent: 38 47% 61%;
+    --accent-foreground: 222 47% 6%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 0 0% 100%;
+    --input: 0 0% 100%;
+    --ring: 38 47% 61%;
+    --radius: 1rem;
+    color-scheme: dark;
+  }
 }
 
 html {

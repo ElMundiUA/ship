@@ -12,9 +12,18 @@
  * Dismissal collapses the card to a one-line hint via localStorage
  * (`ship.connect-agent.dismissed.{wsId}`) — deliberately not server
  * state, "connected" is a per-browser convenience flag.
+ *
+ * Pilot surface for ELS-309 shadcn migration — uses @/components/ui/*
+ * primitives; legacy ui.tsx and globals.css button utilities unchanged
+ * elsewhere.
  */
 
 import { useEffect, useState } from "react";
+
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { Separator } from "@/components/ui/separator";
 
 const dismissKey = (wsId: string) => `ship.connect-agent.dismissed.${wsId}`;
 
@@ -110,14 +119,15 @@ export function ConnectAgentCard({
 
   if (dismissed) {
     return (
-      <button
+      <Button
         type="button"
+        variant="ghost"
         onClick={reopen}
         data-testid="connect-agent-hint"
-        className="block w-full rounded-2xl border border-white/10 bg-white/[0.02] px-5 py-3 text-left text-xs text-white/55 transition hover:border-aqua/30 hover:text-white/80"
+        className="h-auto w-full justify-start rounded-2xl border border-white/10 bg-white/[0.02] px-5 py-3 text-left text-xs font-normal text-white/55 hover:border-aqua/30 hover:text-white/80"
       >
         Agent connected ✓ — show setup again
-      </button>
+      </Button>
     );
   }
 
@@ -125,39 +135,46 @@ export function ConnectAgentCard({
   const tokenCmd = tokenCommand(mcpEndpoint, secret);
 
   return (
-    <section
+    <Card
       data-testid="connect-agent-card"
-      className="rounded-2xl border border-aqua/30 bg-aqua/[0.05] p-5"
+      className="rounded-2xl border-aqua/30 bg-aqua/[0.05] shadow-none"
     >
-      <div className="flex items-start justify-between gap-3">
+      <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0 p-5 pb-0">
         <div>
-          <h2 className="text-[11px] font-bold uppercase tracking-widest text-aqua/90">
+          <Badge
+            variant="outline"
+            className="border-aqua/40 bg-transparent text-[11px] font-bold uppercase tracking-widest text-aqua/90"
+          >
             Connect your agent
-          </h2>
-          <p className="mt-1 max-w-xl text-sm text-white/70">
+          </Badge>
+          <p className="mt-2 max-w-xl text-sm text-white/70">
             Ship is operated from the agent you already live in — attach it
             over MCP and run planning, tickets, approvals, and reviews from
             there. The console stays for settings and destructive confirms.
           </p>
         </div>
         {dismissed === false && (
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="xs"
             onClick={dismiss}
             data-testid="connect-agent-dismiss"
-            className="shrink-0 text-[11px] font-semibold text-white/40 hover:text-white/80"
+            className="shrink-0 border-0 text-[11px] font-semibold text-white/40 hover:text-white/80"
           >
             Connected ✓ hide
-          </button>
+          </Button>
         )}
-      </div>
+      </CardHeader>
 
-      <div className="mt-4 space-y-3">
+      <CardContent className="space-y-3 p-5 pt-4">
         <Row label="MCP endpoint">
           <code className="break-all font-mono text-xs text-white/85">
             {mcpEndpoint}
           </code>
         </Row>
+
+        <Separator className="bg-white/10" />
 
         {/* Primary: OAuth — no token to paste. The agent opens a Ship
             login and you approve a workspace in the browser. */}
@@ -166,13 +183,14 @@ export function ConnectAgentCard({
             <code className="min-w-0 flex-1 break-all rounded-lg border border-white/10 bg-ink/60 p-2 font-mono text-[11px] text-white/85">
               {oauthCmd}
             </code>
-            <button
+            <Button
               type="button"
+              variant="secondary"
+              size="xs"
               onClick={() => copy("oauth", oauthCmd)}
-              className="shrink-0 rounded-full border border-white/15 px-2.5 py-1 text-[10px] font-bold text-white/70 hover:text-white"
             >
               {copied === "oauth" ? "Copied ✓" : "Copy"}
-            </button>
+            </Button>
           </div>
           <p className="mt-1 text-[10px] text-white/50">
             On first use your agent opens a Ship login and asks you to approve
@@ -204,27 +222,29 @@ export function ConnectAgentCard({
                 {secret}
               </code>
             ) : (
-              <button
+              <Button
                 type="button"
                 onClick={mint}
                 disabled={minting}
                 data-testid="connect-agent-mint"
-                className="rounded-full bg-aqua/80 px-3 py-1.5 text-xs font-bold text-ink transition hover:bg-aqua disabled:opacity-50"
+                size="sm"
+                className="bg-aqua/80 text-ink hover:bg-aqua"
               >
                 {minting ? "Minting…" : "Mint agent token"}
-              </button>
+              </Button>
             )}
             <div className="flex items-start gap-2">
               <code className="min-w-0 flex-1 break-all rounded-lg border border-white/10 bg-ink/60 p-2 font-mono text-[11px] text-white/85">
                 {tokenCmd}
               </code>
-              <button
+              <Button
                 type="button"
+                variant="secondary"
+                size="xs"
                 onClick={() => copy("token", tokenCmd)}
-                className="shrink-0 rounded-full border border-white/15 px-2.5 py-1 text-[10px] font-bold text-white/70 hover:text-white"
               >
                 {copied === "token" ? "Copied ✓" : "Copy"}
-              </button>
+              </Button>
             </div>
             {secret && (
               <p className="text-[10px] text-white/50">
@@ -233,10 +253,10 @@ export function ConnectAgentCard({
             )}
           </div>
         </details>
-      </div>
+      </CardContent>
 
-      {error && <p className="mt-3 text-xs text-coral/95">{error}</p>}
-    </section>
+      {error && <p className="px-5 pb-5 text-xs text-coral/95">{error}</p>}
+    </Card>
   );
 }
 
