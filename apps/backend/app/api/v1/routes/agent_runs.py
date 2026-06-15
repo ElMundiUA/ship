@@ -1188,6 +1188,35 @@ def _extract_pr_url(text: str | None) -> str | None:
     return match.group(0) if match else None
 
 
+async def _ticket_pr_already_merged(
+    session: AsyncSession, *, workspace_id: uuid.UUID, ticket_ref: str
+) -> bool:
+    """Has the ticket's PR already been merged out-of-band? (ELS-325)
+
+    The operator sometimes merges a PR by hand on github.com mid-chain.
+    The code_review/auto_merge gate then finds no OPEN PR to cite and
+    would wrongly block. We check the PR cache for a merged PR whose
+    conventional title carries this ticket (``infra(BUZ-11): …``); a
+    hit means the work shipped and the ticket should finish, not freeze.
+    """
+    from sqlalchemy import select as _select
+
+    from backend.app.db.models.pipelines import PullRequest
+
+    row = (
+        await session.execute(
+            _select(PullRequest.id)
+            .where(
+                PullRequest.workspace_id == workspace_id,
+                PullRequest.merged.is_(True),
+                PullRequest.title.ilike(f"%({ticket_ref})%"),
+            )
+            .limit(1)
+        )
+    ).first()
+    return row is not None
+
+
 async def _validate_code_review_to_auto_merge(
     session: AsyncSession,
     *,
@@ -1195,6 +1224,7 @@ async def _validate_code_review_to_auto_merge(
     pr_url: str | None,
     settings: Settings,
     require_approval: bool = True,
+    ticket_ref: str | None = None,
 ) -> tuple[bool, str]:
     """Verify the agent's ``code_review → auto_merge`` claim against
     GitHub.
@@ -1233,6 +1263,16 @@ async def _validate_code_review_to_auto_merge(
     failed merge), so a brittle gate is safer than a permissive one.
     """
     if not pr_url:
+        # ELS-325: no PR URL on the finish usually means the agent
+        # never opened one — but it ALSO happens when the operator
+        # merged the PR by hand mid-chain, leaving no open PR to cite.
+        # Distinguish: if the ticket's PR is already merged, signal
+        # ``already_merged`` so the caller finishes the ticket (→ Done)
+        # instead of freezing it as ``no_pr_url``.
+        if ticket_ref and await _ticket_pr_already_merged(
+            session, workspace_id=workspace_id, ticket_ref=ticket_ref
+        ):
+            return False, "already_merged"
         return False, "no_pr_url"
     pr_path_re = re.compile(
         r"^https://github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)$",
@@ -4192,9 +4232,39 @@ async def finish_agent_run(
             pr_url=pr_url,
             settings=settings,
             require_approval=autonomy_profile != "high",
+            ticket_ref=payload.ticket_ref,
         )
         actions.append(f"phase4:gate_profile:{autonomy_profile}")
-        if not gate_ok:
+        if not gate_ok and gate_reason == "already_merged":
+            # ELS-325: the PR was merged out-of-band (operator merged by
+            # hand). The work shipped — don't freeze. Skip auto_merge and
+            # finish the ticket at the terminal ``merged`` state (→ Done),
+            # the same place a normal auto-merge lands. Leaving
+            # ``outcome=ready_next_step`` lets the downstream transition
+            # move it; we just retarget stage_next.
+            logger.info(
+                "phase4 gate: %s PR already merged out-of-band ws=%s — "
+                "advancing to merged instead of blocking",
+                payload.ticket_ref, workspace_id,
+            )
+            session.add(
+                AuditLog(
+                    workspace_id=workspace_id,
+                    actor_user_id=auth.user.id,
+                    actor_token_id=auth.token.id if auth.token else None,
+                    action="transition.auto_merge_skipped_already_merged",
+                    target_kind="ticket",
+                    target_id=payload.ticket_ref,
+                    payload={
+                        "fsm_stage": payload.fsm_stage,
+                        "run_id": payload.run_id,
+                        "autonomy": autonomy_profile,
+                    },
+                )
+            )
+            payload.stage_next = "merged"
+            actions.append("phase4:already_merged:advance_done")
+        elif not gate_ok:
             logger.info(
                 "phase4 gate rejected code_review→auto_merge "
                 "ws=%s ticket=%s reason=%s pr_url=%s autonomy=%s",

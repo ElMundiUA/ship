@@ -170,6 +170,50 @@ def test_no_pr_url_is_rejected() -> None:
     assert reason == "no_pr_url"
 
 
+def test_no_pr_url_with_already_merged_pr_signals_advance() -> None:
+    # ELS-325: operator merged the PR by hand mid-chain → no open PR to
+    # cite, but the ticket's PR IS merged. The gate must NOT block as
+    # ``no_pr_url`` — it returns ``already_merged`` so the caller
+    # finishes the ticket (→ Done) instead of freezing.
+    import asyncio
+
+    session = AsyncMock()
+    # _ticket_pr_already_merged → session.execute(...).first() truthy.
+    session.execute = AsyncMock(
+        return_value=MagicMock(first=MagicMock(return_value=("pr-id",)))
+    )
+    ok, reason = asyncio.new_event_loop().run_until_complete(
+        _validate_code_review_to_auto_merge(
+            session,
+            workspace_id=uuid.uuid4(),
+            pr_url=None,
+            settings=_build_settings(),
+            ticket_ref="ENG-7",
+        )
+    )
+    assert ok is False
+    assert reason == "already_merged"
+
+
+def test_no_pr_url_without_merged_pr_still_blocks() -> None:
+    import asyncio
+
+    session = AsyncMock()
+    session.execute = AsyncMock(
+        return_value=MagicMock(first=MagicMock(return_value=None))
+    )
+    ok, reason = asyncio.new_event_loop().run_until_complete(
+        _validate_code_review_to_auto_merge(
+            session,
+            workspace_id=uuid.uuid4(),
+            pr_url=None,
+            settings=_build_settings(),
+            ticket_ref="ENG-7",
+        )
+    )
+    assert (ok, reason) == (False, "no_pr_url")
+
+
 def test_invalid_pr_url_is_rejected() -> None:
     ok, reason = _run_with_mocked_gh(
         reviews=[], pr_detail={}, check_runs=[],
