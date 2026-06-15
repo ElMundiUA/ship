@@ -78,8 +78,13 @@ async def test_tools_list_projection_and_natives(
         "sdlc_assess",
         "github_list_install_repos",
         "repo_activate",
+        "dispatch_ticket",
     ):
         assert native in tools
+    # dispatch_ticket (ELS-314) exposes ticket_ref (required) + optional stage.
+    _dt = tools["dispatch_ticket"]["inputSchema"]
+    assert "ticket_ref" in _dt["properties"] and "stage" in _dt["properties"]
+    assert _dt.get("required") == ["ticket_ref"]
     # workspace_id injected into projected tools.
     assert "workspace_id" in tools["dashboard_get"]["inputSchema"]["properties"]
     # approval_echo contract surfaced on inbox_update.
@@ -195,6 +200,21 @@ async def test_repo_activate_requires_external_ids(
     result = res.json()["result"]
     assert result["isError"] is True
     assert "external_ids" in result["content"][0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_ticket_requires_ticket_ref(
+    db_session, v1_client, seed_workspace
+) -> None:
+    _, raw, _ = seed_workspace
+    res = await _post(
+        v1_client,
+        raw,
+        _rpc("tools/call", {"name": "dispatch_ticket", "arguments": {}}),
+    )
+    result = res.json()["result"]
+    assert result["isError"] is True
+    assert "ticket_ref" in result["content"][0]["text"]
 
 
 @pytest.mark.asyncio
