@@ -7,24 +7,34 @@
   :root {
     --background: 222 47% 6%;
     --foreground: 204 100% 95%;
-    --card: 222 47% 8%;
+    /* Opaque cards sit one tier above ink so they read against the
+     * brand wash (ELS-317 gradient-forward visual). */
+    --card: 222 44% 9%;
     --card-foreground: 204 100% 95%;
-    --popover: 222 47% 8%;
+    --popover: 222 46% 8%;
     --popover-foreground: 204 100% 95%;
     --primary: 38 47% 61%;
     --primary-foreground: 222 47% 6%;
-    --secondary: 0 0% 100%;
+    /* Real dark-slate secondary fill (was pure white). */
+    --secondary: 222 30% 16%;
     --secondary-foreground: 204 100% 95%;
-    --muted: 222 20% 14%;
+    --muted: 222 24% 13%;
     --muted-foreground: 0 0% 70%;
     --accent: 38 47% 61%;
     --accent-foreground: 222 47% 6%;
-    --destructive: 0 84% 60%;
+    --destructive: 0 84% 62%;
     --destructive-foreground: 0 0% 98%;
+    /* Borders stay white — consumed as white/alpha (hairline-on-glass),
+     * NOT a solid grey. This is what makes the gradient look read. */
     --border: 0 0% 100%;
     --input: 0 0% 100%;
     --ring: 38 47% 61%;
     --radius: 1rem;
+    /* Ship surface vocabulary (ELS-317): elevation + signature glow,
+     * referenced by .surface-card / .surface-signature / .quick-action. */
+    --elev-1: 0 1px 0 rgba(255, 255, 255, 0.05) inset, 0 1px 2px rgba(0, 0, 0, 0.4);
+    --elev-2: 0 4px 24px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    --glow-gold: 0 0 80px -20px rgba(207, 169, 107, 0.4);
     color-scheme: dark;
   }
 }
@@ -39,7 +49,10 @@ body {
    * dimmer alphas (0.18 / 0.12 / 0.10) which left the operator-side
    * feeling colder than the marketing surface. Same numbers as
    * apps/landing/src/app/globals.css so the two sit on a single
-   * brand palette. */
+   * brand palette. ``fixed`` anchors the wash so it doesn't scroll-
+   * detach on long hub pages (ELS-317). */
+  background-color: #0b1020;
+  background-attachment: fixed;
   background-image: radial-gradient(
       ellipse 120% 80% at 50% -20%,
       rgba(179, 136, 255, 0.35),
@@ -66,7 +79,7 @@ body {
  * ------------------------------------------------------------------ */
 
 .glass-panel {
-  @apply rounded-3xl border border-white/10 bg-white/[0.04] backdrop-blur-xl;
+  @apply rounded-2xl border border-white/10 bg-white/[0.04] backdrop-blur-xl;
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
@@ -88,6 +101,52 @@ body {
 
 .btn-ghost {
   @apply inline-flex items-center justify-center gap-2 rounded-full border border-white/15 bg-transparent px-6 py-3 text-sm font-semibold text-white/70 transition hover:border-white/40 hover:bg-white/5 hover:text-white;
+}
+
+/* ------------------------------------------------------------------ *
+ * ELS-317 — gradient-forward surface tiers                           *
+ *                                                                    *
+ * Three tiers, every container is exactly one:                       *
+ *   Tier 0 — the page (body wash). No fill.                          *
+ *   Tier 1 — .surface-card: the default glass card everywhere.       *
+ *   Tier 2 — .surface-signature: hero / front-door only, MAX ONE per *
+ *            screen — glass + localized gold/lilac corner glow + a    *
+ *            1px top sheen. This is where the "rich" look lives.      *
+ * .quick-action is the Tier-1 prompt-starter tile (gold accent on    *
+ * hover, never a gradient fill — gradient is reserved for the one    *
+ * CTA pill per screen).                                              *
+ * ------------------------------------------------------------------ */
+
+.surface-card {
+  @apply rounded-2xl border border-white/10 bg-white/[0.04] backdrop-blur-xl;
+  box-shadow: var(--elev-2);
+}
+
+.surface-signature {
+  @apply relative overflow-hidden rounded-2xl border border-white/10 backdrop-blur-xl;
+  background:
+    radial-gradient(120% 140% at 0% 0%, rgba(207, 169, 107, 0.12), transparent 50%),
+    radial-gradient(120% 140% at 100% 0%, rgba(179, 136, 255, 0.1), transparent 55%),
+    rgba(255, 255, 255, 0.03);
+  box-shadow: var(--elev-2), var(--glow-gold);
+}
+
+.surface-signature::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.25), transparent);
+}
+
+.quick-action {
+  @apply rounded-2xl border border-white/10 bg-white/[0.04] p-4 text-left backdrop-blur-xl transition;
+  box-shadow: var(--elev-2);
+}
+
+.quick-action:hover {
+  @apply border-aqua/40;
+  box-shadow: var(--elev-2), inset 0 0 24px -8px rgba(207, 169, 107, 0.35);
 }
 
 /* --- Navigator / single-window chat ---------------------------------- */

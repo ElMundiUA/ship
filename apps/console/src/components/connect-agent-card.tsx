@@ -135,10 +135,7 @@ export function ConnectAgentCard({
   const tokenCmd = tokenCommand(mcpEndpoint, secret);
 
   return (
-    <Card
-      data-testid="connect-agent-card"
-      className="rounded-2xl border-aqua/30 bg-aqua/[0.05] shadow-none"
-    >
+    <Card data-testid="connect-agent-card" className="surface-signature">
       <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0 p-5 pb-0">
         <div>
           <Badge
@@ -148,9 +145,10 @@ export function ConnectAgentCard({
             Connect your agent
           </Badge>
           <p className="mt-2 max-w-xl text-sm text-white/70">
-            Ship is operated from the agent you already live in — attach it
-            over MCP and run planning, tickets, approvals, and reviews from
-            there. The console stays for settings and destructive confirms.
+            Ship runs from the agent you already work in. Connect once, then
+            drive planning, tickets, reviews, and approvals by just talking to
+            your agent. The console is only for settings and confirming risky
+            actions.
           </p>
         </div>
         {dismissed === false && (
@@ -167,18 +165,22 @@ export function ConnectAgentCard({
         )}
       </CardHeader>
 
-      <CardContent className="space-y-3 p-5 pt-4">
+      <CardContent className="space-y-4 p-5 pt-4">
         <Row label="MCP endpoint">
-          <code className="break-all font-mono text-xs text-white/85">
+          <code className="break-all font-mono text-xs text-aqua/90">
             {mcpEndpoint}
           </code>
         </Row>
 
         <Separator className="bg-white/10" />
 
-        {/* Primary: OAuth — no token to paste. The agent opens a Ship
-            login and you approve a workspace in the browser. */}
-        <Row label="Claude Code">
+        {/* Step 1 — Connect over OAuth. No token to paste. */}
+        <div className="space-y-2">
+          <StepLabel n="1" title="Connect" />
+          <p className="text-xs text-white/60">
+            Run this, then approve a workspace in the browser when your agent
+            opens the Ship login:
+          </p>
           <div className="flex items-start gap-2">
             <code className="min-w-0 flex-1 break-all rounded-lg border border-white/10 bg-ink/60 p-2 font-mono text-[11px] text-white/85">
               {oauthCmd}
@@ -192,20 +194,46 @@ export function ConnectAgentCard({
               {copied === "oauth" ? "Copied ✓" : "Copy"}
             </Button>
           </div>
-          <p className="mt-1 text-[10px] text-white/50">
-            On first use your agent opens a Ship login and asks you to approve
-            a workspace — no token to paste. Revoke any time in Settings →
-            Agents &amp; access.
+          <p className="text-[10px] text-white/45">
+            Claude Desktop: Settings → Connectors → Add custom connector, URL{" "}
+            <code className="font-mono text-white/75">{mcpEndpoint}</code>.
+            Revoke any time in Settings → Agents &amp; access.
           </p>
-        </Row>
+        </div>
 
-        <Row label="Claude Desktop">
-          <p className="text-xs text-white/65">
-            Settings → Connectors → Add custom connector — URL{" "}
-            <code className="font-mono text-white/85">{mcpEndpoint}</code>. It
-            walks you through the same login + approve.
+        {/* Step 2 — ready-to-paste operator prompts. */}
+        <div className="space-y-2">
+          <StepLabel n="2" title="Try these" />
+          <p className="text-xs text-white/60">
+            Paste any of these into your agent to drive Ship:
           </p>
-        </Row>
+          <ul className="space-y-1.5">
+            {EXAMPLE_PROMPTS.map((ex) => (
+              <li
+                key={ex.label}
+                className="flex items-start gap-2 rounded-lg border border-white/10 bg-ink/40 p-2"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="text-[11px] font-semibold text-white/85">
+                    {ex.label}
+                  </div>
+                  <div className="mt-0.5 text-[11px] leading-relaxed text-white/55">
+                    {ex.prompt}
+                  </div>
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="xs"
+                  onClick={() => copy(ex.label, ex.prompt)}
+                  className="shrink-0 border-0 text-white/40 hover:text-aqua"
+                >
+                  {copied === ex.label ? "Copied ✓" : "Copy"}
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </div>
 
         {/* Fallback: a long-lived PAT for CI / headless agents that
             can't do an interactive browser login. */}
@@ -224,11 +252,11 @@ export function ConnectAgentCard({
             ) : (
               <Button
                 type="button"
+                variant="default"
                 onClick={mint}
                 disabled={minting}
                 data-testid="connect-agent-mint"
                 size="sm"
-                className="bg-aqua/80 text-ink hover:bg-aqua"
               >
                 {minting ? "Minting…" : "Mint agent token"}
               </Button>
@@ -257,6 +285,53 @@ export function ConnectAgentCard({
 
       {error && <p className="px-5 pb-5 text-xs text-coral/95">{error}</p>}
     </Card>
+  );
+}
+
+/** Ready-to-paste operator prompts (ELS-318). Each exercises a real
+ * Ship MCP flow once the agent is attached. */
+const EXAMPLE_PROMPTS: { label: string; prompt: string }[] = [
+  {
+    label: "Plan a feature",
+    prompt:
+      "Plan a new project: add CSV export to the billing page. Write a short brief, then break it into tickets.",
+  },
+  {
+    label: "See what's in flight",
+    prompt:
+      "What's in flight right now? Show me active runs and any tickets in progress.",
+  },
+  {
+    label: "Start a ticket",
+    prompt: "Start ELS-142 — move it into In Progress and kick off the work.",
+  },
+  {
+    label: "Review a PR",
+    prompt:
+      "Review PR #142 in elmundi/ship and tell me if it's safe to merge.",
+  },
+  {
+    label: "Clear approvals",
+    prompt:
+      "Show me everything waiting on my approval, then walk me through each one.",
+  },
+  {
+    label: "Set up a repo",
+    prompt:
+      "Set up Ship in my repo elmundi/ship — activate it and open the seed PR.",
+  },
+];
+
+function StepLabel({ n, title }: { n: string; title: string }) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="flex h-5 w-5 items-center justify-center rounded-full border border-aqua/40 text-[10px] font-bold text-aqua">
+        {n}
+      </span>
+      <span className="text-[11px] font-bold uppercase tracking-widest text-white/70">
+        {title}
+      </span>
+    </div>
   );
 }
 
