@@ -1461,6 +1461,37 @@ class ToolBox:
                 },
             ),
             ToolSpec(
+                name="ticket_comment",
+                description=(
+                    "Post a comment on a ticket in the workspace's bound "
+                    "tracker. **Mutating; admin-only** (attributed to the "
+                    "operator). Use it to answer an agent's "
+                    "``needs:clarification`` question (the answer flows "
+                    "into auto-resume — the frozen ticket re-dispatches "
+                    "without any manual label work), record a decision, "
+                    "or add context. The comment body is markdown and "
+                    "lands verbatim in the tracker's activity feed."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "ticket_ref": {
+                            "type": "string",
+                            "description": (
+                                "Tracker-native identifier "
+                                "(``ELS-99`` for Linear)."
+                            ),
+                        },
+                        "body": {
+                            "type": "string",
+                            "description": "Comment body (markdown).",
+                        },
+                    },
+                    "required": ["ticket_ref", "body"],
+                    "additionalProperties": False,
+                },
+            ),
+            ToolSpec(
                 name="run_subagent",
                 description=(
                     "Spawn a subagent. ``kind`` selects which:\n"
@@ -1822,6 +1853,7 @@ class ToolBox:
             "dashboard_get": self._tool_dashboard_get,
             "audit_search": self._tool_audit_search,
             "ticket_update": self._tool_ticket_update,
+            "ticket_comment": self._tool_ticket_comment,
             "project_priority_set": self._tool_project_priority_set,
             "run_subagent": self._tool_run_subagent,
             "run_workflow": self._tool_run_workflow,
@@ -5315,6 +5347,44 @@ class ToolBox:
         return _json_result(
             {"ticket_ref": ticket_ref, "actions": actions}
         )
+
+    async def _tool_ticket_comment(self, args: dict[str, Any]) -> str:
+        from backend.app.api.v1.routes.workspaces import ROLES_ADMIN
+
+        await self._require_workspace_role(ROLES_ADMIN)
+
+        ticket_ref = _require_str(args, "ticket_ref").strip()
+        body = _require_str(args, "body").strip()
+        if not body:
+            raise ToolInvocationError("body must be a non-empty string")
+
+        tracker = await self._resolve_tracker(None, None)
+        comment_fn = getattr(tracker, "comment", None)
+        if comment_fn is None:
+            raise ToolInvocationError(
+                "this tracker does not implement comments"
+            )
+        ref = ticket_ref_from(_tracker_kind_of(tracker), ticket_ref)
+        try:
+            await comment_fn(ref, body=body)
+        except Exception as exc:  # noqa: BLE001 — surface vendor errors
+            raise ToolInvocationError(
+                f"tracker rejected comment: {exc}"
+            ) from exc
+
+        self._session.add(
+            AuditLog(
+                workspace_id=self._workspace_id,
+                actor_user_id=self._user_id,
+                actor_token_id=None,
+                action="navigator.ticket_comment",
+                target_kind="ticket",
+                target_id=ticket_ref,
+                payload={"ticket_ref": ticket_ref, "body_len": len(body)},
+            )
+        )
+        await self._session.flush()
+        return _json_result({"ticket_ref": ticket_ref, "commented": True})
 
     async def _tool_project_priority_set(self, args: dict[str, Any]) -> str:
         from backend.app.api.v1.routes.workspaces import ROLES_ADMIN

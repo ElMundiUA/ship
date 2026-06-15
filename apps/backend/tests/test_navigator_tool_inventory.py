@@ -62,6 +62,7 @@ EXPECTED_TOOLS: frozenset[str] = frozenset(
         "project_update",
         "propose_mass_plan",
         "ticket_update",
+        "ticket_comment",
         "audit_search",
         "recall",
         "recall_context",

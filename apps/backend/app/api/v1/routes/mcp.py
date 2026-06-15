@@ -94,6 +94,7 @@ MCP_TOOL_ALLOWLIST: frozenset[str] = frozenset(
         "ticket_get",
         "ticket_list",
         "ticket_update",
+        "ticket_comment",
     }
 )
 
