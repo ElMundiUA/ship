@@ -21,10 +21,14 @@
     --accent-foreground: 222 47% 6%;
     --destructive: 0 84% 60%;
     --destructive-foreground: 0 0% 98%;
-    --border: 0 0% 100%;
-    --input: 0 0% 100%;
+    /* Direction C (ELS-316): hairline borders instead of full-white —
+     * flat layered surfaces read as steps, not outlined boxes. */
+    --border: 220 18% 17%;
+    --input: 220 16% 22%;
     --ring: 38 47% 61%;
-    --radius: 1rem;
+    /* One radius scale (10px) — kills the 5-radius drift at the token
+     * level. Surfaces that want a softer corner use the signature panel. */
+    --radius: 0.625rem;
     color-scheme: dark;
   }
 }
@@ -35,18 +39,15 @@ html {
 
 body {
   @apply bg-ink text-mist antialiased;
-  /* Match the landing site exactly — the console used to render with
-   * dimmer alphas (0.18 / 0.12 / 0.10) which left the operator-side
-   * feeling colder than the marketing surface. Same numbers as
-   * apps/landing/src/app/globals.css so the two sit on a single
-   * brand palette. */
+  /* Direction C (ELS-316): the console body is FLAT — no marketing
+   * radial wash. Brand tint is reserved for a single hero surface via
+   * ``.hero-tint`` so accents read as deliberate, not ambient. A faint
+   * top vignette keeps the dark from feeling like a void. */
   background-image: radial-gradient(
-      ellipse 120% 80% at 50% -20%,
-      rgba(179, 136, 255, 0.35),
-      transparent 55%
-    ),
-    radial-gradient(ellipse 80% 50% at 100% 0%, rgba(207, 169, 107, 0.2), transparent 45%),
-    radial-gradient(ellipse 60% 40% at 0% 20%, rgba(255, 92, 108, 0.18), transparent 40%);
+    ellipse 100% 60% at 50% -25%,
+    rgba(179, 136, 255, 0.06),
+    transparent 60%
+  );
 }
 
 ::selection {
@@ -88,6 +89,39 @@ body {
 
 .btn-ghost {
   @apply inline-flex items-center justify-center gap-2 rounded-full border border-white/15 bg-transparent px-6 py-3 text-sm font-semibold text-white/70 transition hover:border-white/40 hover:bg-white/5 hover:text-white;
+}
+
+/* ------------------------------------------------------------------ *
+ * Direction C (ELS-316) — Brand-forward Ship                         *
+ *                                                                    *
+ * ``.signature-panel`` is the ONE distinctive surface treatment      *
+ * (reserved for the hero card on each page): a refined, FLAT panel —  *
+ * hairline border, a soft inner top highlight and a faint aqua brand  *
+ * tint, NOT translucent glass/backdrop-blur. Every other surface uses *
+ * the plain shadcn ``card``. ``.hero-tint`` is a faint brand wash for *
+ * a hero wrapper when a page wants the accent to breathe behind the   *
+ * signature card. Keeping accents on these two means the rest reads   *
+ * clean instead of uniformly tinted.                                 *
+ * ------------------------------------------------------------------ */
+
+.signature-panel {
+  @apply relative rounded-xl border border-aqua/25 bg-card;
+  background-image: radial-gradient(
+    120% 140% at 0% 0%,
+    rgba(207, 169, 107, 0.08),
+    transparent 55%
+  );
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 10px 30px -16px rgba(0, 0, 0, 0.55);
+}
+
+.hero-tint {
+  background-image: radial-gradient(
+    90% 70% at 50% 0%,
+    rgba(207, 169, 107, 0.07),
+    transparent 60%
+  );
 }
 
 /* --- Navigator / single-window chat ---------------------------------- */
