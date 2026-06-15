@@ -140,9 +140,13 @@ def test_blocked_handler_adds_signal_label_in_source() -> None:
     body = src.read_text(encoding="utf-8")
     # The handler calls add_signal with key="blocked"
     assert 'await add_signal(ref, key="blocked")' in body
-    # Plus the fallback to needs_clarification for legacy workspaces
-    # whose Linear team was provisioned before SIGNAL_LABELS gained
-    # the "blocked" entry — both are in OVERLAY_FREEZE_LABEL_PREFIXES.
-    assert 'await add_signal(ref, key="needs_clarification")' in body
+    # ELS-321: a blocked outcome must NEVER masquerade as
+    # needs:clarification (a hard block is not an operator-question —
+    # it can't be answered, so the old fallback created a phantom
+    # clarification that froze the ticket until manual label removal).
+    # The fallback is removed; ``add_signal_label`` self-heals a missing
+    # ``blocked`` label instead. Pin that the fallback action string is
+    # gone so it can't silently come back.
+    assert "tracker:label:needs_clarification:fallback" not in body
     # And the dedicated inbox letter
     assert '"intake_reason": "agent_blocked"' in body  # flipped onto notify() (ELS-224)

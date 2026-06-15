@@ -169,6 +169,19 @@ You ARE a code-changing role, so your sidecar MUST set `pr` when
 The runner appends a `Closes {{ISSUE}}` footer and the run-handle
 line to your `pr.body` automatically — don't write them yourself.
 
+**Before you set `pr`: actually write the files to disk.** The runner
+verifies the branch has commits vs `main` and rewrites your outcome to
+`blocked` ("branch has no commits") if it doesn't — so a `pr` with an
+empty branch is a hard fail, not a partial credit. This is the #1
+greenfield trap: do NOT describe a scaffold in your `comment` that you
+did not create. For a fresh/empty repo you MUST create every file
+(package layout, manifests, linter/formatter config, the CI workflow,
+README) in the working tree — the runner stages and commits whatever
+you wrote. Before finishing, confirm the files exist on disk (you
+created them this run). If there is genuinely nothing to write, your
+outcome is `blocked` with the reason — never `ready_next_step` with a
+`pr` that has no commits.
+
 End your `comment` with `[Ship SDLC:role-devops]`.
 
 ## Outcomes — pick exactly one
