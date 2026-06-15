@@ -323,6 +323,24 @@ async def test_start_decomposition_transitions_anchor_to_decomposition(
     )
     _patch_tracker(toolbox, monkeypatch, stub)
 
+    # ELS-320: start fires maybe_dispatch inline so decomposition runs
+    # without a manual kick. Capture the call instead of dispatching.
+    from types import SimpleNamespace
+
+    dispatch_calls: list[dict] = []
+
+    async def _fake_dispatch(
+        session, *, workspace_id, ticket_ref, trigger_kind, fsm_stage=None, **kw
+    ):
+        dispatch_calls.append(
+            {"ticket_ref": ticket_ref, "fsm_stage": fsm_stage, "trigger_kind": trigger_kind}
+        )
+        return SimpleNamespace(fired=True)
+
+    monkeypatch.setattr(
+        "backend.app.services.dispatcher.maybe_dispatch", _fake_dispatch
+    )
+
     raw = await toolbox._tool_decomposition_start(
         {"project_native_id": "proj-drafted"}
     )
@@ -330,12 +348,18 @@ async def test_start_decomposition_transitions_anchor_to_decomposition(
     assert payload["anchor_issue_id"] == "anchor-uuid"
     assert payload["anchor_identifier"] == "ELS-101"
     assert payload["process"] == "decomposition"
+    assert payload["dispatched"] is True
 
     # Anchor probed; transition fired with stage:decomposition (E16/ELS-123 single-stage entry; ELS-308).
     assert stub.anchor_calls == ["proj-drafted"]
     assert len(stub.transition_calls) == 1
     assert stub.transition_calls[0]["to_state"] == "decomposition"
     assert stub.transition_calls[0]["ref_id"] == "anchor-uuid"
+
+    # ELS-320: decomposition routine auto-dispatched inline, no kick.
+    assert len(dispatch_calls) == 1
+    assert dispatch_calls[0]["fsm_stage"] == "decomposition"
+    assert dispatch_calls[0]["ticket_ref"] == "ELS-101"
 
     audit = (
         await db_session.execute(
