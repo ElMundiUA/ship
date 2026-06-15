@@ -648,10 +648,15 @@ class LinearTracker:
             raise ValueError(f"LinearTracker can't tag kind={ticket.kind}")
         label_id = self._signal_label_ids.get(key)
         if not label_id:
-            raise ValueError(
-                f"Signal label {key!r} is not provisioned for this team. "
-                "Re-run OAuth or call the provisioner."
-            )
+            # Self-heal (ELS-321): a team provisioned before this signal
+            # label existed (e.g. `blocked` on teams seeded pre-ELS-278)
+            # would otherwise raise — and the caller (agent_run.finish for
+            # outcome=blocked) then mislabels a hard-blocked ticket as
+            # `needs:clarification`, a phantom operator-question that can
+            # never be answered → permanent freeze + manual label removal.
+            # Provision the label on the fly (list-or-create) and cache it
+            # so `blocked` stays `blocked`.
+            label_id = await self._ensure_signal_label(key)
         await self._gql(
             """mutation ShipAddSignal($id: String!, $input: IssueUpdateInput!) {
               issueUpdate(id: $id, input: $input) { success }
@@ -661,6 +666,55 @@ class LinearTracker:
                 "input": {"addedLabelIds": [label_id]},
             },
         )
+
+    async def _ensure_signal_label(self, key: str) -> str:
+        """Resolve (and provision if missing) the Linear label id for a
+        signal ``key`` on this team, caching it on ``self``. (ELS-321)
+
+        Looks the label up by its canonical name first (idempotent —
+        re-provisioning a team that already has it is a no-op), creating
+        it only when absent. Raises ``ValueError`` only when the key is
+        unknown or the team id is missing — never silently borrows a
+        different signal label.
+        """
+        from backend.app.services.linear_provisioner import SIGNAL_LABELS
+
+        name = SIGNAL_LABELS.get(key)
+        if not name or not self._team_id:
+            raise ValueError(
+                f"Signal label {key!r} cannot be provisioned "
+                f"(unknown key or missing team id)."
+            )
+        found = await self._gql(
+            """query($f: IssueLabelFilter) {
+              issueLabels(filter: $f, first: 1) { nodes { id name } }
+            }""",
+            {"f": {"team": {"id": {"eq": self._team_id}}, "name": {"eq": name}}},
+        )
+        nodes = ((found.get("issueLabels") or {}).get("nodes")) or []
+        if nodes and nodes[0].get("id"):
+            label_id = nodes[0]["id"]
+        else:
+            created = await self._gql(
+                """mutation($input: IssueLabelCreateInput!) {
+                  issueLabelCreate(input: $input) {
+                    success
+                    issueLabel { id }
+                  }
+                }""",
+                {"input": {"name": name, "teamId": self._team_id}},
+            )
+            label_id = (
+                ((created.get("issueLabelCreate") or {}).get("issueLabel") or {})
+                .get("id")
+            )
+            if not label_id:
+                raise ValueError(
+                    f"failed to provision signal label {name!r} on team "
+                    f"{self._team_id}"
+                )
+        self._signal_label_ids[key] = label_id
+        return label_id
 
     async def transition(
         self,

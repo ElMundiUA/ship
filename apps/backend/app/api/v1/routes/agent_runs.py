@@ -4742,24 +4742,16 @@ async def finish_agent_run(
             ref = _ticket_ref_from(resolved.kind, payload.ticket_ref)
             add_signal = getattr(resolved.gateway, "add_signal_label", None)
             if add_signal is not None:
+                # ELS-321: ``add_signal_label`` now self-heals a missing
+                # ``blocked`` label (list-or-create on the team), so the
+                # old "fall back to needs:clarification" path is gone — a
+                # hard block must NEVER masquerade as an operator-question
+                # clarification (it can't be answered → phantom freeze →
+                # manual label removal). On the rare residual failure we
+                # log and leave the ticket unfrozen rather than mislabel.
                 try:
                     await add_signal(ref, key="blocked")
                     actions.append("tracker:label:blocked")
-                except ValueError:
-                    # Legacy workspace whose Linear team was provisioned
-                    # before SIGNAL_LABELS gained ``blocked``. Fall back
-                    # to ``needs:clarification`` so the freeze still
-                    # takes effect (same OVERLAY_FREEZE_LABEL_PREFIXES
-                    # bucket). Operator re-runs the provisioner to
-                    # restore the canonical label.
-                    try:
-                        await add_signal(ref, key="needs_clarification")
-                        actions.append("tracker:label:needs_clarification:fallback")
-                    except Exception as exc:  # noqa: BLE001
-                        logger.warning(
-                            "blocked label fallback failed ws=%s ticket=%s: %s",
-                            workspace_id, payload.ticket_ref, exc,
-                        )
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(
                         "blocked label add failed ws=%s ticket=%s: %s",
