@@ -20,7 +20,6 @@
 
 import { useEffect, useState } from "react";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
@@ -137,16 +136,16 @@ export function ConnectAgentCard({
   return (
     <Card
       data-testid="connect-agent-card"
-      className="rounded-2xl border-aqua/30 bg-aqua/[0.05] shadow-none"
+      className="relative overflow-hidden rounded-xl border-aqua/25 bg-card shadow-[0_10px_30px_-16px_rgba(0,0,0,0.55)] ring-1 ring-inset ring-white/[0.05] [background-image:radial-gradient(120%_140%_at_0%_-10%,rgba(207,169,107,0.10),transparent_55%)]"
     >
       <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0 p-5 pb-0">
         <div>
-          <Badge
-            variant="outline"
-            className="border-aqua/40 bg-transparent text-[11px] font-bold uppercase tracking-widest text-aqua/90"
-          >
+          <p className="font-mono text-[10px] font-bold uppercase tracking-[0.3em] text-aqua/80">
+            MCP edge
+          </p>
+          <h2 className="mt-1.5 font-display text-xl font-bold tracking-tight text-white">
             Connect your agent
-          </Badge>
+          </h2>
           <p className="mt-2 max-w-xl text-sm text-white/70">
             Ship is operated from the agent you already live in — attach it
             over MCP and run planning, tickets, approvals, and reviews from
