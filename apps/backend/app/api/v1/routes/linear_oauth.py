@@ -61,6 +61,56 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["linear-oauth"])
 
 
+async def _assert_team_unclaimed(
+    session: AsyncSession, *, workspace_id: uuid.UUID, team_id: str | None
+) -> None:
+    """ELS-328: a Linear team binds to at most one workspace.
+
+    The tracker is the dispatch-signal source. If two workspaces poll the
+    same Linear team they both dispatch the same ticket (shared ``ELS-###``
+    ref) and the repo resolves per-workspace → cross-tenant action (the
+    ship-landing / ``no_pr_url`` incident, 2026-06). Block a *second*
+    workspace from claiming a team that another workspace already has bound
+    AND actively polls (a ``ready`` native linear install). Re-binding the
+    same team inside the same workspace stays allowed (idempotent
+    reconnect / repick).
+    """
+    if not team_id:
+        return
+    clash = (
+        await session.execute(
+            select(Integration.workspace_id)
+            .join(
+                NativeIntegrationInstallation,
+                NativeIntegrationInstallation.workspace_id
+                == Integration.workspace_id,
+            )
+            .where(
+                Integration.kind == "linear",
+                Integration.config["team_id"].astext == team_id,
+                Integration.workspace_id != workspace_id,
+                NativeIntegrationInstallation.provider
+                == NativeIntegrationProvider.LINEAR,
+                NativeIntegrationInstallation.status == "ready",
+            )
+            .limit(1)
+        )
+    ).first()
+    if clash is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "linear_team_already_bound",
+                "message": (
+                    "This Linear team is already connected to another Ship "
+                    "workspace. A tracker team binds to one workspace only — "
+                    "disconnect it there first, or pick a different team."
+                ),
+                "team_id": team_id,
+            },
+        )
+
+
 class InstallStartResponse(BaseModel):
     install_url: str
     state: str
@@ -345,6 +395,9 @@ async def linear_install_callback(
             )
         elif len(teams) == 1:
             picked = teams[0]
+            await _assert_team_unclaimed(
+                session, workspace_id=workspace_id, team_id=picked["id"]
+            )
             result = await linear_provisioner.provision_team(
                 tracker=live, team_key=picked["key"], settings=settings
             )
@@ -997,6 +1050,9 @@ async def linear_team_repick(
             },
         )
 
+    await _assert_team_unclaimed(
+        session, workspace_id=workspace_id, team_id=target["id"]
+    )
     try:
         result = await linear_provisioner.provision_team(
             tracker=live, team_key=target["key"], settings=settings
