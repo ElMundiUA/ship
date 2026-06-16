@@ -1217,6 +1217,39 @@ async def _ticket_pr_already_merged(
     return row is not None
 
 
+async def _ticket_open_pr_url(
+    session: AsyncSession, *, workspace_id: uuid.UUID, ticket_ref: str
+) -> str | None:
+    """Resolve an OPEN PR for the ticket from the PR cache (ELS-327).
+
+    The code_review gate reads the PR URL from the agent's finish
+    ``comment``. When a finish omits the ``PR: <url>`` line — but the
+    work DID open a PR — the gate used to false-block on ``no_pr_url``
+    even though an open, CI-green PR exists (the recurring ELS-309 stall;
+    cluster of 265 / 194 / 295 / 309 since 2026-06-12). We look up the
+    newest open, non-merged PR whose conventional title carries this
+    ticket (``feat(ELS-309): …``) and return its ``html_url`` so the gate
+    can validate reviews + CI against it instead of freezing the chain.
+    """
+    from sqlalchemy import select as _select
+
+    from backend.app.db.models.pipelines import PullRequest
+
+    return (
+        await session.execute(
+            _select(PullRequest.html_url)
+            .where(
+                PullRequest.workspace_id == workspace_id,
+                PullRequest.merged.is_(False),
+                PullRequest.state.ilike("open"),
+                PullRequest.title.ilike(f"%({ticket_ref})%"),
+            )
+            .order_by(PullRequest.number.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
 async def _validate_code_review_to_auto_merge(
     session: AsyncSession,
     *,
@@ -1263,17 +1296,27 @@ async def _validate_code_review_to_auto_merge(
     failed merge), so a brittle gate is safer than a permissive one.
     """
     if not pr_url:
-        # ELS-325: no PR URL on the finish usually means the agent
-        # never opened one — but it ALSO happens when the operator
-        # merged the PR by hand mid-chain, leaving no open PR to cite.
-        # Distinguish: if the ticket's PR is already merged, signal
-        # ``already_merged`` so the caller finishes the ticket (→ Done)
-        # instead of freezing it as ``no_pr_url``.
-        if ticket_ref and await _ticket_pr_already_merged(
-            session, workspace_id=workspace_id, ticket_ref=ticket_ref
-        ):
-            return False, "already_merged"
-        return False, "no_pr_url"
+        # The finish payload carried no ``PR: <url>`` line. Before
+        # freezing on ``no_pr_url``, try to recover the PR from the
+        # ticket itself:
+        #   - ELS-327: an OPEN PR (resolve it and validate that PR — the
+        #     recurring code_review stall where the gate read the PR from
+        #     the finish payload, not the ticket, and false-blocked
+        #     CI-green work like ELS-309 / PR #402);
+        #   - ELS-325: else a MERGED PR (operator merged out-of-band) →
+        #     ``already_merged`` so the caller finishes the ticket (→ Done).
+        if ticket_ref:
+            resolved_open = await _ticket_open_pr_url(
+                session, workspace_id=workspace_id, ticket_ref=ticket_ref
+            )
+            if resolved_open:
+                pr_url = resolved_open
+            elif await _ticket_pr_already_merged(
+                session, workspace_id=workspace_id, ticket_ref=ticket_ref
+            ):
+                return False, "already_merged"
+        if not pr_url:
+            return False, "no_pr_url"
     pr_path_re = re.compile(
         r"^https://github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)$",
         re.IGNORECASE,

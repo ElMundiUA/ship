@@ -178,9 +178,13 @@ def test_no_pr_url_with_already_merged_pr_signals_advance() -> None:
     import asyncio
 
     session = AsyncMock()
-    # _ticket_pr_already_merged → session.execute(...).first() truthy.
+    # ELS-327: _ticket_open_pr_url runs first → scalar_one_or_none None
+    # (no OPEN PR). Then _ticket_pr_already_merged → first() truthy.
     session.execute = AsyncMock(
-        return_value=MagicMock(first=MagicMock(return_value=("pr-id",)))
+        return_value=MagicMock(
+            scalar_one_or_none=MagicMock(return_value=None),
+            first=MagicMock(return_value=("pr-id",)),
+        )
     )
     ok, reason = asyncio.new_event_loop().run_until_complete(
         _validate_code_review_to_auto_merge(
@@ -199,8 +203,12 @@ def test_no_pr_url_without_merged_pr_still_blocks() -> None:
     import asyncio
 
     session = AsyncMock()
+    # No OPEN PR (scalar_one_or_none None) and no MERGED PR (first None).
     session.execute = AsyncMock(
-        return_value=MagicMock(first=MagicMock(return_value=None))
+        return_value=MagicMock(
+            scalar_one_or_none=MagicMock(return_value=None),
+            first=MagicMock(return_value=None),
+        )
     )
     ok, reason = asyncio.new_event_loop().run_until_complete(
         _validate_code_review_to_auto_merge(
@@ -212,6 +220,34 @@ def test_no_pr_url_without_merged_pr_still_blocks() -> None:
         )
     )
     assert (ok, reason) == (False, "no_pr_url")
+
+
+def test_no_pr_url_resolves_open_pr_from_ticket() -> None:
+    # ELS-327: the finish carried no ``PR:`` line, but the ticket has an
+    # OPEN PR in the cache. The gate must resolve it and validate THAT
+    # PR rather than false-blocking on ``no_pr_url`` (the recurring
+    # ELS-309 code_review stall — PR #402 open + CI green). Here the open
+    # PR resolves to a valid URL and we let the install lookup miss,
+    # proving the gate got PAST PR resolution + URL parsing into the
+    # GitHub-backed checks instead of returning no_pr_url / already_merged.
+    import asyncio
+
+    open_pr = MagicMock(scalar_one_or_none=MagicMock(return_value=_PR_URL))
+    no_install = MagicMock(scalar_one_or_none=MagicMock(return_value=None))
+    session = AsyncMock()
+    session.execute = AsyncMock(side_effect=[open_pr, no_install])
+
+    ok, reason = asyncio.new_event_loop().run_until_complete(
+        _validate_code_review_to_auto_merge(
+            session,
+            workspace_id=uuid.uuid4(),
+            pr_url=None,
+            settings=_build_settings(),
+            ticket_ref="ELS-309",
+        )
+    )
+    assert ok is False
+    assert reason == "no_install"
 
 
 def test_invalid_pr_url_is_rejected() -> None:
