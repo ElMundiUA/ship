@@ -1334,6 +1334,7 @@ async def _validate_code_review_to_auto_merge(
 
     from backend.app.db.models.integrations import (
         GitHubInstallation as _GHInstall,
+        WorkspaceRepo as _WorkspaceRepo,
     )
     from backend.app.integrations.github.app_auth import (
         fetch_installation_token as _fetch_install_token,
@@ -1347,6 +1348,29 @@ async def _validate_code_review_to_auto_merge(
             ).limit(1)
         )
     ).scalar_one_or_none()
+    if install_row is None:
+        # ELS-330: the install may be SIBLING-ATTACHED — this workspace
+        # activated the repo under ANOTHER workspace's install (migration
+        # 0076 multi-workspace-per-install), so no install row is owned
+        # here. Mirror repos.py::_resolve_installation: resolve through
+        # the workspace's activated repos' installation_id FK before
+        # declaring no_install. Without this the gate false-blocks every
+        # code_review→auto_merge in a workspace whose GitHub install lives
+        # in a sibling (e.g. Ship-on-Ship → elmundi's ElMundiUA install).
+        install_row = (
+            await session.execute(
+                _select(_GHInstall)
+                .join(
+                    _WorkspaceRepo,
+                    _WorkspaceRepo.installation_id == _GHInstall.id,
+                )
+                .where(
+                    _WorkspaceRepo.workspace_id == workspace_id,
+                    _GHInstall.suspended_at.is_(None),
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
     if install_row is None:
         return False, "no_install"
 
