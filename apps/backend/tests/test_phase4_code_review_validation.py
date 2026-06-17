@@ -94,6 +94,7 @@ def _run_with_mocked_gh(
     check_runs,
     pr_url: str | None = _PR_URL,
     require_approval: bool = True,
+    sibling_install: bool = False,
 ):
     """Drive the validator with mocked install row + httpx transport."""
     transport = httpx.MockTransport(_gh_handler(
@@ -106,9 +107,17 @@ def _run_with_mocked_gh(
             super().__init__(*args, transport=transport, **kwargs)
 
     session = AsyncMock()
-    scalar_one_or_none = MagicMock(return_value=_mock_install_row())
-    exec_result = MagicMock(scalar_one_or_none=scalar_one_or_none)
-    session.execute = AsyncMock(return_value=exec_result)
+    install_result = MagicMock(
+        scalar_one_or_none=MagicMock(return_value=_mock_install_row())
+    )
+    if sibling_install:
+        # ELS-330: the direct install lookup misses (no install owned by
+        # this workspace) → the gate falls back to the sibling-attached
+        # install on the second query.
+        miss = MagicMock(scalar_one_or_none=MagicMock(return_value=None))
+        session.execute = AsyncMock(side_effect=[miss, install_result])
+    else:
+        session.execute = AsyncMock(return_value=install_result)
 
     with patch(
         "backend.app.integrations.github.app_auth.fetch_installation_token",
@@ -235,7 +244,9 @@ def test_no_pr_url_resolves_open_pr_from_ticket() -> None:
     open_pr = MagicMock(scalar_one_or_none=MagicMock(return_value=_PR_URL))
     no_install = MagicMock(scalar_one_or_none=MagicMock(return_value=None))
     session = AsyncMock()
-    session.execute = AsyncMock(side_effect=[open_pr, no_install])
+    # 3 queries: resolve open PR (hit) → direct install (miss) → ELS-330
+    # sibling install (miss) → no_install.
+    session.execute = AsyncMock(side_effect=[open_pr, no_install, no_install])
 
     ok, reason = asyncio.new_event_loop().run_until_complete(
         _validate_code_review_to_auto_merge(
@@ -423,3 +434,18 @@ def test_ci_incomplete_blocks_even_on_high() -> None:
         require_approval=False,
     )
     assert ok is False and reason == "ci_incomplete"
+
+
+def test_sibling_attached_install_resolves_not_no_install() -> None:
+    # ELS-330: the workspace owns no GitHubInstallation row — its install
+    # is sibling-attached (repo activated under another workspace's install,
+    # migration 0076). The direct lookup misses; the gate must fall back to
+    # the sibling install and proceed to the review + CI checks, NOT freeze
+    # on no_install. With an APPROVED review + green CI it passes.
+    ok, reason = _run_with_mocked_gh(
+        reviews=[{"state": "APPROVED"}],
+        pr_detail={"head": {"sha": _HEAD_SHA}},
+        check_runs=[{"name": "test", "status": "completed", "conclusion": "success"}],
+        sibling_install=True,
+    )
+    assert (ok, reason) == (True, "ok")
