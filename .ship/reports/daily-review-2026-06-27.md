@@ -20,10 +20,11 @@ _Sources checked: Ship audit log, Ship inbox, and GitHub open PR/check reads for
 
 ### PRs
 
-No red CI found in the open PR queue. Seven open daily-review PRs are awaiting human review; each has 7/7 checks green.
+No red CI found in the open PR queue. Eight open daily-review PRs are awaiting human review; seven have 7/7 checks green, and PR #424 has 6/7 checks green with `pytest (apps/backend)` still in progress in the GitHub check rollup.
 
 | PR | Ticket | Age | Review | CI |
 |----|--------|-----|--------|-----|
+| [#424](https://github.com/ElMundiUA/ship/pull/424) | ELS-338 | ~0d | awaiting review | **running** (6/7 checks green; `pytest (apps/backend)` in progress) |
 | [#423](https://github.com/ElMundiUA/ship/pull/423) | ELS-337 | ~1d | awaiting review | **green** (7/7 checks) |
 | [#422](https://github.com/ElMundiUA/ship/pull/422) | ELS-336 | ~2d | awaiting review | **green** (7/7 checks) |
 | [#421](https://github.com/ElMundiUA/ship/pull/421) | ELS-335 | ~3d | awaiting review | **green** (7/7 checks) |
@@ -35,5 +36,5 @@ No red CI found in the open PR queue. Seven open daily-review PRs are awaiting h
 ### Next actions
 
 1. Review and approve **PR #423** (ELS-337) to clear the active `code_review` `no_approval` blocker.
-2. Work down the older green daily-review PR queue (**#417–#422**) or explicitly close any superseded reports so the review backlog stops carrying forward.
+2. Wait for **PR #424** (ELS-338) `pytest (apps/backend)` to finish, then include it in the same daily-review queue triage.
 3. Inspect the **Weekly audit — 2026-W26** inbox report and the `workspace_weekly` finish mismatch to confirm whether the expected workflow run result was lost or only mis-correlated.
