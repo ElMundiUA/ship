@@ -1,8 +1,8 @@
 ## Daily review — 2026-06-27
 
-_Snapshot generated 2026-06-27 06:48 UTC. Window: last 24h ending at generation time._
+_Snapshot generated 2026-06-27 06:50 UTC. Window: last 24h ending at generation time._
 
-_Sources checked: Ship audit log, Ship inbox, and GitHub open PR/check reads for `ElMundiUA/ship`. Ship dashboard reads returned `Not Found`, so dashboard-only health fields are not included._
+_Sources checked: Ship audit log, Ship inbox, and GitHub open PR/check reads for `ElMundiUA/ship`. Ship dashboard reads returned `Not Found`, so dashboard-only health fields are not included. GitHub check rollups are point-in-time reads and may change after the snapshot._
 
 ### Ticket movement (24h)
 
@@ -20,7 +20,7 @@ _Sources checked: Ship audit log, Ship inbox, and GitHub open PR/check reads for
 
 ### PRs
 
-No red CI found in the open PR queue. Eight open daily-review PRs are awaiting human review; seven have 7/7 checks green, and PR #424 has 6/7 checks green with `pytest (apps/backend)` still in progress in the GitHub check rollup.
+No red CI found in the open PR queue. Eight open daily-review PRs are awaiting human review. The 06:50 UTC GitHub read showed seven PRs with 7/7 checks green and PR #424 with 6/7 checks green; `pytest (apps/backend)` was still in progress, while `playwright (landing smoke)` had completed green at 06:48:24 UTC.
 
 | PR | Ticket | Age | Review | CI |
 |----|--------|-----|--------|-----|
