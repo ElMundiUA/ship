@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.api.v1.deps import AuthContext, get_current_auth
 from backend.app.api.v1.routes.workspaces import ROLES_READ, _require_membership
+from backend.app.core.config import Settings, get_settings
 from backend.app.db.session import get_session
 from backend.app.services.daily_review import (
     DailyReview,
@@ -67,12 +68,15 @@ async def get_daily_review(
     window_hours: int = Query(default=24, ge=1, le=168),
     auth: AuthContext = Depends(get_current_auth),
     session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
 ) -> DailyReviewOut:
     """Return a short, read-only daily review from Ship-owned state."""
     await _require_membership(session, workspace_id, auth.user.id, ROLES_READ)
     review = await build_daily_review(
         session,
         workspace_id=workspace_id,
+        settings=settings,
+        user_id=auth.user.id,
         window_hours=window_hours,
     )
     return _review_to_out(review)

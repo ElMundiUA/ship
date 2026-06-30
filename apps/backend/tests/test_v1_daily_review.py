@@ -95,6 +95,99 @@ async def test_daily_review_marks_pr_cache_failure_unverified(
 
 
 @pytest.mark.asyncio
+async def test_daily_review_marks_tracker_wip_failure_unverified(
+    v1_client, seed_workspace, monkeypatch
+) -> None:
+    from backend.app.services import daily_review as daily_review_service
+
+    async def fail_collect_tracker_wip(*args, **kwargs):
+        raise RuntimeError("tracker WIP unavailable")
+
+    _, raw, ws = seed_workspace
+    monkeypatch.setattr(
+        daily_review_service,
+        "_collect_tracker_wip_candidates",
+        fail_collect_tracker_wip,
+    )
+
+    res = await v1_client.get(
+        f"/v1/workspaces/{ws.id}/daily-review",
+        headers=_auth(raw),
+    )
+
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["unverified_sections"] == [
+        "Tracker WIP status could not be verified from Ship tracker WIP read data."
+    ]
+    assert "Stuck or blocked work could not be fully verified" in body["markdown"]
+
+
+@pytest.mark.asyncio
+async def test_daily_review_includes_tracker_wip_stuck_work(
+    v1_client, seed_workspace, monkeypatch
+) -> None:
+    from backend.app.services import daily_review as daily_review_service
+    from backend.app.services.dashboard_tracker_wip import TrackerWipCandidate
+
+    now = datetime.now(timezone.utc)
+
+    async def collect_tracker_wip(*args, **kwargs):
+        return [
+            TrackerWipCandidate(
+                name="ELS-300: blocked ticket",
+                status="in_progress",
+                repo_full_name="ship/test",
+                updated_at=now - timedelta(minutes=20),
+                href="https://linear.app/elship/issue/ELS-300/blocked-ticket",
+                ticket_ref="ELS-300",
+                tracker_kind="linear",
+                board_column="Blocked",
+            ),
+            TrackerWipCandidate(
+                name="ELS-301: stale ticket",
+                status="in_progress",
+                repo_full_name="ship/test",
+                updated_at=now - timedelta(days=2),
+                href="https://linear.app/elship/issue/ELS-301/stale-ticket",
+                ticket_ref="ELS-301",
+                tracker_kind="linear",
+                board_column="In Progress",
+            ),
+            TrackerWipCandidate(
+                name="ELS-302: recently moving ticket",
+                status="review",
+                repo_full_name="ship/test",
+                updated_at=now - timedelta(minutes=5),
+                href="https://linear.app/elship/issue/ELS-302/recent-ticket",
+                ticket_ref="ELS-302",
+                tracker_kind="linear",
+                board_column="In Review",
+            ),
+        ]
+
+    _, raw, ws = seed_workspace
+    monkeypatch.setattr(
+        daily_review_service,
+        "_collect_tracker_wip_candidates",
+        collect_tracker_wip,
+    )
+
+    res = await v1_client.get(
+        f"/v1/workspaces/{ws.id}/daily-review",
+        headers=_auth(raw),
+    )
+
+    assert res.status_code == 200, res.text
+    body = res.json()
+    stuck = {(item["ticket_ref"], item["reason"]) for item in body["stuck"]}
+    assert ("ELS-300", "blocked tracker status") in stuck
+    assert ("ELS-301", "no tracker movement in the review window") in stuck
+    assert all(item["ticket_ref"] != "ELS-302" for item in body["stuck"])
+    assert body["recommendations"][0] == "Unblock ELS-300: blocked tracker status."
+
+
+@pytest.mark.asyncio
 async def test_daily_review_summarizes_movement_and_stuck_work(
     v1_client, seed_workspace, db_session
 ) -> None:

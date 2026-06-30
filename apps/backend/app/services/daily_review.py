@@ -22,6 +22,7 @@ from backend.app.services.engine_health import assess_engine_health
 
 _TICKET_RE = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b")
 _RED_CI_CONCLUSIONS = {"action_required", "cancelled", "failure", "timed_out"}
+_TRACKER_WIP_LOOKBACK_DAYS = 14
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +72,8 @@ async def build_daily_review(
     session: AsyncSession,
     *,
     workspace_id: uuid.UUID,
+    settings: Any | None = None,
+    user_id: uuid.UUID | None = None,
     now: datetime | None = None,
     window_hours: int = 24,
 ) -> DailyReview:
@@ -123,6 +126,30 @@ async def build_daily_review(
         unverified_sections.append(
             "Stalled dispatch status could not be verified from Ship engine-health data."
         )
+
+    if settings is None or user_id is None:
+        unverified_sections.append(
+            "Tracker WIP status could not be verified from Ship tracker WIP read data."
+        )
+    else:
+        try:
+            tracker_candidates = await _collect_tracker_wip_candidates(
+                session,
+                settings,
+                workspace_id,
+                user_id,
+                cutoff_wip=generated_at - timedelta(days=_TRACKER_WIP_LOOKBACK_DAYS),
+            )
+            stuck.extend(
+                _stuck_from_tracker_wip(
+                    tracker_candidates,
+                    window_started_at=window_started_at,
+                )
+            )
+        except Exception:
+            unverified_sections.append(
+                "Tracker WIP status could not be verified from Ship tracker WIP read data."
+            )
 
     try:
         pull_requests = await _collect_pull_requests(session, workspace_id=workspace_id)
@@ -178,7 +205,7 @@ def format_daily_review_markdown(review: DailyReview) -> str:
             )
             detail = f" ({item.detail})" if item.detail else ""
             lines.append(f"- {ref}: {item.reason}{detail}; verified {when}.")
-    elif _has_unverified(review, "audit log", "engine-health"):
+    elif _has_unverified(review, "audit log", "engine-health", "Tracker WIP"):
         lines.append(
             "- Stuck or blocked work could not be fully verified; see Unverified."
         )
@@ -282,6 +309,50 @@ def _stuck_from_recent_finishes(rows: list[AuditLog]) -> list[DailyReviewStuckIt
     return stuck
 
 
+def _stuck_from_tracker_wip(
+    candidates: list[Any],
+    *,
+    window_started_at: datetime,
+) -> list[DailyReviewStuckItem]:
+    stuck: list[DailyReviewStuckItem] = []
+    seen: set[tuple[str | None, str]] = set()
+    for candidate in candidates:
+        column = (candidate.board_column or "").strip()
+        reason = _tracker_stuck_reason(column)
+        updated_at = _aware(candidate.updated_at)
+        if reason is None and updated_at >= window_started_at:
+            continue
+        if reason is None:
+            reason = "no tracker movement in the review window"
+        key = (candidate.ticket_ref, reason)
+        if key in seen:
+            continue
+        seen.add(key)
+        detail_parts = [candidate.tracker_kind]
+        if column:
+            detail_parts.append(f"column: {column}")
+        stuck.append(
+            DailyReviewStuckItem(
+                ticket_ref=candidate.ticket_ref,
+                reason=reason,
+                last_verified_at=updated_at,
+                detail="; ".join(detail_parts),
+            )
+        )
+    return stuck
+
+
+def _tracker_stuck_reason(board_column: str) -> str | None:
+    normalized = board_column.lower()
+    if not normalized:
+        return None
+    if "clarification" in normalized or "awaiting input" in normalized:
+        return "waiting on clarification"
+    if "blocked" in normalized or "hold" in normalized:
+        return "blocked tracker status"
+    return None
+
+
 async def _collect_pull_requests(
     session: AsyncSession, *, workspace_id: uuid.UUID
 ) -> list[DailyReviewPrItem]:
@@ -323,6 +394,25 @@ async def _collect_pull_requests(
             )
         )
     return items
+
+
+async def _collect_tracker_wip_candidates(
+    session: AsyncSession,
+    settings: Any,
+    workspace_id: uuid.UUID,
+    user_id: uuid.UUID,
+    *,
+    cutoff_wip: datetime,
+) -> list[Any]:
+    from backend.app.services.dashboard_tracker_wip import collect_tracker_wip_candidates
+
+    return await collect_tracker_wip_candidates(
+        session,
+        settings,
+        workspace_id,
+        user_id,
+        cutoff_wip=cutoff_wip,
+    )
 
 
 async def _latest_ci_for_pr(
