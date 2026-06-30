@@ -77,43 +77,63 @@ async def build_daily_review(
     """Build one workspace review from cached/read-only Ship data."""
     generated_at = _aware(now or datetime.now(timezone.utc))
     window_started_at = generated_at - timedelta(hours=window_hours)
+    unverified_sections: list[str] = []
 
-    audit_rows = (
-        await session.execute(
-            select(AuditLog)
-            .where(
-                AuditLog.workspace_id == workspace_id,
-                AuditLog.action.in_(("agent_run.dispatch", "agent_run.finish")),
-                AuditLog.created_at >= window_started_at,
+    try:
+        audit_rows = (
+            await session.execute(
+                select(AuditLog)
+                .where(
+                    AuditLog.workspace_id == workspace_id,
+                    AuditLog.action.in_(("agent_run.dispatch", "agent_run.finish")),
+                    AuditLog.created_at >= window_started_at,
+                )
+                .order_by(desc(AuditLog.created_at), desc(AuditLog.id))
+                .limit(200)
             )
-            .order_by(desc(AuditLog.created_at), desc(AuditLog.id))
-            .limit(200)
-        )
-    ).scalars().all()
+        ).scalars().all()
 
-    movement = _movement_from_audit(audit_rows)
-    stuck = _stuck_from_recent_finishes(audit_rows)
-
-    engine = await assess_engine_health(
-        session,
-        workspace_id=workspace_id,
-        now=generated_at,
-        dispatch_window_minutes=min(window_hours * 60, 24 * 60),
-    )
-    for stall in engine.stalled:
-        stuck.append(
-            DailyReviewStuckItem(
-                ticket_ref=_ticket_ref_from_lock(stall.lock_key),
-                reason=stall.reason,
-                last_verified_at=stall.claimed_at,
-                detail=f"{stall.lock_key} held for {stall.age_minutes:.1f} minutes",
-            )
+        movement = _movement_from_audit(audit_rows)
+        stuck = _stuck_from_recent_finishes(audit_rows)
+    except Exception:
+        movement = []
+        stuck = []
+        unverified_sections.append(
+            "Movement and recent blocked/clarification status could not be "
+            "verified from Ship audit log."
         )
 
-    pull_requests = await _collect_pull_requests(session, workspace_id=workspace_id)
+    try:
+        engine = await assess_engine_health(
+            session,
+            workspace_id=workspace_id,
+            now=generated_at,
+            dispatch_window_minutes=min(window_hours * 60, 24 * 60),
+        )
+        for stall in engine.stalled:
+            stuck.append(
+                DailyReviewStuckItem(
+                    ticket_ref=_ticket_ref_from_lock(stall.lock_key),
+                    reason=stall.reason,
+                    last_verified_at=stall.claimed_at,
+                    detail=f"{stall.lock_key} held for {stall.age_minutes:.1f} minutes",
+                )
+            )
+    except Exception:
+        unverified_sections.append(
+            "Stalled dispatch status could not be verified from Ship engine-health data."
+        )
+
+    try:
+        pull_requests = await _collect_pull_requests(session, workspace_id=workspace_id)
+    except Exception:
+        pull_requests = []
+        unverified_sections.append(
+            "PR and CI status could not be verified from Ship PR cache."
+        )
     duplicate_pr_ticket_refs = _duplicate_ticket_refs(pull_requests)
     recommendations = _recommendations(stuck, pull_requests, duplicate_pr_ticket_refs)
-    unverified_sections = _unverified_sections(pull_requests)
+    unverified_sections.extend(_unverified_sections(pull_requests))
 
     return DailyReview(
         generated_at=generated_at,
@@ -142,6 +162,8 @@ def format_daily_review_markdown(review: DailyReview) -> str:
                 f"- {item.ticket_ref}: {status} in {stage}; "
                 f"{item.movement_signal} at {item.verified_at.isoformat()}"
             )
+    elif _has_unverified(review, "audit log"):
+        lines.append("- Movement could not be verified from Ship audit log.")
     else:
         lines.append("- No verified movement in the last 24 hours.")
 
@@ -156,6 +178,10 @@ def format_daily_review_markdown(review: DailyReview) -> str:
             )
             detail = f" ({item.detail})" if item.detail else ""
             lines.append(f"- {ref}: {item.reason}{detail}; verified {when}.")
+    elif _has_unverified(review, "audit log", "engine-health"):
+        lines.append(
+            "- Stuck or blocked work could not be fully verified; see Unverified."
+        )
     else:
         lines.append("- None found from Ship control-plane data.")
 
@@ -176,6 +202,8 @@ def format_daily_review_markdown(review: DailyReview) -> str:
                 flags.append(f"CI {item.ci_conclusion or 'red'}")
             ref = f"{item.ticket_ref}: " if item.ticket_ref else ""
             lines.append(f"- {ref}{item.title} ({', '.join(flags)}) - {item.url}")
+    elif _has_unverified(review, "PR and CI status"):
+        lines.append("- PR and CI status could not be verified from Ship PR cache.")
     else:
         lines.append("- No cached open PRs needing review or red-CI attention.")
     if review.duplicate_pr_ticket_refs:
@@ -336,6 +364,14 @@ def _unverified_sections(pull_requests: list[DailyReviewPrItem]) -> list[str]:
         "CI status could not be verified from Ship workflow-run cache "
         f"for {missing_ci_count} open {noun}."
     ]
+
+
+def _has_unverified(review: DailyReview, *needles: str) -> bool:
+    return any(
+        needle in section
+        for section in review.unverified_sections
+        for needle in needles
+    )
 
 
 def _recommendations(

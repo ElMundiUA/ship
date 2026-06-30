@@ -33,6 +33,68 @@ async def test_daily_review_empty_workspace_returns_explicit_empty_sections(
 
 
 @pytest.mark.asyncio
+async def test_daily_review_marks_engine_health_failure_unverified(
+    v1_client, seed_workspace, monkeypatch
+) -> None:
+    from backend.app.services import daily_review as daily_review_service
+
+    async def fail_engine_health(*args, **kwargs):
+        raise RuntimeError("engine health unavailable")
+
+    _, raw, ws = seed_workspace
+    monkeypatch.setattr(
+        daily_review_service,
+        "assess_engine_health",
+        fail_engine_health,
+    )
+
+    res = await v1_client.get(
+        f"/v1/workspaces/{ws.id}/daily-review",
+        headers=_auth(raw),
+    )
+
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["unverified_sections"] == [
+        "Stalled dispatch status could not be verified from Ship engine-health data."
+    ]
+    assert "Stuck or blocked work could not be fully verified" in body["markdown"]
+
+
+@pytest.mark.asyncio
+async def test_daily_review_marks_pr_cache_failure_unverified(
+    v1_client, seed_workspace, monkeypatch
+) -> None:
+    from backend.app.services import daily_review as daily_review_service
+
+    async def fail_collect_pull_requests(*args, **kwargs):
+        raise RuntimeError("PR cache unavailable")
+
+    _, raw, ws = seed_workspace
+    monkeypatch.setattr(
+        daily_review_service,
+        "_collect_pull_requests",
+        fail_collect_pull_requests,
+    )
+
+    res = await v1_client.get(
+        f"/v1/workspaces/{ws.id}/daily-review",
+        headers=_auth(raw),
+    )
+
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["pull_requests"] == []
+    assert body["unverified_sections"] == [
+        "PR and CI status could not be verified from Ship PR cache."
+    ]
+    assert (
+        "PR and CI status could not be verified from Ship PR cache."
+        in body["markdown"]
+    )
+
+
+@pytest.mark.asyncio
 async def test_daily_review_summarizes_movement_and_stuck_work(
     v1_client, seed_workspace, db_session
 ) -> None:
