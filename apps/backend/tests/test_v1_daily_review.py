@@ -160,3 +160,55 @@ async def test_daily_review_flags_pr_attention_ci_and_duplicates(
     assert all(item["awaiting_review"] for item in pr_items)
     assert all(item["red_ci"] for item in pr_items)
     assert "Duplicate open PR risk for: ELS-200." in body["markdown"]
+
+
+@pytest.mark.asyncio
+async def test_daily_review_marks_pr_ci_unverified_when_workflow_cache_missing(
+    v1_client, seed_workspace, db_session
+) -> None:
+    from backend.app.db.models.pipelines import PullRequest
+
+    _, raw, ws = seed_workspace
+    now = datetime.now(timezone.utc)
+    db_session.add(
+        PullRequest(
+            workspace_id=ws.id,
+            external_id=1003,
+            number=3,
+            repo_full_name="ship/test",
+            title="feat(ELS-201): add report",
+            state="open",
+            merged=False,
+            draft=False,
+            html_url="https://github.com/ship/test/pull/3",
+            updated_at_external=now - timedelta(minutes=10),
+        )
+    )
+    await db_session.flush()
+
+    res = await v1_client.get(
+        f"/v1/workspaces/{ws.id}/daily-review",
+        headers=_auth(raw),
+    )
+
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["pull_requests"] == [
+        {
+            "ticket_ref": "ELS-201",
+            "title": "feat(ELS-201): add report",
+            "url": "https://github.com/ship/test/pull/3",
+            "repo_full_name": "ship/test",
+            "awaiting_review": True,
+            "ci_status_verified": False,
+            "red_ci": False,
+            "ci_conclusion": None,
+            "ci_url": None,
+            "updated_at": body["pull_requests"][0]["updated_at"],
+        }
+    ]
+    assert body["unverified_sections"] == [
+        "CI status could not be verified from Ship workflow-run cache for 1 open PR."
+    ]
+    assert "CI unverified" in body["markdown"]
+    assert "No cached open PRs needing review or red-CI attention." not in body["markdown"]

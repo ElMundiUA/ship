@@ -48,6 +48,7 @@ class DailyReviewPrItem:
     url: str
     repo_full_name: str
     awaiting_review: bool
+    ci_status_verified: bool
     red_ci: bool
     ci_conclusion: str | None
     ci_url: str | None
@@ -112,6 +113,7 @@ async def build_daily_review(
     pull_requests = await _collect_pull_requests(session, workspace_id=workspace_id)
     duplicate_pr_ticket_refs = _duplicate_ticket_refs(pull_requests)
     recommendations = _recommendations(stuck, pull_requests, duplicate_pr_ticket_refs)
+    unverified_sections = _unverified_sections(pull_requests)
 
     return DailyReview(
         generated_at=generated_at,
@@ -121,7 +123,7 @@ async def build_daily_review(
         pull_requests=pull_requests,
         duplicate_pr_ticket_refs=duplicate_pr_ticket_refs,
         recommendations=recommendations,
-        unverified_sections=[],
+        unverified_sections=unverified_sections,
     )
 
 
@@ -161,13 +163,15 @@ def format_daily_review_markdown(review: DailyReview) -> str:
     attention = [
         item
         for item in review.pull_requests
-        if item.awaiting_review or item.red_ci
+        if item.awaiting_review or item.red_ci or not item.ci_status_verified
     ]
     if attention:
         for item in attention:
             flags = []
             if item.awaiting_review:
                 flags.append("awaiting review")
+            if not item.ci_status_verified:
+                flags.append("CI unverified")
             if item.red_ci:
                 flags.append(f"CI {item.ci_conclusion or 'red'}")
             ref = f"{item.ticket_ref}: " if item.ticket_ref else ""
@@ -283,6 +287,7 @@ async def _collect_pull_requests(
                 url=pr.html_url,
                 repo_full_name=pr.repo_full_name,
                 awaiting_review=not pr.draft,
+                ci_status_verified=ci is not None,
                 red_ci=ci_conclusion in _RED_CI_CONCLUSIONS,
                 ci_conclusion=ci_conclusion,
                 ci_url=ci.html_url if ci is not None else None,
@@ -322,6 +327,17 @@ def _duplicate_ticket_refs(items: list[DailyReviewPrItem]) -> list[str]:
     return sorted(ref for ref, count in counts.items() if count > 1)
 
 
+def _unverified_sections(pull_requests: list[DailyReviewPrItem]) -> list[str]:
+    missing_ci_count = sum(1 for item in pull_requests if not item.ci_status_verified)
+    if missing_ci_count == 0:
+        return []
+    noun = "PR" if missing_ci_count == 1 else "PRs"
+    return [
+        "CI status could not be verified from Ship workflow-run cache "
+        f"for {missing_ci_count} open {noun}."
+    ]
+
+
 def _recommendations(
     stuck: list[DailyReviewStuckItem],
     pull_requests: list[DailyReviewPrItem],
@@ -335,6 +351,10 @@ def _recommendations(
     if red is not None:
         ref = red.ticket_ref or red.title
         recs.append(f"Fix red CI on {ref}.")
+    missing_ci = next((pr for pr in pull_requests if not pr.ci_status_verified), None)
+    if missing_ci is not None:
+        ref = missing_ci.ticket_ref or missing_ci.title
+        recs.append(f"Verify CI status for {ref}.")
     awaiting = next((pr for pr in pull_requests if pr.awaiting_review), None)
     if awaiting is not None:
         ref = awaiting.ticket_ref or awaiting.title

@@ -42,6 +42,7 @@ class DailyReviewPrItemOut(BaseModel):
     url: str
     repo_full_name: str
     awaiting_review: bool
+    ci_status_verified: bool
     red_ci: bool
     ci_conclusion: str | None
     ci_url: str | None
@@ -107,6 +108,7 @@ def _review_to_out(review: DailyReview) -> DailyReviewOut:
                 url=item.url,
                 repo_full_name=item.repo_full_name,
                 awaiting_review=item.awaiting_review,
+                ci_status_verified=item.ci_status_verified,
                 red_ci=item.red_ci,
                 ci_conclusion=item.ci_conclusion,
                 ci_url=item.ci_url,
