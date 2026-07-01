@@ -33,6 +33,7 @@ export async function runCursorAgent({
   workdir = process.cwd(),
   branchName,
   prompt,
+  model = null,
   env = {},
   onLog = (l) => process.stderr.write(`[cursor] ${l}\n`),
 } = {}) {
@@ -56,7 +57,8 @@ export async function runCursorAgent({
   // Auto. Switch to Auto or upgrade plans to continue.") still
   // work. Operators on paid plans who want a specific model export
   // ``CURSOR_MODEL`` as a workflow secret and we pass it through.
-  const model = (process.env.CURSOR_MODEL || env.CURSOR_MODEL || "auto").trim();
+  // Precedence: per-stage model (from .ship/config.yml) → CURSOR_MODEL → auto.
+  const resolvedModel = (model || process.env.CURSOR_MODEL || env.CURSOR_MODEL || "auto").trim();
   const args = [
     "--print",
     "--force",
@@ -66,11 +68,13 @@ export async function runCursorAgent({
     "--output-format",
     "text",
     "--model",
-    model,
+    resolvedModel,
     prompt,
   ];
 
-  onLog(`launch cursor-agent branch=${branchName} cwd=${workdir} prompt=${prompt.length}b`);
+  onLog(
+    `launch cursor-agent branch=${branchName} cwd=${workdir} prompt=${prompt.length}b model=${resolvedModel}`,
+  );
   const child = spawn("cursor-agent", args, {
     cwd: workdir,
     env: { ...process.env, ...env },

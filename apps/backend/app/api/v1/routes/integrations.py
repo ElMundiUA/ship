@@ -123,6 +123,12 @@ def _validate_kind(kind: str) -> None:
 # {Linear,Notion}" CTA on receipt.
 _OAUTH_ONLY_KINDS: frozenset[str] = frozenset({"linear", "notion"})
 
+# Kinds whose credential is the installed GitHub App, not a per-integration
+# secret. There's nothing to probe, so a fresh row is healthy ("ok") the moment
+# it exists — leaving it "pending" (the secret-flow default) would strand gates
+# that require status==ok (e.g. the process-editor "Tracker bound" prereq).
+_APP_BACKED_KINDS: frozenset[str] = frozenset({"github"})
+
 
 @router.get("", response_model=list[IntegrationOut])
 async def list_integrations(
@@ -241,6 +247,14 @@ async def upsert_integration(
             row.status = "pending"
             row.last_health_at = None
             row.last_health_error = None
+    elif kind in _APP_BACKED_KINDS:
+        # GitHub Issues rides the installed GitHub App — no secret to probe, so
+        # it's healthy as soon as the row exists. Without this it stays
+        # "pending" forever and the process-editor "Tracker bound" prereq
+        # (which requires status==ok) never passes.
+        row.status = "ok"
+        row.last_health_at = datetime.now(timezone.utc)
+        row.last_health_error = None
     elif is_new:
         row.status = "pending"
 

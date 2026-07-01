@@ -44,6 +44,9 @@ function canonicalStateFromConfigRow(
 
 type ProcessStateWithAgentProfile = ApiProcessState & {
   specialist_agent_profile?: string | null;
+  // Concrete model id for this stage (e.g. "claude-sonnet-4-6"). null/empty
+  // means "use the provider's default model". Serialised as specialist.model.
+  specialist_model?: string | null;
 };
 
 export type ProcessConfigSource =
@@ -162,6 +165,7 @@ export function processConfigFromApiProcess(process: ApiProcess): Record<string,
         id: state.specialist_id,
         name: state.specialist_name,
         agent_profile: agentProfileFromState(state),
+        ...(modelFromState(state) ? { model: modelFromState(state) } : {}),
       },
       instructions: state.instructions,
       ...(state.layout ? { layout: state.layout } : {}),
@@ -245,6 +249,10 @@ function stateFromConfig(
       stringValue(row.agent_profile) ??
       agentProfileFromState(fallback) ??
       "main",
+    specialist_model:
+      stringValue(specialist?.model) ??
+      stringValue(row.model) ??
+      modelFromState(fallback),
     instructions:
       stringValue(row.instructions) ??
       stringValue(row.description) ??
@@ -402,6 +410,12 @@ function requiresHumanFromConfigRow(
 function agentProfileFromState(state: ApiProcessState | undefined): string {
   const extended = state as ProcessStateWithAgentProfile | undefined;
   return extended?.specialist_agent_profile || "main";
+}
+
+function modelFromState(state: ApiProcessState | undefined): string | null {
+  const extended = state as ProcessStateWithAgentProfile | undefined;
+  const value = extended?.specialist_model;
+  return value && value.trim() ? value : null;
 }
 
 function mergeProcessRoutines(

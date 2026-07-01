@@ -328,6 +328,7 @@ function renderProcessPage({
           >
             <EditorContent
               workspaceId={workspace.id}
+              agentProvider={workspace.agent_provider}
               processId={resolvedProcessId}
               repoId={selectedRepo?.id}
               selectedTab={selectedTab}
@@ -500,6 +501,7 @@ function renderDownState(details?: string) {
  */
 async function EditorContent({
   workspaceId,
+  agentProvider,
   processId,
   repoId,
   selectedTab,
@@ -508,6 +510,7 @@ async function EditorContent({
   token,
 }: {
   workspaceId: string;
+  agentProvider?: string;
   processId: string;
   repoId: string | undefined;
   selectedTab: ProcessTab;
@@ -556,6 +559,7 @@ async function EditorContent({
         ) : (
           <ProcessEditorWorkspace
             workspaceId={workspaceId}
+            agentProvider={agentProvider}
             process={process}
             selectedStateId={selectedStateId}
             repoId={repoId}

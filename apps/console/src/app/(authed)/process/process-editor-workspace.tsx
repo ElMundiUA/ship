@@ -19,6 +19,7 @@ import { StateEditor, type SpecialistOption } from "./state-editor";
 
 export function ProcessEditorWorkspace({
   workspaceId,
+  agentProvider,
   process,
   selectedStateId,
   repoId,
@@ -26,6 +27,7 @@ export function ProcessEditorWorkspace({
   tabs,
 }: {
   workspaceId: string;
+  agentProvider?: string;
   process: ApiProcess;
   selectedStateId?: string;
   repoId?: string;
@@ -227,6 +229,7 @@ export function ProcessEditorWorkspace({
       specialist_id: defaultSpecialist.id,
       specialist_name: defaultSpecialist.name,
       specialist_agent_profile: "main",
+      specialist_model: null,
       instructions: defaultSpecialist.role,
       state: lane,
       triggers: defaultSdlcStateTriggers(),
@@ -356,6 +359,8 @@ export function ProcessEditorWorkspace({
             <aside className="border-l-0 border-t border-white/[0.06] pt-6 xl:border-l xl:border-t-0 xl:pt-0 xl:pl-8">
               <StateEditor
                 processId={process.id}
+                workspaceId={workspaceId}
+                agentProvider={agentProvider}
                 repoId={repoId}
                 state={selectedState}
                 states={states}
@@ -492,6 +497,7 @@ function stateFingerprint(state: ApiProcessState) {
     specialist_id: state.specialist_id,
     specialist_name: state.specialist_name,
     specialist_agent_profile: agentProfileFromState(state),
+    specialist_model: modelFromState(state),
     instructions: state.instructions,
     layout: state.layout ?? null,
     triggers: state.triggers,
@@ -515,6 +521,12 @@ function agentProfileFromState(state: ApiProcessState) {
     (state as ApiProcessState & { specialist_agent_profile?: string | null })
       .specialist_agent_profile || "main"
   );
+}
+
+function modelFromState(state: ApiProcessState): string | null {
+  const value = (state as ApiProcessState & { specialist_model?: string | null })
+    .specialist_model;
+  return value && value.trim() ? value : null;
 }
 
 function transitionFingerprint(transitions: ApiProcess["transitions"]) {
