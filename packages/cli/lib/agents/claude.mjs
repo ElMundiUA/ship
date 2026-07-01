@@ -65,6 +65,7 @@ export async function runClaudeAgent({
   workdir = process.cwd(),
   branchName,
   prompt,
+  model = null,
   env = {},
   onLog = (l) => process.stderr.write(`[claude] ${l}\n`),
 } = {}) {
@@ -84,10 +85,14 @@ export async function runClaudeAgent({
     "--output-format",
     "stream-json",
     "--verbose",
+    // Per-stage model override (claude --model <id>); omitted → CLI default.
+    ...(model ? ["--model", model] : []),
     prompt,
   ];
 
-  onLog(`launch claude branch=${branchName} cwd=${workdir} prompt=${prompt.length}b`);
+  onLog(
+    `launch claude branch=${branchName} cwd=${workdir} prompt=${prompt.length}b model=${model ?? "(default)"}`,
+  );
   const child = spawn("claude", args, {
     cwd: workdir,
     env: { ...process.env, ...env },

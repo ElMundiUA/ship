@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import { Card, CardHeader } from "@/components/ui";
 import type {
@@ -20,10 +20,47 @@ export type SpecialistOption = {
 
 type EditableProcessState = ApiProcessState & {
   specialist_agent_profile?: string | null;
+  specialist_model?: string | null;
 };
+
+// Workspace agent provider → models.dev catalogue provider for the live
+// /api/deploy/planner-models picker. Only providers that models.dev catalogues
+// belong here. Cursor is intentionally absent: it has no models.dev entry and
+// its own models (Composer, auto, …) aren't catalogued anywhere keyless, so it
+// falls through to the free-text path below.
+const CATALOG_PROVIDER: Record<string, string> = {
+  claude: "anthropic",
+  codex: "openai",
+};
+
+// Per-stage execution-backend profile → the agent provider that actually runs
+// the stage. cursor_agent / codex_cli pin a provider; the rest (auto / main /
+// cheaper / ship_cloud_agent / local_cli) defer to the workspace default
+// (agent_provider). This is what the Model picker keys off — so a stage set to
+// "Codex CLI" shows OpenAI models, not the workspace's Cursor/Composer.
+const PROFILE_PROVIDER: Record<string, string> = {
+  cursor_agent: "cursor",
+  codex_cli: "codex",
+};
+
+function providerForProfile(
+  profile: string,
+  workspaceProvider?: string,
+): string | undefined {
+  return PROFILE_PROVIDER[profile] ?? workspaceProvider;
+}
+
+// Cursor exposes no keyless model catalogue and its slugs vary by plan, so we
+// offer suggestions but keep the field free-text (whatever you type goes to
+// `cursor-agent --model`). ``auto`` is always valid (incl. Free plans);
+// ``composer`` is Cursor's rolling alias for the latest Composer (so operators
+// needn't track version bumps like composer-2 → composer-2.5).
+const CURSOR_MODEL_SUGGESTIONS = ["auto", "composer", "composer-latest"];
 
 export function StateEditor({
   processId,
+  workspaceId,
+  agentProvider,
   repoId,
   state,
   states,
@@ -37,6 +74,8 @@ export function StateEditor({
   embedded = false,
 }: {
   processId?: string;
+  workspaceId?: string;
+  agentProvider?: string;
   repoId?: string;
   state?: ApiProcessState;
   states: ApiProcessState[];
@@ -186,6 +225,16 @@ export function StateEditor({
           <AgentProfileSelector
             value={agentProfileFromState(selectedState)}
             onChange={(value) => patchState({ specialist_agent_profile: value })}
+          />
+          <ModelSelector
+            workspaceId={workspaceId}
+            repoId={repoId}
+            agentProvider={providerForProfile(
+              agentProfileFromState(selectedState),
+              agentProvider,
+            )}
+            value={modelFromState(selectedState)}
+            onChange={(value) => patchState({ specialist_model: value })}
           />
         </div>
       </details>
@@ -396,6 +445,152 @@ function AgentProfileSelector({
   );
 }
 
+function ModelSelector({
+  workspaceId,
+  repoId,
+  agentProvider,
+  value,
+  onChange,
+}: {
+  workspaceId?: string;
+  repoId?: string;
+  agentProvider?: string;
+  value: string | null;
+  onChange: (value: string | null) => void;
+}) {
+  // models.dev-catalogued providers get the live list; others (Cursor) get a
+  // free-text field — see CATALOG_PROVIDER / CURSOR_MODEL_SUGGESTIONS.
+  const catalogProvider = CATALOG_PROVIDER[agentProvider ?? ""] ?? null;
+  const label = (
+    <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-white/45">
+      Model{" "}
+      <span className="font-normal normal-case tracking-normal text-white/30">
+        · {agentProvider ?? "provider"}
+      </span>
+    </span>
+  );
+
+  if (!catalogProvider) {
+    // Free-text: Cursor (and any uncatalogued provider). Whatever is typed is
+    // passed to the agent CLI's --model; empty → provider default. Cursor has
+    // no keyless model catalogue, so we link the operator to Cursor's own
+    // up-to-date list to copy a slug from rather than risk a stale dropdown.
+    return (
+      <div>
+        <label className="block">
+          {label}
+          <input
+            list="cursor-model-suggestions"
+            value={value ?? ""}
+            onChange={(event) => onChange(event.target.value.trim() || null)}
+            placeholder="Provider default (e.g. auto, composer)"
+            className="w-full rounded-md border border-white/10 bg-black/35 px-2 py-1.5 text-sm text-white outline-none transition placeholder:text-white/30 focus:border-aqua/40"
+          />
+        </label>
+        <datalist id="cursor-model-suggestions">
+          {CURSOR_MODEL_SUGGESTIONS.map((model) => (
+            <option key={model} value={model} />
+          ))}
+        </datalist>
+        <a
+          href="https://cursor.com/help/models-and-usage/available-models"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mt-1 inline-block text-[10px] text-white/40 transition hover:text-aqua hover:underline"
+        >
+          See Cursor&apos;s current models ↗
+        </a>
+      </div>
+    );
+  }
+
+  return (
+    <label className="block">
+      {label}
+      <CatalogModelSelect
+        workspaceId={workspaceId}
+        repoId={repoId}
+        provider={catalogProvider}
+        value={value}
+        onChange={onChange}
+      />
+    </label>
+  );
+}
+
+function CatalogModelSelect({
+  workspaceId,
+  repoId,
+  provider,
+  value,
+  onChange,
+}: {
+  workspaceId?: string;
+  repoId?: string;
+  provider: string;
+  value: string | null;
+  onChange: (value: string | null) => void;
+}) {
+  const [models, setModels] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!workspaceId || !repoId) return;
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    fetch("/api/deploy/planner-models", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ws: workspaceId, repoId, provider }),
+    })
+      .then((res) =>
+        res.ok ? res.json() : Promise.reject(new Error(String(res.status))),
+      )
+      .then((data: { models?: string[] }) => {
+        if (!cancelled) setModels(Array.isArray(data.models) ? data.models : []);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setModels([]);
+          setError("Couldn't load models — provider default will be used.");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceId, repoId, provider]);
+
+  const current = value ?? "";
+  // Keep a previously-saved model selectable even if it's not in the live list.
+  const options = current && !models.includes(current) ? [current, ...models] : models;
+
+  return (
+    <>
+      <select
+        value={current}
+        onChange={(event) => onChange(event.target.value || null)}
+        disabled={!repoId}
+        className="w-full rounded-md border border-white/10 bg-black/35 px-2 py-1.5 text-sm text-white outline-none transition focus:border-aqua/40 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        <option value="">{loading ? "Loading models…" : "Provider default"}</option>
+        {options.map((model) => (
+          <option key={model} value={model}>
+            {model}
+          </option>
+        ))}
+      </select>
+      {error ? (
+        <span className="mt-1 block text-[10px] text-coral/80">{error}</span>
+      ) : null}
+    </>
+  );
+}
+
 function EditorField({
   label,
   value,
@@ -422,4 +617,10 @@ function EditorField({
 function agentProfileFromState(state: ApiProcessState): string {
   const extended = state as EditableProcessState;
   return extended.specialist_agent_profile || "main";
+}
+
+function modelFromState(state: ApiProcessState): string | null {
+  const extended = state as EditableProcessState;
+  const value = extended.specialist_model;
+  return value && value.trim() ? value : null;
 }

@@ -110,6 +110,31 @@ async def test_admin_can_upsert_integration_and_secret_stays_opaque(
 
 
 @pytest.mark.asyncio
+async def test_github_tracker_upsert_is_ok_without_secret(
+    v1_client, seed_workspace
+) -> None:
+    """GitHub Issues rides the installed GitHub App — there's no secret to
+    probe, so the row must land ``status=ok`` (not ``pending``). Regression for
+    the locked-editor bug: a github tracker stuck at ``pending`` left the
+    process-editor "Tracker bound" prereq (which requires ok) red forever.
+    """
+    _, raw, workspace = seed_workspace
+    headers = {"Authorization": f"Bearer {raw}"}
+
+    resp = await v1_client.put(
+        f"/v1/workspaces/{workspace.id}/integrations/github",
+        headers=headers,
+        json={"kind": "github", "config": {}, "secret": None},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["kind"] == "github"
+    assert body["has_secret"] is False
+    assert body["status"] == "ok"
+    assert body["last_health_at"] is not None
+
+
+@pytest.mark.asyncio
 async def test_upsert_returns_error_status_when_probe_fails(
     v1_client, monkeypatch: pytest.MonkeyPatch, seed_workspace
 ) -> None:

@@ -34,6 +34,7 @@ export async function runCodexAgent({
   workdir = process.cwd(),
   branchName,
   prompt,
+  model = null,
   env = {},
   onLog = (l) => process.stderr.write(`[codex] ${l}\n`),
 } = {}) {
@@ -49,10 +50,14 @@ export async function runCodexAgent({
     "exec",
     "--full-auto",
     "--skip-git-repo-check",
+    // Per-stage model override (codex exec --model <id>); omitted → default.
+    ...(model ? ["--model", model] : []),
     prompt,
   ];
 
-  onLog(`launch codex exec branch=${branchName} cwd=${workdir} prompt=${prompt.length}b`);
+  onLog(
+    `launch codex exec branch=${branchName} cwd=${workdir} prompt=${prompt.length}b model=${model ?? "(default)"}`,
+  );
   const child = spawn("codex", args, {
     cwd: workdir,
     env: { ...process.env, ...env },

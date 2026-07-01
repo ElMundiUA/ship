@@ -14,6 +14,7 @@ import { PageBody, PageHeader } from "@/components/app-shell";
 import { ApiUnavailable } from "@/components/api-unavailable";
 import { ConfigScopeCard } from "@/components/config-scope-card";
 import { RepoRoutingPanel } from "@/components/repo-routing-panel";
+import { AgentSecretsPanel } from "@/components/agent-secrets-panel";
 import {
   IntegrationsWorkspaceBody,
   loadIntegrationsWorkspaceMode,
@@ -466,6 +467,7 @@ export async function SettingsShell({
 
           {activeTab === "api-keys" && (
             <div className="space-y-6">
+              <AgentSecretsPanel workspaceId={workspace.id} repos={activatedRepos} />
               <TokensPanel
                 workspaceId={workspace.id}
                 tokens={tokens}

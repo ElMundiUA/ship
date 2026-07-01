@@ -53,7 +53,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { readConfig, findShipRoot } from "../config/io.mjs";
-import { resolveExecutable } from "../runtime/routines.mjs";
+import { resolveExecutable, stageModelFromStates } from "../runtime/routines.mjs";
 import { DEFAULT_PROVIDER, runAgent } from "../agents/index.mjs";
 import { fetchWithRetry } from "../retry.mjs";
 
@@ -236,6 +236,12 @@ async function _runCommandImpl(ctx, rest) {
   // default. Lets one role (``ba``) drive both ``ba_requirements`` for
   // SDLC and ``wbs`` for decomposition without per-process role clones.
   const fsmStage = resolved.executable?.fsm_stage || roleResolved.fsm_stage || null;
+  // Per-stage model: prefer a routine-level model, else the model the process
+  // editor stored on the matching ``process.states`` entry (configs often ship
+  // ``routines: {}``, so the model lives on the state). null → provider default.
+  const stageModel =
+    resolved.executable?.model ||
+    stageModelFromStates(config, { fsmStage, specialist: specialistSlug });
   const roleBody = roleResolved.prompt || "";
   const systemBody = systemResolved?.prompt || "";
 
@@ -379,11 +385,15 @@ async function _runCommandImpl(ctx, rest) {
         specialist: specialistSlug,
         specialist_source: roleResolved.source,
         fsm_stage: fsmStage,
+        // Resolved per-stage model (routine or matching process state) that
+        // would be passed to the agent CLI's --model; null = provider default.
+        // Lets a dry-run confirm the model without launching an agent.
+        model: stageModel || null,
         task,
         prompt,
       }, null, 2));
     } else {
-      console.error(`# ship: dry-run handle=${runHandle} specialist=${specialistSlug} (${roleResolved.source}) fsm_stage=${fsmStage || "(context-free)"}`);
+      console.error(`# ship: dry-run handle=${runHandle} specialist=${specialistSlug} (${roleResolved.source}) fsm_stage=${fsmStage || "(context-free)"} model=${stageModel || "(default)"}`);
       if (task) {
         console.error(`# ship: task ticket_ref=${task.ticket_ref} title=${JSON.stringify(task.title || "")}`);
       } else {
@@ -442,12 +452,18 @@ async function _runCommandImpl(ctx, rest) {
     provider,
     branch: branchName,
     prompt_len: prompt.length,
+    // Surfaces the resolved per-stage model in the run's structured events so
+    // operators can confirm which model actually ran. null = provider default.
+    model: stageModel || null,
   });
   try {
     runtime = await runAgent(provider, {
       workdir: process.cwd(),
       branchName,
       prompt,
+      // Per-stage model resolved above (routine or matching process state);
+      // null → the provider CLI's own default. Threaded to the CLI --model.
+      model: stageModel || null,
     });
   } catch (err) {
     emit(args, {

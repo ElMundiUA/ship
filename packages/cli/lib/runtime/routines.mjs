@@ -64,6 +64,10 @@ export function routineToExecutable(id, routine) {
     idempotency: routine.idempotency || null,
     prompt: stringOrNull(routine.prompt) || stringOrNull(routine.instructions),
     agent_profile: stringOrNull(routine.agent_profile) || stringOrNull(routine.specialist?.agent_profile),
+    // Per-stage concrete model id (e.g. "claude-sonnet-4-6"). Read from the
+    // routine or its mirrored specialist record (the process-stage shape
+    // carries it under ``specialist.model``). null → provider default.
+    model: stringOrNull(routine.model) || stringOrNull(routine.specialist?.model),
     // Per-routine FSM stage override. When set, ``shipctl run`` uses
     // it instead of the role's default ``fsm_stage`` — that's how a
     // single role (e.g. ``ba``) serves both SDLC (``ba_requirements``)
@@ -79,6 +83,39 @@ export function routineToExecutable(id, routine) {
     // / retro / sweeps — fall through to ``0`` (effectively last).
     pipeline_priority: numberOrZero(routine.pipeline_priority),
   };
+}
+
+/**
+ * Resolve the per-stage model when it lives on ``process.states`` (the
+ * process editor writes the operator's pick there under
+ * ``specialist.model``) rather than on a routine. ``shipctl`` executes by
+ * routine/stage and configs commonly ship ``routines: {}``, so match the
+ * running stage to its state — by state ``id`` (== the canonical fsm_stage),
+ * then canonical ``state``, then specialist slug — and read the model.
+ * Returns null when unset (provider default).
+ */
+export function stageModelFromStates(config, { fsmStage, specialist } = {}) {
+  const states = config?.process?.states;
+  if (!Array.isArray(states)) return null;
+  const modelOf = (s) => {
+    const m = s?.specialist?.model;
+    return typeof m === "string" && m.trim() ? m.trim() : null;
+  };
+  // Identify the running stage precisely — by state id (== the canonical
+  // fsm_stage), else by canonical ``state``. When found, return ITS model
+  // (even if null): do NOT fall back to specialist, or a stage that merely
+  // shares a specialist (e.g. planning & validation both devops_platform)
+  // would leak another stage's model.
+  const stage = fsmStage
+    ? states.find((s) => s?.id === fsmStage) ||
+      states.find((s) => s?.state === fsmStage)
+    : null;
+  if (stage) return modelOf(stage);
+  // Stage couldn't be identified — best-effort by specialist slug.
+  const bySpec = specialist
+    ? states.find((s) => s?.specialist?.id === specialist && modelOf(s))
+    : null;
+  return bySpec ? modelOf(bySpec) : null;
 }
 
 /**
@@ -123,6 +160,7 @@ export function laneToExecutable(id, lane) {
     idempotency: lane.idempotency || null,
     prompt: null,
     agent_profile: null,
+    model: null,
   };
 }
 
