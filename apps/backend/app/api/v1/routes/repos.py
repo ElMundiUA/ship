@@ -1335,6 +1335,7 @@ async def wizard_seed(
         "cursor_agent": ("cursor",),
         "ship_cloud_agent": ("cursor-cloud",),
         "codex_cli": ("codex",),
+        "claude_code": ("claude-md",),
         "local_cli": ("claude-md",),
         "auto": ("claude-md",),
         "main": ("claude-md",),
@@ -2197,6 +2198,9 @@ _PROCESS_AGENT_PROFILES = frozenset(
         "cheaper",
         "cursor_agent",
         "codex_cli",
+        # Per-stage Claude Code backend — completes the concrete-CLI trio
+        # that overrides the workspace provider at runtime.
+        "claude_code",
         "ship_cloud_agent",
         "local_cli",
     }

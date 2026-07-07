@@ -55,6 +55,10 @@ export const PROCESS_AGENT_PROFILES = Object.freeze([
   "cheaper",
   "cursor_agent",
   "codex_cli",
+  // ``claude_code`` pins the Claude Code CLI as the per-stage backend,
+  // completing the concrete-CLI trio (cursor_agent / codex_cli /
+  // claude_code) that overrides the workspace provider at runtime.
+  "claude_code",
   "ship_cloud_agent",
   "local_cli",
 ]);

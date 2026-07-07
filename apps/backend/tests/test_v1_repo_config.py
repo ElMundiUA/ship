@@ -22,6 +22,22 @@ import pytest
 import pytest_asyncio
 
 
+def test_validate_process_agent_profile_accepts_claude_code():
+    """claude_code joins the concrete-CLI trio as a valid per-stage backend."""
+    from fastapi import HTTPException
+
+    from backend.app.api.v1.routes.repos import _validate_process_agent_profile
+
+    # New value + the existing concrete CLIs and abstract profiles all pass.
+    for value in ("claude_code", "cursor_agent", "codex_cli", "main", None):
+        _validate_process_agent_profile(value, "process.states[0].specialist.agent_profile")
+
+    # Garbage still 422s.
+    with pytest.raises(HTTPException) as exc:
+        _validate_process_agent_profile("gpt_cli", "field")
+    assert exc.value.status_code == 422
+
+
 @pytest_asyncio.fixture
 async def seed_workspace_with_repo(db_session, seed_workspace):
     from backend.app.db.models.integrations import (

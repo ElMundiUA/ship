@@ -119,6 +119,55 @@ export function stageModelFromStates(config, { fsmStage, specialist } = {}) {
 }
 
 /**
+ * Resolve the per-stage execution backend (``specialist.agent_profile``)
+ * the same way as {@link stageModelFromStates}: match the running stage
+ * to its ``process.states`` record by state ``id`` (== canonical
+ * fsm_stage), then canonical ``state``, then specialist slug. Returns
+ * null when unset — the caller then keeps the workspace-bound provider.
+ *
+ * Only concrete-CLI profiles matter to provider routing; ``main`` /
+ * ``auto`` / ``cheaper`` / ``local_cli`` / ``ship_cloud_agent`` deliberately
+ * return their literal value (or null) and are mapped to "no override" by
+ * the caller — this helper stays a pure config reader.
+ */
+export function stageAgentProfileFromStates(config, { fsmStage, specialist } = {}) {
+  const states = config?.process?.states;
+  if (!Array.isArray(states)) return null;
+  const profileOf = (s) => {
+    const p = s?.specialist?.agent_profile;
+    return typeof p === "string" && p.trim() ? p.trim() : null;
+  };
+  const stage = fsmStage
+    ? states.find((s) => s?.id === fsmStage) ||
+      states.find((s) => s?.state === fsmStage)
+    : null;
+  if (stage) return profileOf(stage);
+  const bySpec = specialist
+    ? states.find((s) => s?.specialist?.id === specialist && profileOf(s))
+    : null;
+  return bySpec ? profileOf(bySpec) : null;
+}
+
+/**
+ * Map a per-stage ``agent_profile`` to the agent runtime provider it
+ * pins, or null when it defers to the workspace-bound provider. Only the
+ * three concrete-CLI profiles override; the abstract ones
+ * (main/auto/cheaper/local_cli/ship_cloud_agent) intentionally return
+ * null so the workspace binding wins. Kept beside the resolver so the run
+ * command and tests share one source of truth.
+ */
+export const PROFILE_PROVIDER_OVERRIDE = Object.freeze({
+  cursor_agent: "cursor",
+  codex_cli: "codex",
+  claude_code: "claude",
+});
+
+export function providerForAgentProfile(agentProfile) {
+  if (!agentProfile) return null;
+  return PROFILE_PROVIDER_OVERRIDE[agentProfile] || null;
+}
+
+/**
  * Pull the agent-role slug out of a routine, preferring the new
  * ``specialist:`` key but falling back to the legacy ``pattern:`` and
  * stripping the historical ``role-`` prefix when present.

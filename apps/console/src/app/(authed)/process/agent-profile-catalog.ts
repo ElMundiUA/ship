@@ -4,40 +4,35 @@ export type AgentProfileOption = {
   description: string;
 };
 
+// The per-stage execution backend. Only options that the runtime
+// actually honours are offered:
+//   - "main" defers to the workspace-bound provider (the default).
+//   - cursor_agent / codex_cli / claude_code pin a concrete CLI for THIS
+//     stage, overriding the workspace provider at runtime.
+// The legacy profiles (auto / cheaper / ship_cloud_agent / local_cli) are
+// still accepted by the config schema for backwards-compat with existing
+// .ship/config.yml files, but are intentionally not surfaced here: they
+// never changed runtime routing and only confused operators. Configs that
+// still carry them resolve to the workspace provider at run time.
 export const AGENT_PROFILE_OPTIONS: AgentProfileOption[] = [
   {
-    id: "auto",
-    name: "Auto",
-    description: "Let Ship choose the backend from workspace policy and task needs.",
-  },
-  {
     id: "main",
-    name: "Main workspace agent",
-    description: "Use the default agent profile configured for this workspace.",
-  },
-  {
-    id: "cheaper",
-    name: "Cheaper profile",
-    description: "Prefer lower-cost execution for low-risk work.",
+    name: "Workspace default",
+    description: "Use the provider chosen for this workspace (Claude / Cursor / Codex).",
   },
   {
     id: "cursor_agent",
     name: "Cursor agent",
-    description: "Prefer repo-local coding work in Cursor.",
+    description: "Run this stage on the Cursor CLI, regardless of the workspace default.",
   },
   {
     id: "codex_cli",
     name: "Codex CLI",
-    description: "Prefer local CLI execution for code and docs tasks.",
+    description: "Run this stage on the OpenAI Codex CLI, regardless of the workspace default.",
   },
   {
-    id: "ship_cloud_agent",
-    name: "Ship cloud agent",
-    description: "Prefer managed cloud execution for background or scheduled work.",
-  },
-  {
-    id: "local_cli",
-    name: "Local CLI only",
-    description: "Keep execution on a local runner for sensitive repositories.",
+    id: "claude_code",
+    name: "Claude Code",
+    description: "Run this stage on the Claude Code CLI, regardless of the workspace default.",
   },
 ];

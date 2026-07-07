@@ -23,24 +23,33 @@ type EditableProcessState = ApiProcessState & {
   specialist_model?: string | null;
 };
 
-// Workspace agent provider → models.dev catalogue provider for the live
-// /api/deploy/planner-models picker. Only providers that models.dev catalogues
-// belong here. Cursor is intentionally absent: it has no models.dev entry and
-// its own models (Composer, auto, …) aren't catalogued anywhere keyless, so it
-// falls through to the free-text path below.
+// Agent provider → the catalogue provider key sent to the live
+// /api/deploy/planner-models picker. anthropic/openai come from models.dev
+// (keyless); cursor is served by the backend via a platform Cursor key
+// (api.cursor.com/v1/models), with a curated auto/composer fallback when no
+// key is set. Any provider NOT listed here falls through to the free-text
+// path below.
 const CATALOG_PROVIDER: Record<string, string> = {
   claude: "anthropic",
   codex: "openai",
+  // Cursor now has a live catalogue too — the backend lists it via a
+  // platform Cursor key (api.cursor.com/v1/models). Falls back to a curated
+  // list (auto / composer) server-side when no key is configured, so the
+  // dropdown is always populated.
+  cursor: "cursor",
 };
 
 // Per-stage execution-backend profile → the agent provider that actually runs
-// the stage. cursor_agent / codex_cli pin a provider; the rest (auto / main /
-// cheaper / ship_cloud_agent / local_cli) defer to the workspace default
-// (agent_provider). This is what the Model picker keys off — so a stage set to
-// "Codex CLI" shows OpenAI models, not the workspace's Cursor/Composer.
+// the stage. cursor_agent / codex_cli / claude_code pin a provider; the rest
+// (main / auto / cheaper / ship_cloud_agent / local_cli) defer to the workspace
+// default (agent_provider). This mapping is shared by two consumers: the Model
+// picker (so a stage set to "Codex CLI" shows OpenAI models, not the
+// workspace's Cursor/Composer) AND — via the CLI's own copy in routines.mjs —
+// the runtime, which now honours the same override when launching the agent.
 const PROFILE_PROVIDER: Record<string, string> = {
   cursor_agent: "cursor",
   codex_cli: "codex",
+  claude_code: "claude",
 };
 
 function providerForProfile(
@@ -224,7 +233,25 @@ export function StateEditor({
           </div>
           <AgentProfileSelector
             value={agentProfileFromState(selectedState)}
-            onChange={(value) => patchState({ specialist_agent_profile: value })}
+            workspaceProvider={agentProvider}
+            onChange={(value) => {
+              // Switching the execution backend can change the provider
+              // (e.g. Cursor → Codex). A model picked for the old provider
+              // (composer-2.5) is invalid for the new one, so reset it to
+              // "Provider default" when the provider actually changes —
+              // otherwise the picker would keep showing a cross-provider
+              // model that the runtime can't run.
+              const prevProvider = providerForProfile(
+                agentProfileFromState(selectedState),
+                agentProvider,
+              );
+              const nextProvider = providerForProfile(value, agentProvider);
+              patchState(
+                nextProvider !== prevProvider
+                  ? { specialist_agent_profile: value, specialist_model: null }
+                  : { specialist_agent_profile: value },
+              );
+            }}
           />
           <ModelSelector
             workspaceId={workspaceId}
@@ -414,16 +441,32 @@ function sourceLabel(source: NonNullable<SpecialistOption["source"]>) {
   return "Custom";
 }
 
+// Workspace agent_provider → a human label for the "Workspace default"
+// option, so the operator sees which concrete CLI the default resolves to
+// (e.g. "Workspace default · Cursor") instead of having to remember it.
+const PROVIDER_LABEL: Record<string, string> = {
+  cursor: "Cursor",
+  codex: "Codex",
+  claude: "Claude",
+};
+
 function AgentProfileSelector({
   value,
   onChange,
+  workspaceProvider,
 }: {
   value: string;
   onChange: (value: string) => void;
+  workspaceProvider?: string;
 }) {
   const selectedOption =
     AGENT_PROFILE_OPTIONS.find((option) => option.id === value) ??
     AGENT_PROFILE_OPTIONS[0];
+  // Spell out the workspace default's concrete provider on the "main" option.
+  const labelFor = (option: (typeof AGENT_PROFILE_OPTIONS)[number]) =>
+    option.id === "main" && workspaceProvider
+      ? `${option.name} · ${PROVIDER_LABEL[workspaceProvider] ?? workspaceProvider}`
+      : option.name;
   return (
     <label className="block">
       <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-white/45">
@@ -437,7 +480,7 @@ function AgentProfileSelector({
       >
         {AGENT_PROFILE_OPTIONS.map((option) => (
           <option key={option.id} value={option.id}>
-            {option.name}
+            {labelFor(option)}
           </option>
         ))}
       </select>
@@ -458,8 +501,9 @@ function ModelSelector({
   value: string | null;
   onChange: (value: string | null) => void;
 }) {
-  // models.dev-catalogued providers get the live list; others (Cursor) get a
-  // free-text field — see CATALOG_PROVIDER / CURSOR_MODEL_SUGGESTIONS.
+  // Catalogued providers (anthropic / openai / cursor) get the live dropdown;
+  // any uncatalogued provider falls back to a free-text field — see
+  // CATALOG_PROVIDER / CURSOR_MODEL_SUGGESTIONS.
   const catalogProvider = CATALOG_PROVIDER[agentProvider ?? ""] ?? null;
   const label = (
     <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-white/45">

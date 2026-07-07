@@ -65,6 +65,9 @@ PROVIDER_DEFAULT_MODEL: Final[dict[str, str]] = {
     "anthropic": "claude-sonnet-4-6",
     "gemini": "gemini-flash-latest",
     "mistral": "mistral-small-latest",
+    # Cursor's catch-all — always valid, incl. Free plans. The picker lists
+    # the live slugs (composer, claude-*, …) when the platform key is set.
+    "cursor": "auto",
 }
 
 # Curated fallback shown when the provider has no backend key configured
@@ -78,6 +81,10 @@ _FALLBACK_MODELS: Final[dict[str, tuple[str, ...]]] = {
     ),
     "gemini": ("gemini-pro-latest", "gemini-flash-latest", "gemini-2.5-pro"),
     "mistral": ("mistral-large-latest", "mistral-small-latest"),
+    # Cursor without a platform key: the always-valid slugs. ``composer``
+    # is the rolling alias for the latest Composer, so this stays useful
+    # without tracking version bumps.
+    "cursor": ("auto", "composer", "composer-latest"),
 }
 
 # OpenAI returns its whole catalogue (embeddings, audio, image…). We only
@@ -140,6 +147,8 @@ def _resolve_key(provider: str, settings: Settings) -> str | None:
         return (settings.deploy_planner_gemini_api_key or "").strip() or None
     if provider == "mistral":
         return (settings.mistral_api_key or "").strip() or None
+    if provider == "cursor":
+        return (settings.cursor_api_key or "").strip() or None
     return None
 
 
@@ -278,6 +287,8 @@ async def _fetch_live(
         return await _fetch_anthropic(key, http)
     if provider == "gemini":
         return await _fetch_gemini(key, http)
+    if provider == "cursor":
+        return await _fetch_cursor(key, http)
     return []
 
 
@@ -329,6 +340,38 @@ async def _fetch_gemini(key: str, http: httpx.AsyncClient) -> list[str]:
         if model_id and _keep_chat_model(model_id):
             ids.append(model_id)
     return sorted(set(ids))
+
+
+async def _fetch_cursor(key: str, http: httpx.AsyncClient) -> list[str]:
+    """List Cursor models from ``GET api.cursor.com/v1/models``.
+
+    Response shape: ``{"items": [{"id", "displayName", "aliases": [...]}]}``.
+    The ``id`` is the slug ``cursor-agent --model`` accepts; the catch-all
+    entry comes back as ``id="default"`` but is invoked as ``auto`` (its
+    documented alias), so we surface it that way. Cursor returns a curated
+    ordering (Auto / Composer first, then models) — we preserve it rather
+    than sorting, and dedupe defensively.
+    """
+
+    resp = await http.get(
+        "https://api.cursor.com/v1/models",
+        headers={"Authorization": f"Bearer {key}"},
+    )
+    resp.raise_for_status()
+    items = resp.json().get("items", [])
+    ids: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        raw = str(item.get("id") or "").strip()
+        if not raw:
+            continue
+        model_id = "auto" if raw == "default" else raw
+        if model_id not in seen:
+            seen.add(model_id)
+            ids.append(model_id)
+    return ids
 
 
 __all__ = ["ModelListing", "PROVIDER_DEFAULT_MODEL", "list_planner_models"]

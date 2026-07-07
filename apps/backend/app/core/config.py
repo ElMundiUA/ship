@@ -400,6 +400,13 @@ class Settings(BaseSettings):
     # ``services.deploy.model_catalog``). Repo GitHub-secret keys can't be
     # read back from GitHub, so the dropdown relies on this env key.
     mistral_api_key: str | None = Field(default=None, alias="MISTRAL_API_KEY")
+    # Platform-owned Cursor key, used ONLY to populate the per-stage model
+    # dropdown for Cursor stages (``services.deploy.model_catalog`` →
+    # api.cursor.com/v1/models). Cursor has no keyless catalogue (models.dev
+    # doesn't list it) and its API 401s without a key, so the picker needs
+    # this. Read-only listing only — execution keeps using the repo's own
+    # write-only GitHub CURSOR_API_KEY secret, never this one.
+    cursor_api_key: str | None = Field(default=None, alias="CURSOR_API_KEY")
     # Hard cap on tokens we let the agent spend per turn (prompt + completion
     # combined). Triggers a 429 from the SSE route when exceeded so a runaway
     # tool-loop doesn't silently nuke a tenant's monthly budget.
