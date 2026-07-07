@@ -131,6 +131,9 @@ services:
       # Extra deploy-planner vendor — also powers the live model dropdown
       # in the New deployment modal (services.deploy.model_catalog).
       MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+      # Platform Cursor key — read-only, only to populate the per-stage
+      # model dropdown for Cursor stages (Cursor has no keyless catalogue).
+      CURSOR_API_KEY: ${CURSOR_API_KEY:-}
       AGENT_VENDOR: ${AGENT_VENDOR:-openai}
       DEPLOY_PLANNER_GEMINI_API_KEY: ${DEPLOY_PLANNER_GEMINI_API_KEY:-}
       DEPLOY_PLANNER_GEMINI_MODEL: ${DEPLOY_PLANNER_GEMINI_MODEL:-gemini-2.5-flash}

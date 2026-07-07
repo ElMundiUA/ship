@@ -53,7 +53,12 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { readConfig, findShipRoot } from "../config/io.mjs";
-import { resolveExecutable, stageModelFromStates } from "../runtime/routines.mjs";
+import {
+  resolveExecutable,
+  stageModelFromStates,
+  stageAgentProfileFromStates,
+  providerForAgentProfile,
+} from "../runtime/routines.mjs";
 import { DEFAULT_PROVIDER, runAgent } from "../agents/index.mjs";
 import { fetchWithRetry } from "../retry.mjs";
 
@@ -242,6 +247,15 @@ async function _runCommandImpl(ctx, rest) {
   const stageModel =
     resolved.executable?.model ||
     stageModelFromStates(config, { fsmStage, specialist: specialistSlug });
+  // Per-stage execution backend: a stage may pin a concrete CLI
+  // (cursor_agent / codex_cli / claude_code) that differs from the
+  // workspace-bound provider. Prefer a routine-level agent_profile, else
+  // the one the process editor stored on the matching state. Abstract
+  // profiles (main/auto/…) resolve to null → keep the workspace binding.
+  const stageAgentProfile =
+    resolved.executable?.agent_profile ||
+    stageAgentProfileFromStates(config, { fsmStage, specialist: specialistSlug });
+  const stageProviderOverride = providerForAgentProfile(stageAgentProfile);
   const roleBody = roleResolved.prompt || "";
   const systemBody = systemResolved?.prompt || "";
 
@@ -389,11 +403,15 @@ async function _runCommandImpl(ctx, rest) {
         // would be passed to the agent CLI's --model; null = provider default.
         // Lets a dry-run confirm the model without launching an agent.
         model: stageModel || null,
+        // Per-stage execution backend and the provider it forces (null =
+        // no override → the workspace-bound provider runs at launch time).
+        agent_profile: stageAgentProfile || null,
+        agent_profile_provider: stageProviderOverride || null,
         task,
         prompt,
       }, null, 2));
     } else {
-      console.error(`# ship: dry-run handle=${runHandle} specialist=${specialistSlug} (${roleResolved.source}) fsm_stage=${fsmStage || "(context-free)"} model=${stageModel || "(default)"}`);
+      console.error(`# ship: dry-run handle=${runHandle} specialist=${specialistSlug} (${roleResolved.source}) fsm_stage=${fsmStage || "(context-free)"} model=${stageModel || "(default)"} backend=${stageAgentProfile || "(workspace)"}${stageProviderOverride ? `→${stageProviderOverride}` : ""}`);
       if (task) {
         console.error(`# ship: task ticket_ref=${task.ticket_ref} title=${JSON.stringify(task.title || "")}`);
       } else {
@@ -406,19 +424,34 @@ async function _runCommandImpl(ctx, rest) {
   }
 
   // 4) Resolve the agent runtime. The workspace's bound provider
-  // (``GET /v1/workspaces/{ws}/agent-provider``) is the single source
+  // (``GET /v1/workspaces/{ws}/agent-provider``) is the default source
   // of truth — when it fails we fall straight back to the resolver's
   // built-in ``DEFAULT_PROVIDER`` (cursor) so an unreachable API
   // doesn't strand the runner. The legacy ``.ship/config.yml``
   // ``agent.default.provider`` / ``agent.overrides`` block was
   // dropped in PR-5 of the local-CLI swap.
+  //
+  // A per-stage execution backend (``specialist.agent_profile`` →
+  // cursor_agent / codex_cli / claude_code) overrides the workspace
+  // binding for THIS stage only, so one process can plan on Cursor while
+  // the rest stays on the workspace default. The runner already installs
+  // all three CLIs and exposes all three API keys, so the override just
+  // picks which adapter runs — the corresponding provider key must be
+  // present in repo secrets or the adapter throws its own auth error.
   const workspaceProvider = await fetchWorkspaceAgentProvider({
     apiBase,
     apiToken,
     workspaceId,
   });
-  const provider = workspaceProvider || DEFAULT_PROVIDER;
-  step("resolve_provider", workspaceProvider ? "ok" : "default", { provider });
+  const baseProvider = workspaceProvider || DEFAULT_PROVIDER;
+  const provider = stageProviderOverride || baseProvider;
+  step(
+    "resolve_provider",
+    stageProviderOverride ? "stage-override" : workspaceProvider ? "ok" : "default",
+    stageProviderOverride
+      ? { provider, workspace_provider: baseProvider, agent_profile: stageAgentProfile }
+      : { provider },
+  );
   const branchName = makeBranchName(runHandle, task?.ticket_ref);
   const baseBranch = (env.githubRef || "main").trim() || "main";
 
