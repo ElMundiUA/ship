@@ -25,6 +25,7 @@ from backend.app.api.v1.routes import (
     chat,
     clarifications,
     config,
+    daily_review,
     engine_health,
     deploy,
     digitalocean_oauth,
@@ -72,6 +73,7 @@ api_router.include_router(workspaces.router)
 api_router.include_router(config.router)
 api_router.include_router(artifact_repos.router)
 api_router.include_router(audit.router)
+api_router.include_router(daily_review.router)
 api_router.include_router(integrations.public_router)
 api_router.include_router(integrations.router)
 api_router.include_router(native_integrations.router)
